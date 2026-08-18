@@ -1,0 +1,24 @@
+#version 450
+
+struct InstanceData { mat4 model; };
+layout(set = 0, binding = 0, std430) readonly buffer Instances { InstanceData instances[]; };
+struct DrawArguments {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+layout(set = 0, binding = 1, std430) buffer Arguments { DrawArguments arguments[]; };
+layout(set = 0, binding = 2) uniform SceneFrame {
+    mat4 viewProjection;
+    vec4 cameraPositionAndFlags;
+};
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    vec4 clip = viewProjection * instances[index].model * vec4(0.0, 0.0, 0.0, 1.0);
+    bool visible = clip.w > 0.0 && abs(clip.x) <= clip.w && abs(clip.y) <= clip.w && clip.z >= 0.0 && clip.z <= clip.w;
+    arguments[index].instanceCount = visible ? 1u : 0u;
+}

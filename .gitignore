@@ -1,0 +1,9 @@
+/build/
+/build-*/
+/out/
+/Saved/
+**/bin/
+**/obj/
+/.cache/
+*.user
+*.suo

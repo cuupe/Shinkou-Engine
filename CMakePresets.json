@@ -1,0 +1,36 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "mingw-debug",
+      "displayName": "MinGW Debug",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/out/build/mingw-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SHINKOU_BUILD_SAMPLE": "ON"
+      }
+    },
+    {
+      "name": "windows-vs",
+      "displayName": "Visual Studio x64",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/vs",
+      "cacheVariables": {
+        "SHINKOU_BUILD_SAMPLE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mingw-debug",
+      "configurePreset": "mingw-debug"
+    },
+    {
+      "name": "windows-vs-debug",
+      "configurePreset": "windows-vs",
+      "configuration": "Debug"
+    }
+  ]
+}
