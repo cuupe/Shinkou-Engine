@@ -1,4 +1,7 @@
 #include "shinkou/render/Renderer.h"
+#if defined(SHINKOU_WITH_UIKIT)
+#include "shinkou/uikit/Render.h"
+#endif
 #include "shinkou/render/ShaderCompiler.h"
 #include <algorithm>
 #include <string>
@@ -1029,10 +1032,23 @@ void Renderer::submit() {
         return;
     }
     auto* drawData = imguiDrawData_;
+#if defined(SHINKOU_WITH_UIKIT)
+    auto* uiRenderList = uiRenderList_;
+#endif
+#if defined(SHINKOU_WITH_UIKIT)
+    graph_.execute(*backend_, &lastError_, [drawData, uiRenderList](IRenderBackend& backend) {
+        if (drawData) backend.render_imgui(drawData);
+        if (uiRenderList) backend.render_ui(*uiRenderList);
+    });
+#else
     graph_.execute(*backend_, &lastError_, [drawData](IRenderBackend& backend) {
         if (drawData) backend.render_imgui(drawData);
     });
+#endif
     imguiDrawData_ = nullptr;
+#if defined(SHINKOU_WITH_UIKIT)
+    uiRenderList_ = nullptr;
+#endif
     if (lastError_.empty() && backend_) lastError_ = backend_->last_error();
     if (lastError_.empty() && backend_ && backend_->capabilities().deviceState == RenderDeviceState::Lost) {
         lastError_ = backend_->last_error();

@@ -36,15 +36,26 @@ struct DemoObject final : shinkou::SceneObject {
 int main(int argc, char** argv) {
     shinkou::EngineConfig config;
     config.renderBackend = shinkou::render::BackendApi::Vulkan;
-    if (argc > 1 && std::string(argv[1]) == "dx11") config.renderBackend = shinkou::render::BackendApi::DirectX11;
-    if (argc > 1 && std::string(argv[1]) == "dx12") config.renderBackend = shinkou::render::BackendApi::DirectX12;
     bool recoverRequested = false;
-    bool editorRequested = false;
+    bool editorRequested = true;
     bool framesRequested = false;
+    bool explicitBackend = false;
     std::uint64_t requestedFrames = 3;
     for (int i = 1; i < argc; ++i) {
-        recoverRequested |= std::string(argv[i]) == "recover";
-        editorRequested |= std::string(argv[i]) == "--editor";
+        const std::string argument = argv[i];
+        recoverRequested |= argument == "recover";
+        editorRequested |= argument == "--editor";
+        if (argument == "--sample" || argument == "--no-editor") editorRequested = false;
+        if (argument == "dx11") {
+            config.renderBackend = shinkou::render::BackendApi::DirectX11;
+            explicitBackend = true;
+        } else if (argument == "dx12") {
+            config.renderBackend = shinkou::render::BackendApi::DirectX12;
+            explicitBackend = true;
+        } else if (argument == "vulkan") {
+            config.renderBackend = shinkou::render::BackendApi::Vulkan;
+            explicitBackend = true;
+        }
     }
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string(argv[i]) == "--frames") {
@@ -52,6 +63,11 @@ int main(int argc, char** argv) {
             requestedFrames = std::strtoull(argv[i + 1], nullptr, 10);
         }
     }
+    // The retained UIKit renderer currently has a native Windows compositor
+    // only on D3D11. Keep the sample convenient: editor mode shows UI on a
+    // normal double-click/"--editor" launch while explicit backend arguments
+    // remain available for backend testing.
+    if (editorRequested && !explicitBackend) config.renderBackend = shinkou::render::BackendApi::DirectX11;
     if (editorRequested && !framesRequested) requestedFrames = 0;
     config.editor = editorRequested;
     if (config.editor) config.window.title = "ShinkouEngine Editor";

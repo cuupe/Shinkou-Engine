@@ -32,6 +32,8 @@ bool Engine::initialize() {
         return false;
     }
     input_.attach_window(window_.native_handle());
+    windowWidth_ = window_.width();
+    windowHeight_ = window_.height();
     if (config_.editor) {
         editor_.set_native_window(window_.native_handle());
         editor_.set_display_size(static_cast<float>(config_.window.width), static_cast<float>(config_.window.height));
@@ -63,10 +65,21 @@ void Engine::tick(Seconds dt) {
     if (!initialized_ || !running_) return;
     lastDeltaSeconds_ = std::clamp(dt, 0.0f, config_.maxDeltaSeconds);
     window_.process_events();
+    const auto currentWidth = window_.width();
+    const auto currentHeight = window_.height();
+    if (currentWidth != windowWidth_ || currentHeight != windowHeight_) {
+        if (currentWidth > 0 && currentHeight > 0) {
+            renderer_.resize(currentWidth, currentHeight);
+            if (config_.editor) editor_.set_display_size(static_cast<float>(currentWidth), static_cast<float>(currentHeight));
+            windowWidth_ = currentWidth;
+            windowHeight_ = currentHeight;
+        }
+    }
     network_.poll();
     input_.poll();
     assets_.poll();
     assets_.trim();
+    if (config_.editor) editor_.process_input(input_, world_);
     const bool quitRequested = std::any_of(input_.events().begin(), input_.events().end(),
         [](const input::InputEvent& event) { return event.type == input::InputEventType::Quit; });
     if (quitRequested || !window_.is_open()) {
@@ -122,6 +135,8 @@ void Engine::shutdown() {
     }
     window_.destroy();
     initialized_ = false;
+    windowWidth_ = 0;
+    windowHeight_ = 0;
     lastDeltaSeconds_ = 0;
     log::flush();
 }

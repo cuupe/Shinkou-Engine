@@ -22,6 +22,7 @@ option(SHINKOU_ENABLE_IMGUI "Enable ImGui editor integration when available" ON)
 option(SHINKOU_ENABLE_LUA "Enable Lua scripting integration when available" ON)
 option(SHINKOU_ENABLE_PYTHON "Enable Python scripting integration when available" ON)
 option(SHINKOU_ENABLE_CSHARP "Enable .NET/C# capability detection" ON)
+option(SHINKOU_ENABLE_UIKIT "Build and link the standalone ShinkouUI runtime" ON)
 option(SHINKOU_BUILD_TESTS "Build engine tests" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -31,8 +32,23 @@ if(SHINKOU_ENABLE_SDL3_INPUT)
     add_subdirectory("${SHINKOU_ENGINE_ROOT}/input" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_input" EXCLUDE_FROM_ALL)
 endif()
 
+if(SHINKOU_ENABLE_UIKIT)
+    # The standalone UI library owns its own tests, preview and native API.
+    # The engine only needs the retained runtime, so keep those auxiliary
+    # targets out of the engine build while still linking the same library.
+    set(SHINKOU_UI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(SHINKOU_UI_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+    set(SHINKOU_UI_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
+    set(SHINKOU_UI_BUILD_NATIVE_API OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/ui" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_ui" EXCLUDE_FROM_ALL)
+endif()
+
 file(GLOB_RECURSE SHINKOU_ENGINE_SOURCES CONFIGURE_DEPENDS
     "${SHINKOU_ENGINE_ROOT}/src/*.cpp")
+
+if(NOT SHINKOU_ENABLE_UIKIT)
+    list(FILTER SHINKOU_ENGINE_SOURCES EXCLUDE REGEX "/UiKitPanelHost\\.cpp$")
+endif()
 
 add_library(shinkou_engine STATIC ${SHINKOU_ENGINE_SOURCES})
 set_target_properties(shinkou_engine PROPERTIES OUTPUT_NAME shinkou_engine EXPORT_NAME Engine)
@@ -44,6 +60,11 @@ target_include_directories(shinkou_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt"
 )
 target_compile_features(shinkou_engine PUBLIC cxx_std_17)
+
+if(TARGET shinkou_ui)
+    target_link_libraries(shinkou_engine PUBLIC shinkou_ui)
+    target_compile_definitions(shinkou_engine PUBLIC SHINKOU_WITH_UIKIT=1)
+endif()
 
 if(SHINKOU_WITH_SPDLOG)
     target_link_libraries(shinkou_engine PUBLIC ${SHINKOU_SPDLOG_TARGET})
@@ -117,7 +138,7 @@ if(SHINKOU_WITH_CSHARP)
 endif()
 
 if(WIN32)
-    target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid ws2_32)
+    target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid d2d1 dwrite ws2_32)
     target_compile_definitions(shinkou_engine PRIVATE SHINKOU_PLATFORM_WINDOWS=1)
 endif()
 
@@ -170,6 +191,20 @@ if(SHINKOU_BUILD_SAMPLE)
         target_link_libraries(shinkou_engine_sample PRIVATE ws2_32)
     endif()
     target_compile_definitions(shinkou_engine_sample PRIVATE SHINKOU_SAMPLE_SHADER_DIR="${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}")
+    if(MINGW)
+        target_link_options(shinkou_engine_sample PRIVATE
+            -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+        get_filename_component(SHINKOU_MINGW_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        foreach(SHINKOU_RUNTIME_DLL libwinpthread-1.dll)
+            if(EXISTS "${SHINKOU_MINGW_BIN}/${SHINKOU_RUNTIME_DLL}")
+                add_custom_command(TARGET shinkou_engine_sample POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${SHINKOU_MINGW_BIN}/${SHINKOU_RUNTIME_DLL}"
+                        "$<TARGET_FILE_DIR:shinkou_engine_sample>/${SHINKOU_RUNTIME_DLL}"
+                    VERBATIM)
+            endif()
+        endforeach()
+    endif()
     if(TARGET shinkou_sample_shaders)
         add_dependencies(shinkou_engine_sample shinkou_sample_shaders)
     endif()
@@ -365,6 +400,42 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_editor_ui_model_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_ui_model_tests COMMAND shinkou_editor_ui_model_tests)
 
+        add_executable(shinkou_ui_runtime_tests "${SHINKOU_TEST_ROOT}/UiRuntimeTests.cpp")
+        target_link_libraries(shinkou_ui_runtime_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_ui_runtime_tests COMMAND shinkou_ui_runtime_tests)
+
+        add_executable(shinkou_input_bridge_tests "${SHINKOU_TEST_ROOT}/InputBridgeTests.cpp")
+        target_link_libraries(shinkou_input_bridge_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_input_bridge_tests COMMAND shinkou_input_bridge_tests)
+
+        add_executable(shinkou_theme_tests "${SHINKOU_TEST_ROOT}/ThemeTests.cpp")
+        target_link_libraries(shinkou_theme_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_theme_tests COMMAND shinkou_theme_tests)
+
+        add_executable(shinkou_dock_layout_tests "${SHINKOU_TEST_ROOT}/DockLayoutTests.cpp")
+        target_link_libraries(shinkou_dock_layout_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_dock_layout_tests COMMAND shinkou_dock_layout_tests)
+
+        add_executable(shinkou_ui_render_tests "${SHINKOU_TEST_ROOT}/UiRenderTests.cpp")
+        target_link_libraries(shinkou_ui_render_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_ui_render_tests COMMAND shinkou_ui_render_tests)
+
+        add_executable(shinkou_style_tests "${SHINKOU_TEST_ROOT}/StyleTests.cpp")
+        target_link_libraries(shinkou_style_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_style_tests COMMAND shinkou_style_tests)
+
+        add_executable(shinkou_media_tests "${SHINKOU_TEST_ROOT}/MediaTests.cpp")
+        target_link_libraries(shinkou_media_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_media_tests COMMAND shinkou_media_tests)
+
+        add_executable(shinkou_imgui_adapter_tests "${SHINKOU_TEST_ROOT}/ImGuiAdapterTests.cpp")
+        target_link_libraries(shinkou_imgui_adapter_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_imgui_adapter_tests COMMAND shinkou_imgui_adapter_tests)
+
+        add_executable(shinkou_components_tests "${SHINKOU_TEST_ROOT}/ComponentsTests.cpp")
+        target_link_libraries(shinkou_components_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_components_tests COMMAND shinkou_components_tests)
+
         add_executable(shinkou_math_parallel_tests "${SHINKOU_TEST_ROOT}/MathParallelTests.cpp")
         target_link_libraries(shinkou_math_parallel_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_math_parallel_tests COMMAND shinkou_math_parallel_tests)
@@ -385,8 +456,14 @@ if(SHINKOU_BUILD_TESTS)
             shinkou_render_feature_graph_builder_tests shinkou_descriptor_allocator_tests
             shinkou_audio_tests shinkou_asset_system_tests shinkou_input_tests
             shinkou_game_object_tests shinkou_reflection_tests shinkou_animation_tests shinkou_math_tests
-            shinkou_editor_ui_model_tests
+            shinkou_editor_ui_model_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests
             shinkou_math_parallel_tests shinkou_logging_tests shinkou_network_tests)
+        if(SHINKOU_ENABLE_UIKIT)
+            add_executable(shinkou_uikit_panel_host_tests "${SHINKOU_TEST_ROOT}/UiKitPanelHostTests.cpp")
+            target_link_libraries(shinkou_uikit_panel_host_tests PRIVATE shinkou_engine)
+            add_test(NAME shinkou_uikit_panel_host_tests COMMAND shinkou_uikit_panel_host_tests)
+            list(APPEND SHINKOU_TEST_TARGETS shinkou_uikit_panel_host_tests)
+        endif()
         foreach(shinkou_test_target IN LISTS SHINKOU_TEST_TARGETS)
             string(REPLACE "shinkou_" "shinkou_" shinkou_test_output "${shinkou_test_target}")
             set_target_properties(${shinkou_test_target} PROPERTIES OUTPUT_NAME "${shinkou_test_output}")

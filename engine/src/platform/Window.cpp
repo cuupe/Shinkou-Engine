@@ -14,6 +14,11 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         if (owner) owner->dispatch_menu_command(static_cast<std::uint32_t>(LOWORD(wParam)));
         return 0;
     }
+    if (message == WM_SIZE) {
+        auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window, GWLP_USERDATA));
+        if (owner) owner->set_client_size(static_cast<std::uint32_t>(LOWORD(lParam)), static_cast<std::uint32_t>(HIWORD(lParam)));
+    }
+    if (message == WM_ERASEBKGND) return 1;
     if (message == WM_CLOSE || message == WM_DESTROY) {
         PostQuitMessage(0);
         return 0;
@@ -34,6 +39,7 @@ bool Window::create(const WindowConfig& config) {
         windowClass.hInstance = GetModuleHandleA(nullptr);
         windowClass.lpszClassName = className;
         windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        windowClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
         if (!RegisterClassA(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
         registered = true;
     }
@@ -46,12 +52,21 @@ bool Window::create(const WindowConfig& config) {
     if (!window) return false;
     nativeHandle_ = window;
     open_ = true;
-    if (config.visible) ShowWindow(window, SW_SHOW);
+    width_ = config.width;
+    height_ = config.height;
+    if (config.visible) {
+        ShowWindow(window, SW_SHOW);
+        UpdateWindow(window);
+    }
     return true;
 #else
     (void)config;
     nativeHandle_ = nullptr;
+    width_ = 0;
+    height_ = 0;
     open_ = true;
+    width_ = config.width;
+    height_ = config.height;
     return true;
 #endif
 }
@@ -72,6 +87,8 @@ void Window::destroy() {
     if (nativeHandle_) DestroyWindow(static_cast<HWND>(nativeHandle_));
 #endif
     nativeHandle_ = nullptr;
+    width_ = 0;
+    height_ = 0;
     open_ = false;
 }
 }

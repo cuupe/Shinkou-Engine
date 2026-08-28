@@ -1,6 +1,7 @@
 /build/
 /build-*/
 /out/
+**/out/
 /Saved/
 **/bin/
 **/obj/

@@ -31,6 +31,9 @@ private:
     std::uint32_t nextPersistentResource_{0x40000000u};
     std::uint32_t nextPersistentBindlessTable_{0x40000000u};
     ImDrawData* imguiDrawData_{nullptr};
+#if defined(SHINKOU_WITH_UIKIT)
+    const ::shinkou::uikit::RenderList* uiRenderList_{nullptr};
+#endif
     bool initialized_{false};
     std::string lastError_;
     BackendApi api_{BackendApi::Null};
@@ -46,11 +49,15 @@ public:
     bool initialize_imgui();
     void shutdown_imgui();
     void set_imgui_draw_data(ImDrawData* drawData) noexcept { imguiDrawData_ = drawData; }
+#if defined(SHINKOU_WITH_UIKIT)
+    void set_ui_render_list(const ::shinkou::uikit::RenderList* renderList) noexcept { uiRenderList_ = renderList; }
+#endif
     bool recover();
     bool resize(std::uint32_t width, std::uint32_t height);
     void set_config(RenderBackendConfig config);
     void begin_graph();
     RenderGraph& graph() noexcept { return graph_; }
+    const RenderGraph& graph() const noexcept { return graph_; }
     ResourceHandle create_texture(const TextureDesc& description);
     ResourceHandle create_sampler(const SamplerDesc& description);
     ResourceHandle create_depth_stencil(const TextureDesc& description);

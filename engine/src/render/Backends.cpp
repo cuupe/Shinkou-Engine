@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <variant>
@@ -19,6 +20,11 @@
 #include <d3d11.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
+#if defined(SHINKOU_WITH_UIKIT)
+#include <d2d1.h>
+#include <dwrite.h>
+#include "shinkou/uikit/Render.h"
+#endif
 #include <dxgi1_4.h>
 #endif
 
@@ -426,9 +432,242 @@ class DirectX11Backend final : public IRenderBackend {
     RenderStats stats_{};
     std::string lastError_;
     std::unordered_map<std::uint32_t, std::string> debugNames_;
+#if defined(SHINKOU_PLATFORM_WINDOWS) && defined(SHINKOU_WITH_UIKIT)
+    ID2D1Factory* uiFactory_{nullptr};
+    IDWriteFactory* uiWriteFactory_{nullptr};
+    ID2D1RenderTarget* uiTarget_{nullptr};
+    IDXGISurface* uiSurface_{nullptr};
+    IDWriteTextFormat* uiTextFormat_{nullptr};
+    std::wstring uiFontFamily_;
+    float uiFontSize_{0.0f};
+
+    void release_ui_target() {
+        if (uiTextFormat_) { uiTextFormat_->Release(); uiTextFormat_ = nullptr; }
+        uiFontFamily_.clear();
+        uiFontSize_ = 0.0f;
+        if (uiTarget_) { uiTarget_->Release(); uiTarget_ = nullptr; }
+        if (uiSurface_) { uiSurface_->Release(); uiSurface_ = nullptr; }
+    }
+
+    bool ensure_ui_target() {
+        if (!device_ || !context_ || !renderTarget_) return false;
+        if (uiTarget_) return true;
+        if (!uiFactory_) {
+            const auto result = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &uiFactory_);
+            if (FAILED(result)) {
+                lastError_ = "Direct2D factory creation failed hr=" + std::to_string(static_cast<long long>(result));
+                return false;
+            }
+        }
+        if (!uiWriteFactory_) {
+            const auto result = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                reinterpret_cast<IUnknown**>(&uiWriteFactory_));
+            if (FAILED(result)) {
+                lastError_ = "DirectWrite factory creation failed hr=" + std::to_string(static_cast<long long>(result));
+                return false;
+            }
+        }
+
+        ID3D11Resource* backBuffer = nullptr;
+        renderTarget_->GetResource(&backBuffer);
+        auto result = backBuffer ? S_OK : E_FAIL;
+        if (!backBuffer) {
+            lastError_ = "D3D11 backbuffer query for Direct2D failed";
+            return false;
+        }
+        result = backBuffer->QueryInterface(IID_PPV_ARGS(&uiSurface_));
+        backBuffer->Release();
+        if (FAILED(result) || !uiSurface_) {
+            lastError_ = "DXGI surface query for Direct2D failed hr=" + std::to_string(static_cast<long long>(result));
+            return false;
+        }
+
+        DXGI_SURFACE_DESC surfaceDescription{};
+        result = uiSurface_->GetDesc(&surfaceDescription);
+        if (FAILED(result)) {
+            lastError_ = "DXGI surface description for Direct2D failed hr=" + std::to_string(static_cast<long long>(result));
+            release_ui_target();
+            return false;
+        }
+        const auto properties = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(surfaceDescription.Format,
+                surfaceDescription.Format == DXGI_FORMAT_B8G8R8A8_UNORM
+                    ? D2D1_ALPHA_MODE_PREMULTIPLIED : D2D1_ALPHA_MODE_IGNORE),
+            96.0f, 96.0f);
+        result = uiFactory_->CreateDxgiSurfaceRenderTarget(uiSurface_, &properties, &uiTarget_);
+        if (FAILED(result) || !uiTarget_) {
+            lastError_ = "Direct2D swapchain target creation failed hr=" + std::to_string(static_cast<long long>(result));
+            release_ui_target();
+            return false;
+        }
+        uiTarget_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        return true;
+    }
+
+    IDWriteTextFormat* text_format(const uikit::DrawCommand& command) {
+        if (!uiWriteFactory_) return nullptr;
+        const auto family = wide_name(command.fontFamily.empty() ? "Microsoft YaHei" : command.fontFamily);
+        const float size = command.fontSize > 0.0f ? command.fontSize : 14.0f;
+        if (uiTextFormat_ && uiFontFamily_ == family && uiFontSize_ == size) return uiTextFormat_;
+        if (uiTextFormat_) { uiTextFormat_->Release(); uiTextFormat_ = nullptr; }
+        uiFontFamily_ = family;
+        uiFontSize_ = size;
+        const auto locale = L"zh-CN";
+        const auto result = uiWriteFactory_->CreateTextFormat(
+            family.empty() ? L"Microsoft YaHei" : family.c_str(), nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            size, locale, &uiTextFormat_);
+        if (FAILED(result)) {
+            lastError_ = "DirectWrite text format creation failed hr=" + std::to_string(static_cast<long long>(result));
+            uiTextFormat_ = nullptr;
+            return nullptr;
+        }
+        uiTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        uiTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        uiTextFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        return uiTextFormat_;
+    }
+
+    static D2D1_COLOR_F ui_color(const uikit::Color& color) {
+        const auto clamp = [](float value) { return std::max(0.0f, std::min(1.0f, value)); };
+        return D2D1::ColorF(clamp(color.r), clamp(color.g), clamp(color.b), clamp(color.a));
+    }
+
+    static float ui_radius(const uikit::DrawCommand& command) {
+        return std::max({0.0f, command.radii.left, command.radii.top, command.radii.right, command.radii.bottom});
+    }
+
+    void fill_ui_rect(const uikit::DrawCommand& command, ID2D1Brush* brush) {
+        if (!uiTarget_ || !brush) return;
+        const auto rect = D2D1::RectF(command.rect.x, command.rect.y,
+            command.rect.x + std::max(0.0f, command.rect.width),
+            command.rect.y + std::max(0.0f, command.rect.height));
+        const float radius = ui_radius(command);
+        if (radius <= 0.01f) uiTarget_->FillRectangle(rect, brush);
+        else uiTarget_->FillRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), brush);
+    }
+
+    void draw_ui_border(const uikit::DrawCommand& command, ID2D1Brush* brush) {
+        if (!uiTarget_ || !brush || command.thickness <= 0.0f) return;
+        const auto rect = D2D1::RectF(command.rect.x, command.rect.y,
+            command.rect.x + std::max(0.0f, command.rect.width),
+            command.rect.y + std::max(0.0f, command.rect.height));
+        const float radius = ui_radius(command);
+        if (radius <= 0.01f) uiTarget_->DrawRectangle(rect, brush, command.thickness);
+        else uiTarget_->DrawRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), brush, command.thickness);
+    }
+
+    void render_ui_commands(const uikit::RenderList& list) {
+        if (!uiTarget_) return;
+        std::size_t clipDepth = 0;
+        uiTarget_->BeginDraw();
+        for (const auto& command : list.commands()) {
+            switch (command.type) {
+            case uikit::DrawCommandType::BeginClip:
+                uiTarget_->PushAxisAlignedClip(
+                    D2D1::RectF(command.rect.x, command.rect.y,
+                        command.rect.x + std::max(0.0f, command.rect.width),
+                        command.rect.y + std::max(0.0f, command.rect.height)),
+                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                ++clipDepth;
+                break;
+            case uikit::DrawCommandType::EndClip:
+                if (clipDepth > 0) { uiTarget_->PopAxisAlignedClip(); --clipDepth; }
+                break;
+            case uikit::DrawCommandType::Rect:
+            case uikit::DrawCommandType::Border: {
+                ID2D1SolidColorBrush* brush = nullptr;
+                if (SUCCEEDED(uiTarget_->CreateSolidColorBrush(ui_color(command.color), &brush))) {
+                    if (command.type == uikit::DrawCommandType::Rect) fill_ui_rect(command, brush);
+                    else draw_ui_border(command, brush);
+                }
+                if (brush) brush->Release();
+                break;
+            }
+            case uikit::DrawCommandType::Line: {
+                ID2D1SolidColorBrush* brush = nullptr;
+                if (SUCCEEDED(uiTarget_->CreateSolidColorBrush(ui_color(command.color), &brush))) {
+                    uiTarget_->DrawLine(D2D1::Point2F(command.from.x, command.from.y),
+                        D2D1::Point2F(command.to.x, command.to.y), brush,
+                        std::max(0.5f, command.thickness));
+                }
+                if (brush) brush->Release();
+                break;
+            }
+            case uikit::DrawCommandType::Gradient: {
+                D2D1_GRADIENT_STOP stops[2] = {{0.0f, ui_color(command.color)}, {1.0f, ui_color(command.secondaryColor)}};
+                ID2D1GradientStopCollection* collection = nullptr;
+                ID2D1LinearGradientBrush* brush = nullptr;
+                if (SUCCEEDED(uiTarget_->CreateGradientStopCollection(stops, 2,
+                    D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &collection))) {
+                    const auto properties = D2D1::LinearGradientBrushProperties(
+                        D2D1::Point2F(command.rect.x, command.rect.y),
+                        D2D1::Point2F(command.rect.x + std::max(0.0f, command.rect.width), command.rect.y));
+                    if (SUCCEEDED(uiTarget_->CreateLinearGradientBrush(properties, collection, &brush))) {
+                        fill_ui_rect(command, brush);
+                    }
+                }
+                if (brush) brush->Release();
+                if (collection) collection->Release();
+                break;
+            }
+            case uikit::DrawCommandType::Text: {
+                ID2D1SolidColorBrush* brush = nullptr;
+                auto* format = text_format(command);
+                if (format && SUCCEEDED(uiTarget_->CreateSolidColorBrush(ui_color(command.color), &brush))) {
+                    const auto text = wide_name(command.text);
+                    const auto rect = D2D1::RectF(command.rect.x, command.rect.y,
+                        command.rect.x + std::max(0.0f, command.rect.width),
+                        command.rect.y + std::max(0.0f, command.rect.height));
+                    uiTarget_->DrawText(text.c_str(), static_cast<UINT32>(text.size()), format, rect, brush,
+                        D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                }
+                if (brush) brush->Release();
+                break;
+            }
+            case uikit::DrawCommandType::Image: {
+                // Texture lookup is intentionally kept out of the retained UI
+                // seam. Draw a stable placeholder until the asset bridge supplies
+                // an SRV, so image slots remain visible in the editor today.
+                ID2D1SolidColorBrush* brush = nullptr;
+                const auto placeholder = uikit::Color{0.08f, 0.11f, 0.15f, command.color.a};
+                if (SUCCEEDED(uiTarget_->CreateSolidColorBrush(ui_color(placeholder), &brush))) {
+                    const auto rect = D2D1::RectF(command.rect.x, command.rect.y,
+                        command.rect.x + std::max(0.0f, command.rect.width),
+                        command.rect.y + std::max(0.0f, command.rect.height));
+                    uiTarget_->FillRectangle(rect, brush);
+                }
+                if (brush) brush->Release();
+                ID2D1SolidColorBrush* border = nullptr;
+                if (SUCCEEDED(uiTarget_->CreateSolidColorBrush(ui_color(uikit::Color{0.28f, 0.34f, 0.42f, command.color.a}), &border))) {
+                    uiTarget_->DrawRectangle(D2D1::RectF(command.rect.x, command.rect.y,
+                        command.rect.x + std::max(0.0f, command.rect.width),
+                        command.rect.y + std::max(0.0f, command.rect.height)), border, 1.0f);
+                }
+                if (border) border->Release();
+                break;
+            }
+            }
+        }
+        while (clipDepth > 0) { uiTarget_->PopAxisAlignedClip(); --clipDepth; }
+        const auto result = uiTarget_->EndDraw();
+        if (FAILED(result)) {
+            release_ui_target();
+            if (result != D2DERR_RECREATE_TARGET) {
+                lastError_ = "Direct2D UI draw failed hr=" + std::to_string(static_cast<long long>(result));
+            }
+        }
+    }
+#endif
 public:
     ~DirectX11Backend() override {
         resources_.clear();
+#if defined(SHINKOU_PLATFORM_WINDOWS) && defined(SHINKOU_WITH_UIKIT)
+        release_ui_target();
+        if (uiWriteFactory_) uiWriteFactory_->Release();
+        if (uiFactory_) uiFactory_->Release();
+#endif
         if (context_) context_->Release();
         if (depthView_) depthView_->Release();
         if (depthBuffer_) depthBuffer_->Release();
@@ -453,6 +692,20 @@ public:
         ImGui_ImplDX11_RenderDrawData(drawData);
     }
 #endif
+#if defined(SHINKOU_PLATFORM_WINDOWS) && defined(SHINKOU_WITH_UIKIT)
+    void render_ui(const uikit::RenderList& list) override {
+        if (list.commands().empty() || !context_ || !renderTarget_) return;
+        if (!ensure_ui_target()) return;
+        // The DXGI surface is the same resource as the D3D11 backbuffer.
+        // Unbind it before Direct2D touches the surface, then restore the
+        // output-merger binding for callers that render another overlay.
+        context_->OMSetRenderTargets(0, nullptr, nullptr);
+        context_->Flush();
+        render_ui_commands(list);
+        context_->Flush();
+        context_->OMSetRenderTargets(1, &renderTarget_, nullptr);
+    }
+#endif
     bool initialize(const RenderBackendConfig& config) override {
         constexpr D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
         D3D_FEATURE_LEVEL selected{};
@@ -469,20 +722,27 @@ public:
             swapDesc.SampleDesc.Count = 1;
             swapDesc.Windowed = TRUE;
             result = D3D11CreateDeviceAndSwapChain(adapter, adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                0, levels, 2, D3D11_SDK_VERSION, &swapDesc, &swapChain_, &device_, &selected, &context_);
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, 2, D3D11_SDK_VERSION, &swapDesc, &swapChain_, &device_, &selected, &context_);
             if (FAILED(result)) {
                 if (context_) { context_->Release(); context_ = nullptr; }
                 if (device_) { device_->Release(); device_ = nullptr; }
                 if (swapChain_) { swapChain_->Release(); swapChain_ = nullptr; }
-                result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                    0, levels, 1, D3D11_SDK_VERSION, &device_, &selected, &context_);
+                // WARP keeps the editor visible on machines where the
+                // hardware adapter cannot create a swapchain (old drivers,
+                // remote sessions, or low-end integrated GPUs). A device
+                // without a swapchain is not a usable windowed backend.
+                result = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, 1, D3D11_SDK_VERSION, &swapDesc, &swapChain_, &device_, &selected, &context_);
             }
         } else {
             result = D3D11CreateDevice(adapter, adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                0, levels, 2, D3D11_SDK_VERSION, &device_, &selected, &context_);
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, 2, D3D11_SDK_VERSION, &device_, &selected, &context_);
         }
         if (adapter) adapter->Release();
-        if (FAILED(result)) return false;
+        if (FAILED(result)) {
+            lastError_ = "D3D11 device/swapchain creation failed hr=" + std::to_string(static_cast<long long>(result));
+            return false;
+        }
         vsync_ = config.vsync;
         width_ = config.width;
         height_ = config.height;
@@ -510,6 +770,9 @@ public:
         }
         if (!swapChain_ || !device_ || !context_) return true;
         context_->OMSetRenderTargets(0, nullptr, nullptr);
+#if defined(SHINKOU_PLATFORM_WINDOWS) && defined(SHINKOU_WITH_UIKIT)
+        release_ui_target();
+#endif
         if (renderTarget_) { renderTarget_->Release(); renderTarget_ = nullptr; }
         if (depthView_) { depthView_->Release(); depthView_ = nullptr; }
         if (depthBuffer_) { depthBuffer_->Release(); depthBuffer_ = nullptr; }
@@ -1798,7 +2061,9 @@ public:
                 DXGI_SWAP_CHAIN_DESC1 swapDesc{};
                 swapDesc.Width = config.width;
                 swapDesc.Height = config.height;
-                swapDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            // Direct2D DXGI-surface interop requires a BGRA-compatible
+            // backbuffer on the Windows path.
+            swapDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
                 swapDesc.SampleDesc.Count = 1;
                 swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
                 swapDesc.BufferCount = 2;

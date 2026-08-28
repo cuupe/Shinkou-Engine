@@ -15,6 +15,8 @@ struct WindowConfig {
 class Window final {
     void* nativeHandle_{nullptr};
     bool open_{false};
+    std::uint32_t width_{0};
+    std::uint32_t height_{0};
     std::function<void(std::uint32_t)> menuCommandHandler_;
 public:
     bool create(const WindowConfig& config);
@@ -24,5 +26,8 @@ public:
     void* native_handle() const noexcept { return nativeHandle_; }
     void set_menu_command_handler(std::function<void(std::uint32_t)> handler) { menuCommandHandler_ = std::move(handler); }
     void dispatch_menu_command(std::uint32_t command) { if (menuCommandHandler_) menuCommandHandler_(command); }
+    std::uint32_t width() const noexcept { return width_; }
+    std::uint32_t height() const noexcept { return height_; }
+    void set_client_size(std::uint32_t width, std::uint32_t height) noexcept { width_ = width; height_ = height; }
 };
 }

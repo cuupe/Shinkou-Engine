@@ -137,6 +137,8 @@ void process_event(ShinkouInputHandle& input, const SDL_Event& source) {
         event.type = source.button.down ? SHINKOU_INPUT_EVENT_MOUSE_BUTTON_DOWN : SHINKOU_INPUT_EVENT_MOUSE_BUTTON_UP;
         event.device = static_cast<uint32_t>(source.button.which);
         event.value = source.button.down ? 1.0f : 0.0f;
+        event.x = source.button.x;
+        event.y = source.button.y;
         std::string control = "mouse:";
         control += button == 1 ? "left" : button == 2 ? "middle" : button == 3 ? "right" : std::to_string(button);
         copy_string(event.control, sizeof(event.control), control.c_str());

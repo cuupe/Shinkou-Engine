@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui-styles schema="shinkou-ui" version="1">
+  <theme id="windows11" scale="1" reduce-motion="false">
+    <font family="Microsoft YaHei" path="" size="14" weight="400" italic="false" />
+    <palette>
+      <color name="window" value="#f3f4f6" />
+      <color name="surface" value="#ffffff" />
+      <color name="surface-elevated" value="#ffffff" />
+      <color name="border" value="#d1d5db" />
+      <color name="text" value="#1f2937" />
+      <color name="text-secondary" value="#64748b" />
+      <color name="accent" value="#2563eb" />
+      <color name="focus" value="#60a5fa" />
+    </palette>
+    <metrics>
+      <metric name="space-sm" value="8" />
+      <metric name="space-md" value="12" />
+      <metric name="control-height" value="32" />
+    </metrics>
+    <controls>
+      <control type="button" background="surface" hover="surface-elevated" pressed="#e2e8f0" border="border" text="text" radius="4" border-width="1" transition="120" easing="ease-out" />
+      <control type="primary-button" background="accent" hover="#1d4ed8" pressed="#1e40af" border="accent" text="#ffffff" radius="4" border-width="0" transition="100" />
+      <control type="panel" background="surface" border="border" radius="0" border-width="1" />
+    </controls>
+  </theme>
+</ui-styles>
+

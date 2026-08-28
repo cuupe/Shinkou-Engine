@@ -47,6 +47,8 @@ private:
     bool initialized_{false};
     bool running_{false};
     Seconds lastDeltaSeconds_{0};
+    std::uint32_t windowWidth_{0};
+    std::uint32_t windowHeight_{0};
     RenderCallback renderCallback_;
 public:
     explicit Engine(const EngineConfig& config = {});
@@ -63,6 +65,8 @@ public:
     assets::AssetSystem& assets() noexcept { return assets_; }
     const assets::AssetSystem& assets() const noexcept { return assets_; }
     render::Renderer& renderer() noexcept { return renderer_; }
+    editor::EditorLayer& editor() noexcept { return editor_; }
+    const editor::EditorLayer& editor() const noexcept { return editor_; }
     platform::Window& window() noexcept { return window_; }
     input::InputSystem& input() noexcept { return input_; }
     audio::AudioSystem& audio() noexcept { return audio_; }

@@ -7,6 +7,26 @@ objects/components. RenderGraph and backend ownership remain unchanged.
 
 ## Included surface
 
+The editor now has a backend-neutral UI foundation in addition to the ImGui
+view adapter:
+
+- `shinkou::ui::UiRuntime` provides retained widgets, flex/overlay layout,
+  dirty-subtree rebuilding, hit testing, focus and pointer capture;
+- `shinkou::ui::ThemeRegistry` provides semantic tokens, built-in themes,
+  contrast checks and versioned JSON customization;
+- `shinkou::editor::DockWorkspace` provides split/tab/floating workspace trees,
+  minimum-size rebalance, splitter hit testing and versioned JSON persistence.
+
+The existing ImGui view uses a real DockSpace host when the docking-capable
+ImGui build is available. The same panel registry and dock model remain usable
+in headless builds.
+
+`Engine::tick()` polls the configured `InputSystem`, forwards pointer, key and
+text events through `EditorLayer::process_input()` into `UiRuntime`, and keeps
+the UI hit-test geometry current. Window client-size changes are propagated to
+the renderer and editor before input dispatch, so resizing does not require a
+separate editor integration layer.
+
 - Unity-style top menu model: File, Edit, Assets, GameObject, Component,
   Window and Help;
 - Scene/Game workspaces plus Hierarchy, Inspector, Project, Console, Profiler,
@@ -36,8 +56,10 @@ Shinkou's renderer.
 `Saved/Editor/Layouts/Default.json` stores the engine-owned layout state using
 the existing reflection JSON serializer. ImGui window geometry, when enabled,
 is stored separately as `Default.json.imgui.ini`, so the two formats never
-overwrite each other. Call `set_layout_path` for per-project or per-user
-workspaces.
+overwrite each other. The backend-neutral dock tree is stored separately as
+`Default.json.dock.json`. All three files are independent and written with a
+temporary-file/rename commit. Call `set_layout_path` for per-project or
+per-user workspaces.
 
 ## Build and run
 

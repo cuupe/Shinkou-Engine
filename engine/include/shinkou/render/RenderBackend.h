@@ -9,6 +9,7 @@
 #include <vector>
 
 struct ImDrawData;
+namespace shinkou::uikit { class RenderList; }
 
 namespace shinkou::render {
 struct RenderBackendConfig {
@@ -160,6 +161,9 @@ public:
     virtual bool initialize_imgui() { return false; }
     virtual void shutdown_imgui() {}
     virtual void render_imgui(ImDrawData*) {}
+    // Optional retained UI seam. Backends that provide a native 2D UI path
+    // can consume the same command list without coupling UIKit to a GPU API.
+    virtual void render_ui(const ::shinkou::uikit::RenderList&) {}
     virtual bool begin_queue(RenderQueue) { return true; }
     virtual bool begin_queue(RenderQueue queue, std::uint32_t batchIndex,
                              const std::vector<std::uint32_t>& waitBatches) {
