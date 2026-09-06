@@ -22,37 +22,34 @@ option(SHINKOU_ENABLE_IMGUI "Enable ImGui editor integration when available" ON)
 option(SHINKOU_ENABLE_LUA "Enable Lua scripting integration when available" ON)
 option(SHINKOU_ENABLE_PYTHON "Enable Python scripting integration when available" ON)
 option(SHINKOU_ENABLE_CSHARP "Enable .NET/C# capability detection" ON)
-option(SHINKOU_ENABLE_UIKIT "Build and link the standalone ShinkouUI runtime" ON)
 option(SHINKOU_BUILD_TESTS "Build engine tests" ON)
+option(SHINKOU_BUILD_BENCHMARKS "Build engine microbenchmarks" OFF)
+option(SHINKOU_ENABLE_AVX2 "Enable AVX2 math kernels for supported targets" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ShinkouDependencies)
+if(SHINKOU_BUILD_TESTS)
+    include(CTest)
+endif()
+
+# Assets are a standalone library so they can be tested and reused without
+# pulling in the renderer, window system, or the rest of the engine.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/assets" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_assets")
 
 if(SHINKOU_ENABLE_SDL3_INPUT)
     add_subdirectory("${SHINKOU_ENGINE_ROOT}/input" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_input" EXCLUDE_FROM_ALL)
 endif()
 
-if(SHINKOU_ENABLE_UIKIT)
-    # The standalone UI library owns its own tests, preview and native API.
-    # The engine only needs the retained runtime, so keep those auxiliary
-    # targets out of the engine build while still linking the same library.
-    set(SHINKOU_UI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(SHINKOU_UI_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-    set(SHINKOU_UI_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
-    set(SHINKOU_UI_BUILD_NATIVE_API OFF CACHE BOOL "" FORCE)
-    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/ui" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_ui" EXCLUDE_FROM_ALL)
-endif()
-
 file(GLOB_RECURSE SHINKOU_ENGINE_SOURCES CONFIGURE_DEPENDS
     "${SHINKOU_ENGINE_ROOT}/src/*.cpp")
-
-if(NOT SHINKOU_ENABLE_UIKIT)
-    list(FILTER SHINKOU_ENGINE_SOURCES EXCLUDE REGEX "/UiKitPanelHost\\.cpp$")
-endif()
 
 add_library(shinkou_engine STATIC ${SHINKOU_ENGINE_SOURCES})
 set_target_properties(shinkou_engine PROPERTIES OUTPUT_NAME shinkou_engine EXPORT_NAME Engine)
 add_library(ShinkouEngine::Engine ALIAS shinkou_engine)
+target_link_libraries(shinkou_engine PUBLIC shinkou_assets)
+if(WIN32)
+    target_link_libraries(shinkou_engine PRIVATE comdlg32)
+endif()
 target_include_directories(shinkou_engine PUBLIC
     "${SHINKOU_ENGINE_ROOT}/include"
 )
@@ -60,11 +57,21 @@ target_include_directories(shinkou_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt"
 )
 target_compile_features(shinkou_engine PUBLIC cxx_std_17)
+target_compile_definitions(shinkou_engine PRIVATE
+    SHINKOU_EDITOR_ICON_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/engine/resources/editor/icons"
+    SHINKOU_EDITOR_ICON_INSTALL_DIR="${CMAKE_INSTALL_PREFIX}/share/shinkou/editor/icons")
 
-if(TARGET shinkou_ui)
-    target_link_libraries(shinkou_engine PUBLIC shinkou_ui)
-    target_compile_definitions(shinkou_engine PUBLIC SHINKOU_WITH_UIKIT=1)
+if(SHINKOU_ENABLE_AVX2)
+    if(MSVC)
+        target_compile_options(shinkou_engine PRIVATE /arch:AVX2)
+    else()
+        # MinGW's Win64 ABI guarantees 16-byte stack alignment; AVX2 register
+        # spills may require 32-byte alignment, so realign functions that use
+        # the optional backend.
+        target_compile_options(shinkou_engine PRIVATE -mavx2 -mstackrealign)
+    endif()
 endif()
+
 
 if(SHINKOU_WITH_SPDLOG)
     target_link_libraries(shinkou_engine PUBLIC ${SHINKOU_SPDLOG_TARGET})
@@ -138,7 +145,7 @@ if(SHINKOU_WITH_CSHARP)
 endif()
 
 if(WIN32)
-    target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid d2d1 dwrite ws2_32)
+    target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid d2d1 dwrite gdi32 ws2_32)
     target_compile_definitions(shinkou_engine PRIVATE SHINKOU_PLATFORM_WINDOWS=1)
 endif()
 
@@ -190,7 +197,9 @@ if(SHINKOU_BUILD_SAMPLE)
     if(WIN32)
         target_link_libraries(shinkou_engine_sample PRIVATE ws2_32)
     endif()
-    target_compile_definitions(shinkou_engine_sample PRIVATE SHINKOU_SAMPLE_SHADER_DIR="${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}")
+    target_compile_definitions(shinkou_engine_sample PRIVATE
+        SHINKOU_SAMPLE_SHADER_DIR="${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}"
+        SHINKOU_SAMPLE_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     if(MINGW)
         target_link_options(shinkou_engine_sample PRIVATE
             -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
@@ -208,6 +217,16 @@ if(SHINKOU_BUILD_SAMPLE)
     if(TARGET shinkou_sample_shaders)
         add_dependencies(shinkou_engine_sample shinkou_sample_shaders)
     endif()
+endif()
+
+if(WIN32)
+    # Native capture is part of the UI QA workflow. It intentionally has no
+    # engine dependency so it can diagnose a broken editor window as well as
+    # validate a working one.
+    add_executable(shinkou_ui_capture "${CMAKE_CURRENT_SOURCE_DIR}/Tools/UiCapture/WindowCapture.cpp")
+    target_compile_features(shinkou_ui_capture PRIVATE cxx_std_17)
+    target_link_libraries(shinkou_ui_capture PRIVATE user32 gdi32 dwmapi shell32)
+    set_target_properties(shinkou_ui_capture PROPERTIES OUTPUT_NAME shinkou_ui_capture)
 endif()
 
 if(SHINKOU_BUILD_SHADER_SCENE_TEST)
@@ -310,7 +329,6 @@ if(SHINKOU_BUILD_SHADER_SCENE_TEST)
 endif()
 
 if(SHINKOU_BUILD_TESTS)
-    include(CTest)
     if(BUILD_TESTING)
         add_executable(shinkou_render_graph_tests "${SHINKOU_TEST_ROOT}/RenderGraphTests.cpp")
         target_link_libraries(shinkou_render_graph_tests PRIVATE shinkou_engine)
@@ -372,10 +390,6 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_audio_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_audio_tests COMMAND shinkou_audio_tests)
 
-        add_executable(shinkou_asset_system_tests "${SHINKOU_TEST_ROOT}/AssetSystemTests.cpp")
-        target_link_libraries(shinkou_asset_system_tests PRIVATE shinkou_engine)
-        add_test(NAME shinkou_asset_system_tests COMMAND shinkou_asset_system_tests)
-
         add_executable(shinkou_input_tests "${SHINKOU_TEST_ROOT}/InputSystemTests.cpp")
         target_link_libraries(shinkou_input_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_input_tests COMMAND shinkou_input_tests)
@@ -400,6 +414,22 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_editor_ui_model_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_ui_model_tests COMMAND shinkou_editor_ui_model_tests)
 
+        add_executable(shinkou_file_system_tests "${SHINKOU_TEST_ROOT}/FileSystemTests.cpp")
+        target_link_libraries(shinkou_file_system_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_file_system_tests COMMAND shinkou_file_system_tests)
+
+        add_executable(shinkou_editor_command_bus_tests "${SHINKOU_TEST_ROOT}/EditorCommandBusTests.cpp")
+        target_link_libraries(shinkou_editor_command_bus_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_command_bus_tests COMMAND shinkou_editor_command_bus_tests)
+
+        add_executable(shinkou_editor_selection_tests "${SHINKOU_TEST_ROOT}/EditorSelectionTests.cpp")
+        target_link_libraries(shinkou_editor_selection_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_selection_tests COMMAND shinkou_editor_selection_tests)
+
+        add_executable(shinkou_render_view_tests "${SHINKOU_TEST_ROOT}/RenderViewTests.cpp")
+        target_link_libraries(shinkou_render_view_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_render_view_tests COMMAND shinkou_render_view_tests)
+
         add_executable(shinkou_ui_runtime_tests "${SHINKOU_TEST_ROOT}/UiRuntimeTests.cpp")
         target_link_libraries(shinkou_ui_runtime_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_ui_runtime_tests COMMAND shinkou_ui_runtime_tests)
@@ -419,6 +449,16 @@ if(SHINKOU_BUILD_TESTS)
         add_executable(shinkou_ui_render_tests "${SHINKOU_TEST_ROOT}/UiRenderTests.cpp")
         target_link_libraries(shinkou_ui_render_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_ui_render_tests COMMAND shinkou_ui_render_tests)
+
+        add_executable(shinkou_editor_interaction_tests "${SHINKOU_TEST_ROOT}/EditorInteractionTests.cpp")
+        target_link_libraries(shinkou_editor_interaction_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_interaction_tests COMMAND shinkou_editor_interaction_tests)
+
+        add_executable(shinkou_asset_icon_library_tests "${SHINKOU_TEST_ROOT}/AssetIconLibraryTests.cpp")
+        target_link_libraries(shinkou_asset_icon_library_tests PRIVATE shinkou_engine)
+        target_compile_definitions(shinkou_asset_icon_library_tests PRIVATE
+            SHINKOU_EDITOR_ICON_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/engine/resources/editor/icons")
+        add_test(NAME shinkou_asset_icon_library_tests COMMAND shinkou_asset_icon_library_tests)
 
         add_executable(shinkou_style_tests "${SHINKOU_TEST_ROOT}/StyleTests.cpp")
         target_link_libraries(shinkou_style_tests PRIVATE shinkou_engine)
@@ -440,9 +480,15 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_math_parallel_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_math_parallel_tests COMMAND shinkou_math_parallel_tests)
 
-        add_executable(shinkou_logging_tests "${SHINKOU_TEST_ROOT}/LoggingTests.cpp")
-        target_link_libraries(shinkou_logging_tests PRIVATE shinkou_engine)
-        add_test(NAME shinkou_logging_tests COMMAND shinkou_logging_tests)
+        add_executable(shinkou_math_advanced_tests "${SHINKOU_TEST_ROOT}/MathAdvancedTests.cpp")
+        target_link_libraries(shinkou_math_advanced_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_math_advanced_tests COMMAND shinkou_math_advanced_tests)
+
+        if(SHINKOU_WITH_SPDLOG)
+            add_executable(shinkou_logging_tests "${SHINKOU_TEST_ROOT}/LoggingTests.cpp")
+            target_link_libraries(shinkou_logging_tests PRIVATE shinkou_engine)
+            add_test(NAME shinkou_logging_tests COMMAND shinkou_logging_tests)
+        endif()
 
         add_executable(shinkou_network_tests "${SHINKOU_TEST_ROOT}/NetworkSystemTests.cpp")
         target_link_libraries(shinkou_network_tests PRIVATE shinkou_engine)
@@ -454,15 +500,12 @@ if(SHINKOU_BUILD_TESTS)
         set(SHINKOU_TEST_TARGETS
             shinkou_render_graph_tests shinkou_gpu_memory_allocator_tests shinkou_texture_model_tests shinkou_texture_backend_mapping_tests shinkou_pbr_render_pipeline_tests shinkou_lighting_pipeline_tests shinkou_shader_pipeline_library_tests shinkou_render_capture_budget_tests shinkou_advanced_render_features_tests shinkou_render_feature_graph_builder_tests shinkou_renderer_diagnostics_service_tests shinkou_render_graph_scheduler_tests shinkou_queue_sync_tests
             shinkou_render_feature_graph_builder_tests shinkou_descriptor_allocator_tests
-            shinkou_audio_tests shinkou_asset_system_tests shinkou_input_tests
+            shinkou_audio_tests shinkou_assets_tests shinkou_input_tests
             shinkou_game_object_tests shinkou_reflection_tests shinkou_animation_tests shinkou_math_tests
-            shinkou_editor_ui_model_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests
-            shinkou_math_parallel_tests shinkou_logging_tests shinkou_network_tests)
-        if(SHINKOU_ENABLE_UIKIT)
-            add_executable(shinkou_uikit_panel_host_tests "${SHINKOU_TEST_ROOT}/UiKitPanelHostTests.cpp")
-            target_link_libraries(shinkou_uikit_panel_host_tests PRIVATE shinkou_engine)
-            add_test(NAME shinkou_uikit_panel_host_tests COMMAND shinkou_uikit_panel_host_tests)
-            list(APPEND SHINKOU_TEST_TARGETS shinkou_uikit_panel_host_tests)
+            shinkou_editor_ui_model_tests shinkou_file_system_tests shinkou_editor_command_bus_tests shinkou_editor_selection_tests shinkou_render_view_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_asset_icon_library_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests
+            shinkou_math_parallel_tests shinkou_math_advanced_tests shinkou_network_tests)
+        if(SHINKOU_WITH_SPDLOG)
+            list(APPEND SHINKOU_TEST_TARGETS shinkou_logging_tests)
         endif()
         foreach(shinkou_test_target IN LISTS SHINKOU_TEST_TARGETS)
             string(REPLACE "shinkou_" "shinkou_" shinkou_test_output "${shinkou_test_target}")
@@ -475,16 +518,48 @@ if(SHINKOU_BUILD_TESTS)
         else()
             foreach(shinkou_test_target IN LISTS SHINKOU_TEST_TARGETS)
                 target_compile_options(${shinkou_test_target} PRIVATE -UNDEBUG)
+                # MinGW's Debug test executables are not a reliable place to
+                # exercise AVX2 inline code: the toolchain/runtime combination
+                # can mis-handle vectorized stack frames. Production targets
+                # and the benchmark keep AVX2; tests validate the same APIs
+                # through the SSE2/scalar fallback.
+                if(MINGW AND SHINKOU_ENABLE_AVX2)
+                    target_compile_options(${shinkou_test_target} PRIVATE -mno-avx2 -mno-avx)
+                endif()
             endforeach()
         endif()
     endif()
 endif()
 
-install(TARGETS shinkou_engine
+if(SHINKOU_BUILD_BENCHMARKS)
+    add_executable(shinkou_math_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/MathBenchmarks.cpp")
+    target_link_libraries(shinkou_math_benchmarks PRIVATE shinkou_engine)
+    if(SHINKOU_ENABLE_AVX2)
+        if(MSVC)
+            target_compile_options(shinkou_math_benchmarks PRIVATE /arch:AVX2)
+        elseif(MINGW)
+            # Keep the MinGW benchmark executable on the stable SSE2 path;
+            # the production engine still compiles its AVX2-capable objects.
+            target_compile_options(shinkou_math_benchmarks PRIVATE -mno-avx2 -mno-avx)
+        else()
+            target_compile_options(shinkou_math_benchmarks PRIVATE -mavx2 -mstackrealign)
+        endif()
+    endif()
+    if(MSVC)
+        target_compile_options(shinkou_math_benchmarks PRIVATE /O2)
+    else()
+        target_compile_options(shinkou_math_benchmarks PRIVATE -O3)
+    endif()
+endif()
+
+install(TARGETS shinkou_engine shinkou_assets
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
 install(DIRECTORY "${SHINKOU_ENGINE_ROOT}/include/" DESTINATION include)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/include/" DESTINATION include)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/engine/resources/editor/icons/"
+    DESTINATION share/shinkou/editor/icons)
 
 message(STATUS "ShinkouEngine optional capabilities:")
 message(STATUS "  SDL3 input DLL: ${SHINKOU_ENABLE_SDL3_INPUT}")

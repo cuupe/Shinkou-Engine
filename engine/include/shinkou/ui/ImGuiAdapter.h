@@ -17,7 +17,10 @@ struct ImGuiApplyOptions {
     bool applyFont{true};
     bool preferProjectFont{true};
     bool allowSystemFontFallback{true};
-    std::string defaultFontFamily{"Microsoft YaHei"};
+    // Empty means use the platform adapter's default. Keeping this out of
+    // the option type prevents a Windows font choice from leaking into the
+    // portable editor configuration.
+    std::string defaultFontFamily{};
     std::filesystem::path defaultFontPath{};
     std::filesystem::path fallbackFontPath{};
 };
@@ -42,7 +45,7 @@ struct ImGuiApplyResult {
     bool optionsValid{true};
     float scale{1.0f};
     float fontSize{14.0f};
-    std::string fontFamily{"Microsoft YaHei"};
+    std::string fontFamily{};
     std::filesystem::path fontPath{};
     std::filesystem::path fallbackFontPath{};
     ImGuiBackgroundParameters background{};

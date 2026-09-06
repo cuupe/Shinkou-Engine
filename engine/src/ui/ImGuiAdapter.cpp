@@ -18,6 +18,18 @@ constexpr float kMaximumScale = 3.0f;
 constexpr float kMinimumFontSize = 6.0f;
 constexpr float kMaximumFontSize = 96.0f;
 
+std::string platform_default_font_family() {
+#if defined(_WIN32)
+    // This is an adapter default, not a requirement of the UI core. It also
+    // keeps Chinese editor text readable on a stock Windows installation.
+    return "Microsoft YaHei";
+#elif defined(__APPLE__)
+    return "SF Pro Text";
+#else
+    return "sans-serif";
+#endif
+}
+
 float finite_or(float value, float fallback) noexcept {
     return std::isfinite(value) ? value : fallback;
 }
@@ -41,15 +53,13 @@ std::filesystem::path root_relative(const std::filesystem::path& path,
     return (options.projectRoot / path).lexically_normal();
 }
 
-std::filesystem::path windows_font_directory() {
 #if defined(_WIN32)
+std::filesystem::path windows_font_directory() {
     if (const char* windir = std::getenv("WINDIR"); windir && *windir)
         return std::filesystem::path(windir) / "Fonts";
-    return std::filesystem::path("C:/Windows/Fonts");
-#else
     return {};
-#endif
 }
+#endif
 
 std::filesystem::path find_existing_default_font(const ImGuiApplyOptions& options) {
     if (!options.defaultFontPath.empty()) {
@@ -57,21 +67,25 @@ std::filesystem::path find_existing_default_font(const ImGuiApplyOptions& option
         if (std::filesystem::exists(candidate)) return candidate;
     }
     if (options.preferProjectFont && !options.projectRoot.empty()) {
-        for (const auto& relative : {std::filesystem::path("assets/fonts/msyh.ttc"),
-                                     std::filesystem::path("assets/fonts/msyh.ttf"),
-                                     std::filesystem::path("fonts/msyh.ttc"),
-                                     std::filesystem::path("fonts/msyh.ttf")}) {
+        for (const auto& relative : {std::filesystem::path("assets/fonts/editor.ttf"),
+                                     std::filesystem::path("assets/fonts/editor.otf"),
+                                     std::filesystem::path("assets/fonts/editor.ttc"),
+                                     std::filesystem::path("fonts/editor.ttf"),
+                                     std::filesystem::path("fonts/editor.otf"),
+                                     std::filesystem::path("fonts/editor.ttc")}) {
             const auto candidate = (options.projectRoot / relative).lexically_normal();
             if (std::filesystem::exists(candidate)) return candidate;
         }
     }
+#if defined(_WIN32)
     if (options.allowSystemFontFallback) {
         const auto directory = windows_font_directory();
-        for (const auto& name : {"msyh.ttc", "msyh.ttf", "msyhbd.ttc"}) {
+        for (const auto& name : {"segoeui.ttf", "msyh.ttc", "msyh.ttf", "msyhbd.ttc"}) {
             const auto candidate = directory / name;
             if (!candidate.empty() && std::filesystem::exists(candidate)) return candidate;
         }
     }
+#endif
     return {};
 }
 
@@ -195,7 +209,7 @@ ImGuiApplyResult make_result(const Theme& theme, const UiStyleConfig& config,
         std::isfinite(options.maxControlRounding) && options.maxControlRounding >= 0.0f;
     result.scale = ImGuiAdapter::effective_scale(config, options);
     result.fontSize = ImGuiAdapter::effective_font_size(theme, config, options);
-    result.fontFamily = options.defaultFontFamily.empty() ? "Microsoft YaHei" : options.defaultFontFamily;
+    result.fontFamily = options.defaultFontFamily.empty() ? platform_default_font_family() : options.defaultFontFamily;
     result.fontPath = ImGuiAdapter::resolve_font_path(config, options);
     result.fallbackFontPath = ImGuiAdapter::resolve_fallback_font_path(config, options);
     result.background.mode = config.background.mode;

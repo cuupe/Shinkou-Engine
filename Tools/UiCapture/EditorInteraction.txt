@@ -1,0 +1,122 @@
+wait 600
+capture tree
+click "asset-view:small"
+state "view=small"
+capture small
+click "asset-view:large"
+state "view=large"
+capture large
+click "asset-view:tree"
+state "view=tree"
+click "assets.filter"
+text "needle"
+key 13
+key 35
+capture filter
+key 113
+text "renamed.txt"
+key 13
+exists "@PROJECT@/assets/Folder/Nested/renamed.txt"
+state "Renamed"
+wait 1100
+click "assets.filter"
+down 17
+key 65
+up 17
+key 8
+wait 300
+right "asset:assets/Folder"
+capture context
+click "asset-context:3"
+text "UiCreated"
+key 13
+exists "@PROJECT@/assets/Folder/UiCreated"
+wait 1200
+right "asset:assets/Folder/UiCreated"
+click "asset-context:2"
+capture delete-confirm
+key 27
+exists "@PROJECT@/assets/Folder/UiCreated"
+right "asset:assets/Folder/UiCreated"
+click "asset-context:2"
+click "asset-delete-confirm"
+missing "@PROJECT@/assets/Folder/UiCreated"
+double "asset:assets/Folder"
+wait 1000
+state "Opened assets/Folder"
+click "asset-parent"
+wait 1000
+click "assets.background"
+key 35
+capture scrolled
+drag "assets.scrollbar" 0
+scroll-max 1
+hover "assets.background"
+wheel -1
+scroll-min 20
+sweep "asset-refresh" 70
+hover "assets.background"
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel -1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+wheel 1
+click "command:create-empty"
+click "field:name"
+text "Interactive Object"
+key 13
+state "Property updated"
+capture inspector
+down 17
+key 90
+up 17
+state "Edit undone"
+down 17
+key 89
+up 17
+state "Edit redone"
+down 17
+key 83
+up 17
+exists "@PROJECT@/assets/Scenes/Untitled.scene"
+resize 1600x900
+wait 200
+resize 1280x720
+capture narrow
+resize 1920x1080
+wait 250
+remember-camera
+hover "viewport.surface"
+wheel 2
+camera-changed
+remember-camera
+orbit
+camera-changed
+capture camera-orbit
+capture final
+wait 1500

@@ -1,8 +1,8 @@
 #include "shinkou/Engine.h"
 #include "shinkou/physics/SimplePhysicsWorld.h"
 #include "shinkou/render/RenderScene.h"
-#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -11,6 +11,9 @@
 namespace {
 #ifndef SHINKOU_SAMPLE_SHADER_DIR
 #define SHINKOU_SAMPLE_SHADER_DIR ""
+#endif
+#ifndef SHINKOU_SAMPLE_PROJECT_ROOT
+#define SHINKOU_SAMPLE_PROJECT_ROOT ""
 #endif
 
 std::vector<std::uint8_t> load_binary_shader(const std::string& name) {
@@ -40,12 +43,26 @@ int main(int argc, char** argv) {
     bool editorRequested = true;
     bool framesRequested = false;
     bool explicitBackend = false;
+    bool themeRequested = false;
+    std::string editorTheme = "dark";
+    shinkou::editor::EditorAssetView assetView = shinkou::editor::EditorAssetView::Tree;
+    bool assetViewRequested = false;
+    std::string projectRoot = SHINKOU_SAMPLE_PROJECT_ROOT;
     std::uint64_t requestedFrames = 3;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         recoverRequested |= argument == "recover";
         editorRequested |= argument == "--editor";
         if (argument == "--sample" || argument == "--no-editor") editorRequested = false;
+        if (argument == "--project" && i + 1 < argc) projectRoot = argv[++i];
+        if (argument == "--theme" && i + 1 < argc) { editorTheme = argv[++i]; themeRequested = true; }
+        if (argument == "--asset-view" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            assetViewRequested = true;
+            if (value == "small") assetView = shinkou::editor::EditorAssetView::SmallList;
+            else if (value == "large") assetView = shinkou::editor::EditorAssetView::LargeIcons;
+            else if (value == "tree") assetView = shinkou::editor::EditorAssetView::Tree;
+        }
         if (argument == "dx11") {
             config.renderBackend = shinkou::render::BackendApi::DirectX11;
             explicitBackend = true;
@@ -68,14 +85,26 @@ int main(int argc, char** argv) {
     // normal double-click/"--editor" launch while explicit backend arguments
     // remain available for backend testing.
     if (editorRequested && !explicitBackend) config.renderBackend = shinkou::render::BackendApi::DirectX11;
+    if (editorRequested) {
+        if (projectRoot.empty()) projectRoot = std::filesystem::current_path().string();
+        config.editorProjectRoot = projectRoot;
+    }
     if (editorRequested && !framesRequested) requestedFrames = 0;
     config.editor = editorRequested;
     if (config.editor) config.window.title = "ShinkouEngine Editor";
     shinkou::Engine engine(config);
     if (!engine.initialize()) return 1;
-    if (!engine.renderer().resize(config.window.width, config.window.height)) return 2;
+    if (editorRequested && themeRequested) engine.editor().set_theme(editorTheme);
+    if (editorRequested && assetViewRequested) engine.editor().set_asset_view(assetView);
 
     engine.world().add_object<DemoObject>();
+    // Seed the editor's World Outliner with a small real hierarchy so the
+    // RenderView, selection model and Details panel have live engine data on
+    // the first frame instead of an empty placeholder.
+    auto& demoScene = engine.world().create_object("Demo Scene");
+    demoScene.create_child("Editor Camera");
+    demoScene.create_child("Directional Light");
+    demoScene.create_child("Demo Mesh");
     auto entity = engine.world().ecs().create();
     engine.world().ecs().emplace<Velocity>(entity, Velocity{shinkou::math::Vec3{1, 0, 0}});
     engine.world().ecs().emplace<Position>(entity, Position{});
@@ -132,9 +161,24 @@ int main(int argc, char** argv) {
         engine.renderer().destroy_resource(mipHandle);
     }
 
-    const shinkou::render::TextureDesc colorDesc{config.window.width, config.window.height, 1, 1, "rgba8", true, false, {}};
-    const shinkou::render::TextureDesc depthDesc{config.window.width, config.window.height, 1, 1, "d24s8", false, false, {}};
-    const shinkou::render::TextureDesc spriteDesc{256, 256, 1, 1, "rgba8", false, false, {}};
+    const shinkou::render::TextureDesc colorDesc{engine.window().width(), engine.window().height(), 1, 1, "bgra8", true, false, {}};
+    shinkou::render::TextureDesc depthDesc{engine.window().width(), engine.window().height(), 1, 1, "d24s8", false, false, {}};
+    depthDesc.depthStencil = true;
+    shinkou::render::TextureDesc spriteDesc{256, 256, 1, 1, "rgba8", false, false, {}};
+    // Keep the sample scene visibly non-empty on every backend. An
+    // uninitialized shader-readable texture is not a valid editor preview
+    // asset and can appear as a black viewport even when the draw succeeds.
+    spriteDesc.initialData.resize(256u * 256u * 4u);
+    for (std::uint32_t y = 0; y < 256u; ++y) {
+        for (std::uint32_t x = 0; x < 256u; ++x) {
+            const bool checker = ((x / 32u) + (y / 32u)) % 2u == 0u;
+            const auto offset = static_cast<std::size_t>((y * 256u + x) * 4u);
+            spriteDesc.initialData[offset + 0] = checker ? 245u : 48u;
+            spriteDesc.initialData[offset + 1] = checker ? 148u : 196u;
+            spriteDesc.initialData[offset + 2] = checker ? 66u : 232u;
+            spriteDesc.initialData[offset + 3] = 255u;
+        }
+    }
     const float triangleVertices[] = {-0.6f, -0.5f, 0.0f, 0.0f, 0.6f, 0.0f, 0.6f, -0.5f, 0.0f};
     const std::uint32_t triangleIndices[] = {0, 1, 2};
     std::vector<std::uint8_t> vertexData(sizeof(triangleVertices));
@@ -183,16 +227,20 @@ int main(int argc, char** argv) {
     else if (api == shinkou::render::BackendApi::DirectX11) meshVertexShaderDesc.source = R"(cbuffer SceneFrame : register(b2) { float4x4 viewProjection; float4 cameraPositionAndFlags; }; cbuffer ObjectFrame : register(b3) { float4x4 model; }; struct O { float4 p : SV_Position; }; O main(float3 position : POSITION) { O o; o.p=mul(mul(float4(position,1),model),viewProjection); return o; })";
     const auto meshVertexShader = engine.renderer().create_shader(meshVertexShaderDesc);
     const auto fragmentShader = engine.renderer().create_shader(fragmentShaderDesc);
-    const auto pipeline = engine.renderer().create_pipeline({"sample_pipeline", vertexShader.id, fragmentShader.id, 0, false, false, false, false});
-    const auto meshPipeline = engine.renderer().create_pipeline({"sample_mesh_pipeline", vertexShader.id, fragmentShader.id, 0, false, false, false, false});
+    shinkou::render::PipelineDesc pipelineDescription{"sample_pipeline", vertexShader.id, fragmentShader.id, 0, false, false, false, false};
+    pipelineDescription.colorFormat = "bgra8";
+    const auto pipeline = engine.renderer().create_pipeline(pipelineDescription);
+    shinkou::render::PipelineDesc meshPipelineDescription{"sample_mesh_pipeline", meshVertexShader.id, fragmentShader.id, 0, false, false, false, true};
+    meshPipelineDescription.colorFormat = "bgra8";
+    const auto meshPipeline = engine.renderer().create_pipeline(meshPipelineDescription);
     const auto material = engine.renderer().create_material({"sample_material", pipeline, {{"albedo", spriteTexture, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
     const auto presentMaterial = engine.renderer().create_material({"present_material", pipeline, {{"color", color, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
 
+    const auto meshMaterial = engine.renderer().create_material({"mesh_material", meshPipeline, {{"albedo", spriteTexture, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
     auto meshEntity = engine.world().ecs().create();
     shinkou::render::TransformComponent meshTransform;
     meshTransform.local.position = {0.0f, 0.0f, 0.0f};
     engine.world().ecs().emplace<shinkou::render::TransformComponent>(meshEntity, meshTransform);
-    const auto meshMaterial = engine.renderer().create_material({"mesh_material", meshPipeline, {{"albedo", spriteTexture, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
     engine.world().ecs().emplace<shinkou::render::MeshRendererComponent>(meshEntity,
         shinkou::render::MeshRendererComponent{vertexBuffer, indexBuffer, meshMaterial, 3, true});
     auto spriteEntity = engine.world().ecs().create();
@@ -214,8 +262,27 @@ int main(int argc, char** argv) {
     engine.set_render_callback([&, color, colorDesc, depth, depthDesc, presentMaterial, presentDescription](
         shinkou::render::Renderer& renderer, shinkou::World& world, shinkou::Seconds, shinkou::FrameIndex) {
         if (editorRequested) {
-            renderer.graph().add_pass("editor_present", std::vector<shinkou::render::ResourceHandle>{},
-                std::vector<shinkou::render::ResourceHandle>{}, [](auto&, const auto&) {});
+            // Editor mode still renders the world, but the Renderer will apply
+            // the EditorLayer-provided RenderView viewport/scissor before
+            // executing these passes. The rest of the swapchain remains owned
+            // by the editor shell and retained editor overlay.
+            float sceneAspect = static_cast<float>(colorDesc.width) /
+                static_cast<float>(std::max<std::uint32_t>(1u, colorDesc.height));
+            const auto& editorViewport = renderer.editor_viewport();
+            if (editorViewport.enabled && editorViewport.viewport.width > 1.0f &&
+                editorViewport.viewport.height > 1.0f) {
+                sceneAspect = editorViewport.viewport.width / editorViewport.viewport.height;
+            }
+            renderScene.extract(world, renderer,
+                sceneAspect);
+            forwardRenderer.build(renderer, renderScene, color, colorDesc, depth, depthDesc);
+            // Keep the scene chain live without pretending that the
+            // offscreen scene color is the swapchain. The pass is a
+            // side-effect lifetime marker; the editor overlay pass owns
+            // actual window submission.
+            renderer.graph().add_pass("editor_viewport_lifetime",
+                {{color, shinkou::render::ResourceUsage::ShaderRead}},
+                [color](auto&, const auto&) { (void)color; });
             return;
         }
         renderScene.extract(world, renderer, static_cast<float>(colorDesc.width) / static_cast<float>(colorDesc.height));
@@ -245,6 +312,19 @@ int main(int argc, char** argv) {
     if (!engine.renderer().last_error().empty()) {
         std::cerr << "renderer submission reported an error: " << engine.renderer().last_error() << '\n';
         return 9;
+    }
+    if (editorRequested) {
+        const auto viewport = engine.editor().ui_viewport_rect();
+        std::cerr << "editor-ui-commands=" << engine.editor().ui_command_count()
+                  << " editor-ui-text=" << engine.editor().ui_text_command_count()
+                  << " editor-ui-assets=" << engine.editor().ui_asset_file_count()
+                  << " editor-ui-visible-assets=" << engine.editor().ui_visible_asset_file_count()
+                  << " editor-ui-asset-dir=" << engine.editor().ui_asset_directory()
+                  << " editor-ui-first-asset=" << engine.editor().ui_first_asset_path()
+                  << " editor-ui-viewport=" << viewport.x << ',' << viewport.y << ','
+                  << viewport.width << ',' << viewport.height
+                  << " editor-ui-theme=" << engine.editor().layout().theme
+                  << " editor-ui-dpi=" << engine.editor().ui_dpi_scale() << '\n';
     }
     if (recoverRequested) {
         if (!engine.renderer().recover()) {
@@ -276,6 +356,8 @@ int main(int argc, char** argv) {
     const auto stats = engine.renderer().stats();
     std::cout << "device-ready=" << capabilities.deviceReady
               << " bindless=" << capabilities.supportsBindless
+              << " native-ui=" << capabilities.supportsNativeUi
+              << " viewport-scissor=" << capabilities.supportsEditorViewportScissor
               << " frames=" << stats.frames
               << " passes=" << stats.passes
               << " draws=" << stats.drawCalls << "\n";

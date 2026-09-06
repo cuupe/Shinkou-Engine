@@ -4,6 +4,8 @@
 #include <SDL3/SDL_gamepad.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <cctype>
 #include <cstdint>
@@ -150,6 +152,8 @@ void process_event(ShinkouInputHandle& input, const SDL_Event& source) {
         input.mouse.wheel_y += source.wheel.y;
         ShinkouInputEvent event{};
         event.type = SHINKOU_INPUT_EVENT_MOUSE_WHEEL;
+        event.x = source.wheel.mouse_x;
+        event.y = source.wheel.mouse_y;
         event.device = static_cast<uint32_t>(source.wheel.which);
         event.delta_x = source.wheel.x;
         event.delta_y = source.wheel.y;
@@ -193,6 +197,7 @@ void process_event(ShinkouInputHandle& input, const SDL_Event& source) {
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         input.keys.fill(0);
         std::memset(input.mouse.buttons, 0, sizeof(input.mouse.buttons));
+        push_event(input, SHINKOU_INPUT_EVENT_FOCUS_LOST);
         break;
     default:
         break;
@@ -262,7 +267,12 @@ SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_initialize(ShinkouInputHa
             SDL_SetBooleanProperty(properties, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
             input->window = SDL_CreateWindowWithProperties(properties);
             SDL_DestroyProperties(properties);
+            if (input->window) SDL_StartTextInput(input->window);
         }
+    }
+    if (input->native_window && !input->window) {
+        std::fprintf(stderr,"ShinkouInput could not attach the editor window: %s\n",SDL_GetError());
+        SDL_QuitSubSystem(SDL_INIT_GAMEPAD|SDL_INIT_VIDEO|SDL_INIT_EVENTS);return 0;
     }
     int count = 0;
     if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) {
@@ -282,7 +292,7 @@ SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_shutdown(ShinkouInputHan
     }
     input->gamepads.clear();
     input->gamepad_states.clear();
-    if (input->window != nullptr) SDL_DestroyWindow(input->window);
+    if (input->window != nullptr) { SDL_StopTextInput(input->window); SDL_DestroyWindow(input->window); }
     input->window = nullptr;
     SDL_QuitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     input->initialized = false;

@@ -2,9 +2,12 @@
 
 #include "shinkou/GameObject.h"
 #include "shinkou/World.h"
+#include "shinkou/render/RenderScene.h"
 #include "shinkou/reflection/Reflection.h"
 #include "shinkou/reflection/Serialization.h"
 #include "shinkou/ui/ImGuiAdapter.h"
+#include "shinkou/ui/Performance.h"
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -17,6 +20,7 @@
 
 #if defined(SHINKOU_PLATFORM_WINDOWS)
 #include <windows.h>
+#include <commdlg.h>
 #endif
 
 #if defined(SHINKOU_WITH_IMGUI)
@@ -32,6 +36,12 @@ namespace {
 constexpr std::string_view kDarkTheme{"dark"};
 constexpr std::string_view kLightTheme{"light"};
 constexpr std::string_view kHighContrastTheme{"high-contrast"};
+
+float effective_editor_ui_scale(float dpiScale, float userScale) noexcept {
+    const float dpi = std::clamp(std::isfinite(dpiScale) ? dpiScale : 1.0f, 0.25f, 8.0f);
+    const float user = std::clamp(std::isfinite(userScale) ? userScale : 1.0f, 0.5f, 3.0f);
+    return std::clamp(dpi * user, 0.25f, 8.0f);
+}
 
 #if defined(SHINKOU_PLATFORM_WINDOWS)
 enum NativeEditorMenuId : UINT {
@@ -60,10 +70,12 @@ enum NativeEditorMenuId : UINT {
     kNativeLightTheme,
     kNativeHighContrastTheme,
     kNativeAbout,
+    kNativeSaveAs, kNativeSaveLayout, kNativeReloadLayout, kNativeResetLayout,
+    kNativeSettings, kNativeDeleteObject, kNativeFrameSelection,
 };
 
-void append_native_item(HMENU menu, UINT id, const char* label) {
-    AppendMenuA(menu, MF_STRING, id, label);
+void append_native_item(HMENU menu, UINT id, const char* label, bool enabled = true) {
+    AppendMenuA(menu, MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED), id, label);
 }
 
 void append_native_submenu(HMENU menu, HMENU submenu, const char* label) {
@@ -205,7 +217,8 @@ void draw_property(const PropertyDescriptor& property) {
 
 } // namespace
 
-bool EditorLayer::initialize() {
+bool EditorLayer::initialize(bool enableImGui) {
+    (void)enableImGui;
     if (initialized_) return true;
     register_builtin_panels();
     if (uiComponents_.size() == 0) {
@@ -217,7 +230,9 @@ bool EditorLayer::initialize() {
     }
     build_default_workspace();
     load_layout_file();
+    if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
     fileSystem_.set_root(layout_.projectRoot);
+    set_asset_directory("assets");
     load_style_file();
     sync_style_to_layout();
     load_workspace_file();
@@ -227,52 +242,73 @@ bool EditorLayer::initialize() {
     sync_workspace_visibility();
     refresh_asset_cache();
     install_native_menu();
-#if defined(SHINKOU_WITH_UIKIT)
-    uiKitPanels_ = std::make_unique<UiKitPanelHost>();
-    uiKitPanels_->set_command_handler([this](EditorCommand command, std::string_view target) {
-        if (activeWorld_) dispatch_command(command, target, *activeWorld_);
+    // The retained UI owns the portable menu on platforms without a native
+    // menu integration. Inject only the capability result so the UI core
+    // stays independent of Win32/Cocoa/GTK/etc.
+    editorUi_.set_native_main_menu_available(nativeMenu_ != nullptr);
+    editorUi_.initialize({
+        [this](EditorCommand command, std::string_view target) {
+            if (activeWorld_) dispatch_command(command, target, *activeWorld_);
+        },
+        [this](ObjectId id) {
+            layout_.selectedObject = id;
+            uiModel_.select_object(id);
+        },
+        [this](ObjectId id, std::string name) {
+            if (activeWorld_) {
+                if (auto* object = activeWorld_->find_object(id)) {
+                    object->set_name(std::move(name));
+                    uiModel_.invalidate();
+                }
+            }
+        },
+        [this](ObjectId id, bool active) {
+            if (activeWorld_) {
+                if (auto* object = activeWorld_->find_object(id)) {
+                    object->set_active(active);
+                    uiModel_.invalidate();
+                }
+            }
+        },
+        [this](std::string filter) { uiModel_.set_object_filter(std::move(filter)); },
+        [this](std::string path) { selectedAsset_ = std::move(path); },
+        [this](EditorAssetAction action, std::string path, std::string value) {
+            handle_asset_action(action, std::move(path), std::move(value));
+        },
+        [this](std::string_view mode) {
+            renderViewMode_ = std::string(mode);
+            if (activeWorld_) apply_render_view_mode(*activeWorld_, renderViewMode_);
+        },
+        [this](std::string_view panelId) {
+            // Closing a tab is a visibility operation, so it remains
+            // reversible through the Window menu and preserves the user's
+            // dock topology instead of destroying the panel registration.
+            set_panel_visible(panelId, false);
+        },
+        [this](std::string_view id, std::string_view value) { return edit_field(id, value); },
+        [this](ViewportNavigation action, math::Vec2 delta) { navigate_viewport(action, delta); }
     });
-    uiKitPanels_->set_object_selection_handler([this](ObjectId id) {
-        layout_.selectedObject = id;
-        uiModel_.select_object(id);
-    });
-    uiKitPanels_->set_object_name_handler([this](ObjectId id, std::string name) {
-        if (activeWorld_) {
-            if (auto* object = activeWorld_->find_object(id)) object->set_name(std::move(name));
-        }
-    });
-    uiKitPanels_->set_object_active_handler([this](ObjectId id, bool active) {
-        if (activeWorld_) {
-            if (auto* object = activeWorld_->find_object(id)) object->set_active(active);
-        }
-    });
-    uiKitPanels_->set_media_command_handler([this](const ui::MediaCommand& command) {
-        mediaPanel_.apply(command);
-    });
-    uiKitPanels_->set_object_filter_handler([this](std::string filter) {
-        uiModel_.set_object_filter(std::move(filter));
-    });
-    uiKitPanels_->set_asset_selection_handler([this](std::string path) {
-        selectedAsset_ = std::move(path);
-    });
-#endif
 #if defined(SHINKOU_WITH_IMGUI)
-    if (!ImGui::GetCurrentContext()) {
-        ImGui::CreateContext();
-        uiContextOwned_ = true;
-    }
-    auto& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    imguiEnabled_ = enableImGui;
+    if (imguiEnabled_) {
+        if (!ImGui::GetCurrentContext()) {
+            ImGui::CreateContext();
+            uiContextOwned_ = true;
+        }
+        auto& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 #if defined(IMGUI_HAS_DOCK)
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
-    if (io.Fonts && !io.Fonts->IsBuilt()) io.Fonts->Build();
+        if (io.Fonts && !io.Fonts->IsBuilt()) io.Fonts->Build();
 #if defined(SHINKOU_PLATFORM_WINDOWS)
-    if (nativeWindow_ && !ImGui_ImplWin32_Init(nativeWindow_)) {
-        push_console("ImGui Win32 platform initialization failed");
-    }
+        if (nativeWindow_) {
+            imguiPlatformInitialized_ = ImGui_ImplWin32_Init(nativeWindow_);
+            if (!imguiPlatformInitialized_) push_console("ImGui Win32 platform initialization failed");
+        }
 #endif
-    apply_theme();
+        apply_theme();
+    }
 #endif
     initialized_ = true;
     push_console("Editor UI initialized");
@@ -282,16 +318,103 @@ bool EditorLayer::initialize() {
 void EditorLayer::process_input(const input::InputSystem& input, World& world) {
     if (!initialized_) return;
     activeWorld_ = &world;
-    // Keep hit-test rectangles current before routing this tick's events. The
-    // next draw/layout pass will consume any dirty state caused by handlers.
-    uiRuntime_.layout({displayWidth_, displayHeight_});
-    uiInputStats_ = ui::InputBridge::dispatch(input, uiRuntime_);
-#if defined(SHINKOU_WITH_UIKIT)
-    if (uiKitPanels_) {
-        uiKitPanels_->set_viewport(displayWidth_, displayHeight_);
-        uiKitPanels_->process_input(input);
+    // EditorUi is the authoritative editor input route. The previous
+    // compatibility runtime was laid out and dispatched every event even
+    // though it had no editor host, doubling input work on the frame thread.
+    uiInputStats_ = {};
+    editorUi_.set_display_size(displayWidth_, displayHeight_, effective_editor_ui_scale(displayDpiScale_, layout_.uiScale));
+    editorUi_.process_input(input);
+}
+
+void EditorLayer::navigate_viewport(ViewportNavigation action, math::Vec2 delta) {
+    if (!activeWorld_ || !math::IsFinite(delta.x) || !math::IsFinite(delta.y)) return;
+    bool moved = false;
+    activeWorld_->ecs().each<render::CameraComponent, render::TransformComponent>(
+        [&](Entity, auto& camera, auto& transform) {
+            if (moved || !camera.active || !transform.visible) return;
+            moved = true;
+            auto& view = transform.local;
+            const auto forward = math::Rotate(view.rotation, {0,0,1});
+            const auto right = math::Rotate(view.rotation, {1,0,0});
+            const auto up = math::Rotate(view.rotation, {0,1,0});
+            if (action == ViewportNavigation::Zoom) {
+                const float factor = std::exp(-std::clamp(delta.y, -10.0f, 10.0f) * 0.15f);
+                if (camera.orthographic) camera.orthographicSize = std::clamp(camera.orthographicSize * factor, 0.05f, 10000.0f);
+                else {
+                    const auto distance = std::clamp(orbitDistance_ * factor, 0.1f, 10000.0f);
+                    view.position = view.position + forward * (orbitDistance_ - distance);
+                    orbitDistance_ = distance;
+                }
+            } else if (action == ViewportNavigation::Pan || camera.orthographic) {
+                const auto height = std::max(1.0f, editorUi_.viewport_rect().height);
+                const float units = (camera.orthographic ? camera.orthographicSize : 2.0f * orbitDistance_ * std::tan(camera.verticalFieldOfView * 0.5f)) / height;
+                view.position = view.position + (right * -delta.x + up * delta.y) * units;
+            } else {
+                const auto pivot = view.position + forward * orbitDistance_;
+                const auto yaw = math::FromAxisAngle({0,1,0}, delta.x * 0.006f);
+                const auto pitch = math::FromAxisAngle(right, delta.y * 0.006f);
+                view.rotation = math::Normalize(math::Multiply(yaw, math::Multiply(pitch, view.rotation)));
+                view.position = pivot - math::Rotate(view.rotation, {0,0,1}) * orbitDistance_;
+            }
+        });
+    if (!moved) lastStatus_ = "No active scene camera";
+}
+
+void EditorLayer::apply_render_view_mode(World& world, std::string_view mode) {
+    orbitDistance_ = 5.0f;
+    bool applied = false;
+    world.ecs().each<render::CameraComponent, render::TransformComponent>(
+        [mode, &applied](Entity, render::CameraComponent& camera, render::TransformComponent& transform) {
+            if (applied || !camera.active || !transform.visible) return;
+            applied = true;
+            camera.orthographic = mode != "Perspective";
+            if (mode == "Front") {
+                transform.local.position = {0.0f, 0.0f, -5.0f};
+                transform.local.rotation = math::Quat::Identity();
+            } else if (mode == "Side" || mode == "Right") {
+                transform.local.position = {5.0f, 0.0f, 0.0f};
+                transform.local.rotation = math::FromEulerXYZ({0.0f, -math::Pi * 0.5f, 0.0f});
+            } else if (mode == "Left") {
+                transform.local.position = {-5,0,0}; transform.local.rotation = math::FromEulerXYZ({0,math::Pi*0.5f,0});
+            } else if (mode == "Back") {
+                transform.local.position = {0,0,5}; transform.local.rotation = math::FromEulerXYZ({0,math::Pi,0});
+            } else if (mode == "Bottom") {
+                transform.local.position = {0,-5,0}; transform.local.rotation = math::FromEulerXYZ({-math::Pi*0.5f,0,0});
+            } else if (mode == "Top") {
+                transform.local.position = {0.0f, 5.0f, 0.0f};
+                transform.local.rotation = math::FromEulerXYZ({math::Pi * 0.5f, 0.0f, 0.0f});
+            } else {
+                transform.local.position = {0.0f, 0.0f, -5.0f};
+                transform.local.rotation = math::Quat::Identity();
+            }
+    });
+}
+
+void EditorLayer::prepare_frame(render::Renderer& renderer, World& world) {
+    if (!initialized_) return;
+    activeWorld_ = &world;
+    const float uiScale = effective_editor_ui_scale(displayDpiScale_, layout_.uiScale);
+    editorUi_.set_display_size(displayWidth_, displayHeight_, uiScale);
+    editorUi_.prepare_layout(layout_, dockWorkspace_);
+
+    const auto viewport = editorUi_.viewport_rect();
+    if (!layout_.showViewport || viewport.width <= 1.0f || viewport.height <= 1.0f) {
+        renderer.clear_editor_viewport();
+        return;
     }
-#endif
+
+    // DockLayout is expressed in logical Slate-style coordinates. Renderer
+    // seams are expressed in physical client pixels, just like D3D viewports.
+    render::EditorViewportSeam seam;
+    seam.viewport = {viewport.x * uiScale, viewport.y * uiScale,
+                     viewport.width * uiScale, viewport.height * uiScale};
+    seam.scissor = seam.viewport;
+    seam.enabled = true;
+    seam.strictTarget = true;
+    if (!renderer.set_editor_viewport(seam) && !uiPresentationWarningEmitted_) {
+        push_console("Editor RenderView seam rejected: " + renderer.last_error());
+        uiPresentationWarningEmitted_ = true;
+    }
 }
 
 void EditorLayer::install_native_menu() {
@@ -305,6 +428,10 @@ void EditorLayer::install_native_menu() {
     append_native_item(fileMenu, kNativeNewScene, "New Scene");
     append_native_item(fileMenu, kNativeOpenScene, "Open Scene...");
     append_native_item(fileMenu, kNativeSaveScene, "Save Scene");
+    append_native_item(fileMenu, kNativeSaveAs, "Save Scene As...");
+    append_native_item(fileMenu, kNativeSaveLayout, "Save Layout");
+    append_native_item(fileMenu, kNativeReloadLayout, "Reload Layout");
+    append_native_item(fileMenu, kNativeResetLayout, "Reset Layout");
     AppendMenuA(fileMenu, MF_SEPARATOR, 0, nullptr);
     append_native_item(fileMenu, kNativeExit, "Exit");
     append_native_submenu(mainMenu, fileMenu, "File");
@@ -312,6 +439,9 @@ void EditorLayer::install_native_menu() {
     HMENU editMenu = CreatePopupMenu();
     append_native_item(editMenu, kNativeUndo, "Undo");
     append_native_item(editMenu, kNativeRedo, "Redo");
+    append_native_item(editMenu, kNativeDeleteObject, "Delete Object");
+    append_native_item(editMenu, kNativeFrameSelection, "Frame Selected");
+    append_native_item(editMenu, kNativeSettings, "Editor Settings");
     append_native_submenu(mainMenu, editMenu, "Edit");
 
     HMENU assetsMenu = CreatePopupMenu();
@@ -322,12 +452,12 @@ void EditorLayer::install_native_menu() {
     append_native_item(gameObjectMenu, kNativeCreateEmpty, "Create Empty");
     append_native_item(gameObjectMenu, kNativeCreateChild, "Create Child");
     HMENU create3dMenu = CreatePopupMenu();
-    append_native_item(create3dMenu, kNativeCreate3D, "3D Object");
+    append_native_item(create3dMenu, kNativeCreate3D, "3D Object (factory unavailable)", false);
     append_native_submenu(gameObjectMenu, create3dMenu, "3D Object");
     HMENU create2dMenu = CreatePopupMenu();
-    append_native_item(create2dMenu, kNativeCreate2D, "2D Object");
+    append_native_item(create2dMenu, kNativeCreate2D, "2D Object (factory unavailable)", false);
     append_native_submenu(gameObjectMenu, create2dMenu, "2D Object");
-    append_native_item(gameObjectMenu, kNativeCreateUi, "UI Object");
+    append_native_item(gameObjectMenu, kNativeCreateUi, "UI Object (factory unavailable)", false);
     append_native_submenu(mainMenu, gameObjectMenu, "GameObject");
 
     HMENU componentMenu = CreatePopupMenu();
@@ -343,6 +473,7 @@ void EditorLayer::install_native_menu() {
     append_native_item(windowMenu, kNativeConsolePage, "Console");
     append_native_item(windowMenu, kNativeProfilerPage, "Profiler");
     append_native_item(windowMenu, kNativeRenderGraphPage, "Render Graph");
+    append_native_item(windowMenu, kNativeSettings, "Editor Settings");
     append_native_submenu(mainMenu, windowMenu, "Window");
 
     HMENU themeMenu = CreatePopupMenu();
@@ -372,11 +503,37 @@ void EditorLayer::uninstall_native_menu() {
 }
 
 void EditorLayer::handle_native_menu_command(std::uint32_t command, World& world) {
+    if (command == 49000) {
+        if (const char* path = std::getenv("SHINKOU_UI_QA_SNAPSHOT")) {
+            std::ofstream out(path);
+            const char* view = editorUi_.asset_view()==EditorAssetView::Tree ? "tree" : editorUi_.asset_view()==EditorAssetView::LargeIcons ? "large" : "small";
+            out << "state " << editorUi_.dpi_scale() << ' ' << std::quoted(editorUi_.selected_asset()) << ' ' << std::quoted(lastStatus_)
+                << " view=" << view << " scroll=" << editorUi_.asset_scroll_offset() << " theme=" << layout_.theme << " playing=" << uiModel_.playing() << " paused=" << uiModel_.paused() << '\n';
+            world.ecs().each<render::CameraComponent, render::TransformComponent>([&](Entity, const auto& camera, const auto& pose) {
+                if(camera.active) out << "camera " << property_text(pose.local.position) << ' ' << property_text(pose.local.rotation) << ' ' << camera.orthographicSize << '\n';
+            });
+            for (const auto& pair : editorUi_.interaction_regions())
+                out << "region " << std::quoted(pair.first) << ' ' << pair.second.x << ' ' << pair.second.y << ' ' << pair.second.width << ' ' << pair.second.height << '\n';
+            if (auto* object = world.find_object(layout_.selectedObject)) {
+                out << "object " << std::quoted(std::string(object->name())) << '\n';
+                for (const auto& field : uiModel_.inspector_fields()) out << "field " << std::quoted(field.label) << ' ' << std::quoted(field.value) << '\n';
+            }
+            out << "end\n";
+        }
+        return;
+    }
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     switch (command) {
     case kNativeNewScene: dispatch_command(EditorCommand::NewScene, {}, world); break;
     case kNativeOpenScene: dispatch_command(EditorCommand::OpenScene, {}, world); break;
     case kNativeSaveScene: dispatch_command(EditorCommand::SaveScene, {}, world); break;
+    case kNativeSaveAs: dispatch_command(EditorCommand::SaveSceneAs, {}, world); break;
+    case kNativeSaveLayout: dispatch_command(EditorCommand::SaveLayout, {}, world); break;
+    case kNativeReloadLayout: dispatch_command(EditorCommand::ReloadLayout, {}, world); break;
+    case kNativeResetLayout: dispatch_command(EditorCommand::ResetLayout, {}, world); break;
+    case kNativeSettings: dispatch_command(EditorCommand::ProjectSettings, {}, world); break;
+    case kNativeDeleteObject: dispatch_command(EditorCommand::DeleteObject, {}, world); break;
+    case kNativeFrameSelection: dispatch_command(EditorCommand::FrameSelection, {}, world); break;
     case kNativeExit: dispatch_command(EditorCommand::Quit, {}, world); break;
     case kNativeUndo: dispatch_command(EditorCommand::Undo, {}, world); break;
     case kNativeRedo: dispatch_command(EditorCommand::Redo, {}, world); break;
@@ -429,11 +586,12 @@ void EditorLayer::build_default_workspace() {
     auto leaf = [](std::string id, std::string title, bool visible, math::Vec2 minimum) {
         return DockNode::leaf(DockPanel{std::move(id), std::move(title), visible, true, minimum});
     };
-    auto bottom = DockNode::split(leaf("assets", "Asset Browser", true, {180.0f, 90.0f}),
-                                  leaf("console", "Console", true, {180.0f, 90.0f}),
-                                  DockSplitOrientation::Horizontal, 0.5f);
+    auto bottom = DockNode::tab_stack({
+        DockPanel{"assets", "Asset Browser", true, true, {180.0f, 90.0f}},
+        DockPanel{"console", "Console", true, true, {180.0f, 90.0f}},
+    }, 0);
     auto center = DockNode::split(leaf("viewport", "Viewport", true, {320.0f, 220.0f}),
-                                  std::move(bottom), DockSplitOrientation::Vertical, 0.76f);
+                                  std::move(bottom), DockSplitOrientation::Vertical, 0.64f);
     auto right = DockNode::split(leaf("inspector", "Inspector", true, {240.0f, 220.0f}),
                                  leaf("profiler", "Profiler", false, {240.0f, 120.0f}),
                                  DockSplitOrientation::Vertical, 0.72f);
@@ -457,6 +615,7 @@ void EditorLayer::build_default_workspace() {
 
 void EditorLayer::sync_workspace_visibility() noexcept {
     for (const auto& [id, visible] : panelVisibility_) dockWorkspace_.set_panel_visibility(id, visible);
+    editorUi_.invalidate_layout();
 }
 
 void EditorLayer::sync_page_visibility() noexcept {
@@ -477,7 +636,10 @@ bool EditorLayer::register_panel(EditorPanel panel) {
     panelVisibility_[panel.id] = panel.defaultVisible;
     const DockPanel dockPanel{panel.id, panel.title, panel.defaultVisible, panel.closeable, {panel.minWidth, panel.minHeight}};
     panels_.push_back(std::move(panel));
-    if (initialized_) dockWorkspace_.add_tab("viewport", dockPanel, false);
+    if (initialized_) {
+        dockWorkspace_.add_tab("viewport", dockPanel, false);
+        editorUi_.invalidate_layout();
+    }
     return true;
 }
 
@@ -485,6 +647,7 @@ bool EditorLayer::unregister_panel(std::string_view id) {
     const auto it = std::find_if(panels_.begin(), panels_.end(), [id](const EditorPanel& panel) { return panel.id == id; });
     if (it == panels_.end() || it->id == "hierarchy" || it->id == "inspector" || it->id == "viewport") return false;
     dockWorkspace_.remove_tab(it->id);
+    editorUi_.invalidate_layout();
     panelVisibility_.erase(it->id);
     panels_.erase(it);
     return true;
@@ -505,6 +668,7 @@ bool EditorLayer::set_panel_visible(std::string_view id, bool visible) {
     else if (id == "settings") layout_.showSettings = visible;
     else if (id == "media") layout_.showMedia = visible;
     dockWorkspace_.set_panel_visibility(id, visible);
+    editorUi_.invalidate_layout();
     sync_page_visibility();
     return true;
 }
@@ -516,7 +680,16 @@ bool EditorLayer::panel_visible(std::string_view id) const noexcept {
 
 void EditorLayer::set_project_root(std::string path) {
     layout_.projectRoot = std::move(path);
+    if (!initialized_) {
+        projectRootOverride_ = layout_.projectRoot;
+        const auto root = std::filesystem::absolute(layout_.projectRoot).lexically_normal();
+        if (std::filesystem::path(layout_.layoutFile).is_relative()) set_layout_path((root/layout_.layoutFile).generic_string());
+    }
     fileSystem_.set_root(layout_.projectRoot);
+    assetDirectory_.clear();
+    editorUi_.set_asset_directory({});
+    set_asset_directory("assets");
+    ++fileScanGeneration_;
     assetsDirty_ = true;
 }
 
@@ -530,9 +703,10 @@ void EditorLayer::set_style_file(std::string path) {
     if (!path.empty()) layout_.styleFile = std::move(path);
 }
 
-void EditorLayer::set_display_size(float width, float height) noexcept {
+void EditorLayer::set_display_size(float width, float height, float dpiScale) noexcept {
     displayWidth_ = std::max(width, 1.0f);
     displayHeight_ = std::max(height, 1.0f);
+    displayDpiScale_ = std::clamp(dpiScale, 0.25f, 8.0f);
 }
 
 bool EditorLayer::save_layout_file() {
@@ -721,7 +895,12 @@ bool EditorLayer::save_layout() {
 
 bool EditorLayer::load_layout() {
     const bool loaded = load_layout_file();
+    if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
     fileSystem_.set_root(layout_.projectRoot);
+    assetDirectory_.clear();
+    editorUi_.set_asset_directory({});
+    set_asset_directory("assets");
+    ++fileScanGeneration_;
     load_style_file();
     std::error_code dockFileError;
     const bool hasDockFile = std::filesystem::exists(layout_.dockLayoutFile, dockFileError);
@@ -736,9 +915,20 @@ bool EditorLayer::load_layout() {
 }
 
 void EditorLayer::reset_layout() {
+    const auto layoutPath = layout_.layoutFile;
+    const auto dockPath = layout_.dockLayoutFile;
+    const auto stylePath = layout_.styleFile;
+    const auto selection = layout_.selectedObject;
     layout_ = EditorLayoutState{};
+    layout_.layoutFile = layoutPath; layout_.dockLayoutFile = dockPath; layout_.styleFile = stylePath;
+    layout_.selectedObject = selection;
+    if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
     styleConfig_ = ui::UiStyleConfig{};
     fileSystem_.set_root(layout_.projectRoot);
+    assetDirectory_.clear();
+    editorUi_.set_asset_directory({});
+    set_asset_directory("assets");
+    ++fileScanGeneration_;
     for (const auto& panel : panels_) panelVisibility_[panel.id] = panel.defaultVisible;
     build_default_workspace();
     sync_page_visibility();
@@ -753,6 +943,7 @@ void EditorLayer::set_theme(std::string theme) {
     layout_.theme = std::move(theme);
     themeRegistry_.switch_theme(layout_.theme);
     styleConfig_.activeTheme = layout_.theme;
+    editorUi_.invalidate_layout();
 #if defined(SHINKOU_WITH_IMGUI)
     apply_theme();
 #endif
@@ -764,7 +955,84 @@ void EditorLayer::push_console(std::string message) {
     if (consoleEntries_.size() > 256) consoleEntries_.erase(consoleEntries_.begin(), consoleEntries_.begin() + 64);
 }
 
+bool EditorLayer::checkpoint(World& world) {
+    EditorDocument document; std::string error;
+    if (!EditorDocument::capture(world, layout_.selectedObject, document, error)) { lastStatus_ = error; return false; }
+    undo_.push_back(std::move(document));
+    if (undo_.size() > 64) undo_.erase(undo_.begin());
+    return true;
+}
+
+void EditorLayer::document_changed(bool preserveRedo) {
+    if (!preserveRedo) redo_.clear();
+    sceneDirty_ = true;
+    selectedAsset_.clear(); editorUi_.select_asset({});
+    uiModel_.select_object(layout_.selectedObject); uiModel_.invalidate();
+    editorUi_.invalidate_layout();
+}
+
+bool EditorLayer::consume_simulation_step() noexcept {
+    if (stepPending_) { stepPending_ = false; return true; }
+    return uiModel_.playing() && !uiModel_.paused();
+}
+
+bool EditorLayer::edit_field(std::string_view id, std::string_view value) {
+    if (!activeWorld_) return false;
+    auto* object = activeWorld_->find_object(layout_.selectedObject);
+    if (!object) return false;
+    PropertyValue parsed;
+    std::function<bool()> apply;
+    if (id == "name") {
+        if (value.empty()) return false;
+        apply = [object, value] { object->set_name(std::string(value)); return true; };
+    } else if (id == "active") {
+        if (!parse_property_text(PropertyType::Bool, value, parsed)) return false;
+        apply = [&] { object->set_active(std::get<bool>(parsed)); return true; };
+    } else {
+        const bool enabled = id.substr(0, 8) == "enabled:";
+        const auto colon = id.find(':');
+        if (colon == std::string_view::npos) return false;
+        ComponentId cid{};
+        try { cid = std::stoull(std::string(enabled ? id.substr(8) : id.substr(0, colon))); } catch (...) { return false; }
+        auto* component = activeWorld_->find_component(cid);
+        if (!component || component->try_game_object() != object) return false;
+        if (enabled) {
+            if (!parse_property_text(PropertyType::Bool, value, parsed)) return false;
+            apply = [&, component] { component->set_enabled(std::get<bool>(parsed)); return true; };
+        } else {
+            const auto name = id.substr(colon + 1);
+            for (auto& p : component->properties()) {
+                if (p.name != name || !p.editable()) continue;
+                if (!parse_property_text(p.type, value, parsed)) return false;
+                apply = [setter = p.set, parsed] { return setter(parsed); }; break;
+            }
+        }
+    }
+    if (!apply || !checkpoint(*activeWorld_)) return false;
+    if (!apply()) { undo_.pop_back(); lastStatus_ = "Invalid property value or range"; return false; }
+    document_changed(); lastStatus_ = "Property updated"; return true;
+}
+
 void EditorLayer::dispatch_command(EditorCommand command, std::string_view target, World& world) {
+#if defined(SHINKOU_PLATFORM_WINDOWS)
+    std::string selectedPath;
+    if (nativeWindow_ && target.empty() && (command == EditorCommand::OpenScene || command == EditorCommand::SaveSceneAs)) {
+        wchar_t path[32768]{};
+        const auto initial = (fileSystem_.root()/scenePath_).wstring();
+        std::copy_n(initial.c_str(),std::min(initial.size(),std::size(path)-1),path);
+        OPENFILENAMEW dialog{}; dialog.lStructSize=sizeof(dialog); dialog.hwndOwner=static_cast<HWND>(nativeWindow_);
+        dialog.lpstrFilter=L"Shinkou scene\0*.scene\0All files\0*.*\0"; dialog.lpstrFile=path; dialog.nMaxFile=static_cast<DWORD>(std::size(path));
+        dialog.lpstrDefExt=L"scene"; dialog.Flags=OFN_NOCHANGEDIR|OFN_PATHMUSTEXIST|(command==EditorCommand::OpenScene ? OFN_FILEMUSTEXIST : OFN_OVERWRITEPROMPT);
+        const bool chosen=command==EditorCommand::OpenScene ? GetOpenFileNameW(&dialog)!=0 : GetSaveFileNameW(&dialog)!=0;
+        if (!chosen) return;
+        selectedPath=std::filesystem::path(path).lexically_relative(fileSystem_.root()).generic_string(); target=selectedPath;
+    }
+    if (command==EditorCommand::Quit && sceneDirty_ && nativeWindow_) {
+        const auto answer=MessageBoxW(static_cast<HWND>(nativeWindow_),L"Save scene changes before closing?",L"Shinkou Editor",MB_YESNOCANCEL|MB_ICONQUESTION);
+        if(answer==IDCANCEL) return;
+        if(answer==IDYES) { dispatch_command(EditorCommand::SaveScene,{},world); if(sceneDirty_) return; }
+    }
+#endif
     uiModel_.execute(command);
     switch (command) {
     case EditorCommand::SaveLayout: save_layout(); break;
@@ -778,68 +1046,258 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
             page == "profiler" ? layout_.showProfiler : page == "render-graph" ? layout_.showRenderGraph :
             page == "settings" ? layout_.showSettings : false;
         if (page == "scene") set_panel_visible("viewport", !visible);
-        else set_panel_visible(page, !visible);
+        else set_panel_visible(page == "project" ? "assets" : page, !visible);
+        if (!visible) dockWorkspace_.activate_tab(page == "project" ? "assets" : page == "scene" ? "viewport" : page);
         break;
     }
-    case EditorCommand::CreateEmpty:
     case EditorCommand::Create3DObject:
     case EditorCommand::Create2DObject:
-    case EditorCommand::CreateUiObject: {
-        const char* name = command == EditorCommand::Create3DObject ? "3D Object" :
-            command == EditorCommand::Create2DObject ? "2D Object" :
-            command == EditorCommand::CreateUiObject ? "UI Object" : "GameObject";
+    case EditorCommand::CreateUiObject:
+        lastStatus_ = "This object factory is not registered"; break;
+    case EditorCommand::CreateEmpty: {
+        if (!checkpoint(world)) break;
+        const char* name = "GameObject";
         auto& object = world.create_object(name);
         layout_.selectedObject = object.id();
         uiModel_.select_object(object.id());
+        uiModel_.invalidate();
+        document_changed();
         push_console(std::string("Created ") + name);
         break;
     }
     case EditorCommand::CreateChild: {
+        if (!checkpoint(world)) break;
         auto* parent = world.find_object(layout_.selectedObject);
         auto& object = parent ? parent->create_child("GameObject") : world.create_object("GameObject");
         layout_.selectedObject = object.id();
         uiModel_.select_object(object.id());
+        uiModel_.invalidate();
+        document_changed();
         push_console("Created child GameObject");
         break;
     }
-    case EditorCommand::ProjectSettings: set_panel_visible("settings", true); break;
+    case EditorCommand::ProjectSettings: set_panel_visible("settings", true); dockWorkspace_.activate_tab("settings"); break;
     case EditorCommand::RefreshAssets: assetsDirty_ = true; push_console("Asset browser refresh requested"); break;
     case EditorCommand::SetDarkTheme: set_theme("dark"); break;
     case EditorCommand::SetLightTheme: set_theme("light"); break;
     case EditorCommand::SetHighContrastTheme: set_theme("high-contrast"); break;
-    case EditorCommand::Play: push_console("Play mode requested"); break;
-    case EditorCommand::Pause: push_console("Pause mode requested"); break;
-    case EditorCommand::Step: push_console("Single frame step requested"); break;
-    case EditorCommand::Undo: push_console("Undo requested"); break;
-    case EditorCommand::Redo: push_console("Redo requested"); break;
-    case EditorCommand::NewScene: push_console("New scene requested"); break;
-    case EditorCommand::OpenScene: push_console("Open scene requested"); break;
-    case EditorCommand::SaveScene: push_console("Save scene requested"); break;
-    case EditorCommand::SaveSceneAs: push_console("Save scene as requested"); break;
-    case EditorCommand::FrameSelection: push_console("Frame selection requested"); break;
-    case EditorCommand::AddComponent: push_console("Add Component requested"); break;
-    case EditorCommand::Quit: push_console("Quit requested by editor menu"); break;
+    case EditorCommand::Play: lastStatus_ = uiModel_.playing() ? "Simulation running" : "Simulation stopped"; break;
+    case EditorCommand::Pause: lastStatus_ = uiModel_.paused() ? "Simulation paused" : "Simulation running"; break;
+    case EditorCommand::Step: stepPending_ = true; lastStatus_ = "Advance one simulation frame"; break;
+    case EditorCommand::Undo:
+    case EditorCommand::Redo: {
+        auto& source = command == EditorCommand::Undo ? undo_ : redo_;
+        auto& destination = command == EditorCommand::Undo ? redo_ : undo_;
+        if (source.empty()) { lastStatus_ = "No edit history"; break; }
+        EditorDocument current; std::string error;
+        if (!EditorDocument::capture(world, layout_.selectedObject, current, error) ||
+            !source.back().restore(world, layout_.selectedObject, error)) { lastStatus_ = error; break; }
+        destination.push_back(std::move(current)); source.pop_back();
+        document_changed(true); lastStatus_ = command == EditorCommand::Undo ? "Edit undone" : "Edit redone"; break;
+    }
+    case EditorCommand::NewScene: {
+        if (!checkpoint(world)) break;
+        EditorDocument empty; std::string error;
+        if (empty.restore(world, layout_.selectedObject, error)) { document_changed(); lastStatus_ = "New scene (Undo to restore)"; }
+        else lastStatus_ = error;
+        break;
+    }
+    case EditorCommand::OpenScene: {
+        const std::string path = target.empty() ? scenePath_ : std::string(target);
+        std::string json, error; EditorDocument next;
+        if (!fileSystem_.read_text(path, json, &error) || !EditorDocument::from_json(json, next, error)) { lastStatus_ = "Open failed: " + error; break; }
+        if (!checkpoint(world)) break;
+        if (!next.restore(world, layout_.selectedObject, error)) { undo_.pop_back(); lastStatus_ = "Open failed: " + error; break; }
+        scenePath_ = path; document_changed(); sceneDirty_ = false; lastStatus_ = "Opened " + path; break;
+    }
+    case EditorCommand::SaveScene:
+    case EditorCommand::SaveSceneAs: {
+        const std::string path = target.empty() ? scenePath_ : std::string(target);
+        EditorDocument document; std::string json, error;
+        if (!EditorDocument::capture(world, layout_.selectedObject, document, error) || !document.to_json(json, error) ||
+            !fileSystem_.write_text_atomic(path, json, &error)) { lastStatus_ = "Save failed: " + error; break; }
+        scenePath_ = path; sceneDirty_ = false; assetsDirty_ = true; lastStatus_ = "Saved " + path; break;
+    }
+    case EditorCommand::FrameSelection: {
+        auto* object = world.find_object(layout_.selectedObject);
+        if (!object) { lastStatus_ = "Select an object first"; break; }
+        const auto* transform = object->get_component<components::TransformComponent>();
+        auto pose = transform ? transform->local : math::Transform{};
+        for (auto* parent = object->parent(); parent; parent = parent->parent())
+            if (const auto* t = parent->get_component<components::TransformComponent>()) pose = math::Combine(t->local, pose);
+        const auto center = pose.position;
+        orbitDistance_ = 5.0f;
+        bool framed = false;
+        world.ecs().each<render::CameraComponent, render::TransformComponent>([&](Entity, auto& camera, auto& view) {
+            if (framed || !camera.active || !view.visible) return;
+            framed = true;
+            view.local.position = {center.x, center.y, center.z - 5.0f}; view.local.rotation = math::Quat::Identity();
+        });
+        lastStatus_ = framed ? "Framed " + std::string(object->name()) : "No active scene camera"; break;
+    }
+    case EditorCommand::AddComponent: {
+        auto* object = world.find_object(layout_.selectedObject);
+        if (!object) { lastStatus_ = "Select an object first"; break; }
+        if (target.empty()) { set_panel_visible("inspector", true); lastStatus_ = "Choose a component in Inspector"; break; }
+        if (!checkpoint(world)) break;
+        if (!object->add_component(target)) { undo_.pop_back(); lastStatus_ = "Component is unknown or already attached"; break; }
+        document_changed(); lastStatus_ = "Added " + std::string(target); break;
+    }
+    case EditorCommand::DeleteObject: {
+        auto* object = world.find_object(layout_.selectedObject);
+        if (object && checkpoint(world)) { object->destroy(); layout_.selectedObject = 0; document_changed(); lastStatus_ = "Deleted object (Undo to restore)"; }
+        break;
+    }
+    case EditorCommand::ClearConsole: consoleEntries_.clear(); lastStatus_ = "Console cleared"; break;
+    case EditorCommand::ToggleCompact: layout_.compactControls = !layout_.compactControls; editorUi_.invalidate_layout(); break;
+    case EditorCommand::ToggleDocking: layout_.allowDocking = !layout_.allowDocking; editorUi_.invalidate_layout(); break;
+    case EditorCommand::SetUiScale: {
+        PropertyValue v;
+        if (parse_property_text(PropertyType::Number, target, v)) { layout_.uiScale = std::clamp(static_cast<float>(std::get<double>(v)), 0.5f, 3.0f); editorUi_.invalidate_layout(); }
+        break;
+    }
+    case EditorCommand::Quit: quitRequested_ = true; break;
     default: break;
     }
 }
 
 void EditorLayer::refresh_asset_cache() {
+    request_file_scan();
+}
+
+void EditorLayer::poll_editor_files() {
+    request_file_scan();
+}
+
+void EditorLayer::request_file_scan() {
+    if (fileScanFuture_.valid()) return;
+    const auto generation = fileScanGeneration_;
+    const auto directory = assetDirectory_;
+    auto scanner = fileSystem_;
+    fileScanFuture_ = std::async(std::launch::async,
+        [generation, directory, scanner = std::move(scanner)]() mutable {
+            AsyncFileScan result;
+            result.generation = generation;
+            // A project root without an assets folder stays cheap to open.
+            // Once the user enters a directory, that directory is scanned
+            // recursively so Tree view can represent its real hierarchy.
+            const auto scan = scanner.scan(directory, !directory.empty(), 32768);
+            result.entries = scan.entries;
+            result.changes = scan.changes;
+            result.service = std::move(scanner);
+            return result;
+        });
+}
+
+void EditorLayer::set_asset_directory(std::filesystem::path directory) {
+    directory = directory.lexically_normal();
+    if (directory == ".") directory.clear();
+    bool isDirectory = false;
+    if (!directory.empty() && !fileSystem_.exists(directory, &isDirectory)) {
+        lastStatus_ = "Folder does not exist: " + directory.generic_string();
+        return;
+    }
+    if (!directory.empty() && !isDirectory) {
+        lastStatus_ = "Not a folder: " + directory.generic_string();
+        return;
+    }
+    if (assetDirectory_ == directory) return;
+    assetDirectory_ = std::move(directory);
+    editorUi_.set_asset_directory(assetDirectory_);
+    ++fileScanGeneration_;
+    assetsDirty_ = true;
+    lastStatus_ = assetDirectory_.empty() ? "Opened project root" :
+        "Opened " + assetDirectory_.generic_string();
+}
+
+void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path, std::string value) {
+    std::string error;
+    switch (action) {
+    case EditorAssetAction::Open:
+        selectedAsset_ = path;
+        if (std::filesystem::path(path).extension() == ".scene" && activeWorld_) dispatch_command(EditorCommand::OpenScene, path, *activeWorld_);
+        else { lastStatus_ = "Selected " + path + " (no importer registered)"; push_console(lastStatus_); }
+        return;
+    case EditorAssetAction::Navigate:
+        set_asset_directory(std::filesystem::path(path));
+        return;
+    case EditorAssetAction::Refresh:
+        ++fileScanGeneration_;
+        assetsDirty_ = true;
+        lastStatus_ = "Refreshing resources...";
+        return;
+    case EditorAssetAction::Rename: {
+        const std::filesystem::path newName(value);
+        if (value.empty() || newName.filename() != newName || value == "." || value == "..") {
+            lastStatus_ = "Invalid resource name";
+            return;
+        }
+        const auto target = std::filesystem::path(path).parent_path() / newName;
+        if (!fileSystem_.rename(path, target, &error)) {
+            lastStatus_ = "Rename failed: " + error;
+            push_console(lastStatus_);
+            return;
+        }
+        if (selectedAsset_ == path) { selectedAsset_ = target.generic_string(); editorUi_.select_asset(selectedAsset_); }
+        ++fileScanGeneration_;
+        assetsDirty_ = true;
+        lastStatus_ = "Renamed resource to " + newName.generic_string();
+        break;
+    }
+    case EditorAssetAction::NewFolder: {
+        const std::filesystem::path newName(value);
+        if (value.empty() || newName.filename() != newName || value == "." || value == "..") {
+            lastStatus_ = "Invalid folder name";
+            return;
+        }
+        const auto target = std::filesystem::path(path) / newName;
+        if (!fileSystem_.ensure_directory(target, &error)) {
+            lastStatus_ = "Create folder failed: " + error;
+            push_console(lastStatus_);
+            return;
+        }
+        ++fileScanGeneration_;
+        assetsDirty_ = true;
+        lastStatus_ = "Created folder " + newName.generic_string();
+        break;
+    }
+    case EditorAssetAction::Delete:
+        if (!fileSystem_.remove(path, &error)) {
+            lastStatus_ = "Delete failed: " + error;
+            push_console(lastStatus_);
+            return;
+        }
+        if (selectedAsset_ == path) { selectedAsset_.clear(); editorUi_.select_asset({}); }
+        ++fileScanGeneration_;
+        assetsDirty_ = true;
+        lastStatus_ = "Deleted resource " + std::filesystem::path(path).filename().string();
+        break;
+    }
+    push_console(lastStatus_);
+}
+
+void EditorLayer::consume_file_scan() {
+    if (!fileScanFuture_.valid() ||
+        fileScanFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+    auto result = fileScanFuture_.get();
+    if (result.generation != fileScanGeneration_) {
+        assetsDirty_ = true;
+        return;
+    }
+
+    fileSystem_ = std::move(result.service);
+    projectFiles_ = std::move(result.entries);
+    if (!result.changes.empty()) ++projectFilesRevision_;
     assetEntries_.clear();
-    projectFiles_ = fileSystem_.list({}, true, 512);
     for (const auto& entry : projectFiles_) {
         if (assetEntries_.size() >= 256) break;
         assetEntries_.push_back(entry.relativePath.generic_string() + (entry.directory ? "/" : ""));
     }
     assetsDirty_ = false;
-}
 
-void EditorLayer::poll_editor_files() {
-    const auto changes = fileSystem_.poll_changes(true, 8192);
-    if (changes.empty()) return;
     bool styleChanged = false;
-    for (const auto& change : changes) {
+    for (const auto& change : result.changes) {
         if (change.relativePath == std::filesystem::path(layout_.styleFile)) styleChanged = true;
-        if (change.relativePath.extension() != ".tmp") assetsDirty_ = true;
     }
     if (styleChanged && load_style_file()) {
         sync_style_to_layout();
@@ -854,92 +1312,32 @@ void EditorLayer::poll_editor_files() {
 void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, FrameIndex frame) {
     if (!initialized_) return;
     if (uiModel_.selected_object() != layout_.selectedObject) uiModel_.select_object(layout_.selectedObject);
-    uiModel_.sync(world);
+    { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
     mediaPanel_.update(dt);
-    poll_editor_files();
-    if (assetsDirty_) refresh_asset_cache();
+    // Asset enumeration is asynchronous and on-demand. Never recursively
+    // walk the project root from the render/input thread.
+    consume_file_scan();
+    editorFilePollAccumulator_ += std::max(0.0f, dt);
+    if (editorFilePollAccumulator_ >= 1.0f) {
+        editorFilePollAccumulator_ = 0.0f;
+        poll_editor_files();
+    }
+    if (assetsDirty_) request_file_scan();
     layout_.selectedObject = uiModel_.selected_object();
     frameTimes_.push_back(std::max(dt, 0.0f) * 1000.0f);
     if (frameTimes_.size() > 120) frameTimes_.erase(frameTimes_.begin());
-#if defined(SHINKOU_WITH_UIKIT)
-    activeWorld_ = &world;
-    if (uiKitPanels_) {
-        uiKitPanels_->set_viewport(displayWidth_, displayHeight_);
-        uiKitPanels_->rebuild(uiModel_, projectFiles_, renderer, mediaPanel_, layout_, consoleEntries_, lastStatus_, dt);
-        renderer.set_ui_render_list(&uiKitPanels_->render_list());
+    editorUi_.set_display_size(displayWidth_, displayHeight_, effective_editor_ui_scale(displayDpiScale_, layout_.uiScale));
+    editorUi_.set_asset_revision(projectFilesRevision_);
+    editorUi_.build(uiModel_, projectFiles_, renderer, mediaPanel_, layout_, consoleEntries_,
+                    lastStatus_, dockWorkspace_, dt);
+    renderer.set_editor_ui_render_list(&editorUi_.render_list());
+    const auto renderCapabilities = renderer.capabilities();
+    if (!renderCapabilities.supportsNativeUi && !uiPresentationWarningEmitted_) {
+        push_console("Retained editor UI presentation is unavailable for the selected render backend");
+        uiPresentationWarningEmitted_ = true;
     }
-#if defined(SHINKOU_WITH_IMGUI)
-    if (!ImGui::GetCurrentContext()) return;
-    auto& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(displayWidth_, displayHeight_);
-    io.DeltaTime = std::max(dt, 1.0f / 1000.0f);
-#if defined(SHINKOU_PLATFORM_WINDOWS)
-    ImGui_ImplWin32_NewFrame();
-#endif
-    ImGui::NewFrame();
-    if (uiKitPanels_) uiKitPanels_->draw_imgui();
-    ImGui::Render();
-    renderer.set_imgui_draw_data(ImGui::GetDrawData());
-#endif
     (void)frame;
-#elif defined(SHINKOU_WITH_IMGUI)
-    if (!ImGui::GetCurrentContext()) return;
-    auto& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(displayWidth_, displayHeight_);
-    io.DeltaTime = std::max(dt, 1.0f / 1000.0f);
-#if defined(SHINKOU_PLATFORM_WINDOWS)
-    ImGui_ImplWin32_NewFrame();
-#endif
-    ImGui::NewFrame();
-    draw_main_menu(renderer, world);
-#if defined(IMGUI_HAS_DOCK)
-    if (layout_.allowDocking) {
-        const auto* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::SetNextWindowViewport(viewport->ID);
-        constexpr ImGuiWindowFlags dockHostFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
-            ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::Begin("##ShinkouDockHost", nullptr, dockHostFlags);
-        ImGui::PopStyleVar(2);
-        ImGui::DockSpace(ImGui::GetID("ShinkouEditorDockSpace"), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-        ImGui::End();
-    }
-#endif
-    if (layout_.showToolbar) draw_toolbar(renderer, world);
-    if (layout_.showHierarchy) draw_hierarchy(world);
-    if (layout_.showInspector) draw_inspector(world);
-    if (layout_.showViewport) draw_viewport(renderer);
-    if (layout_.showGame) draw_game_view(renderer);
-    if (layout_.showAssets) draw_assets();
-    if (layout_.showConsole) draw_console(renderer);
-    if (layout_.showProfiler) draw_profiler(renderer);
-    if (layout_.showRenderGraph) draw_render_graph(renderer);
-    if (layout_.showSettings) draw_settings();
-    if (layout_.showMedia) draw_media();
-    draw_registered_panels(renderer, world, frame, dt);
-    if (layout_.showStatusBar) draw_status_bar(renderer);
-    panelVisibility_["hierarchy"] = layout_.showHierarchy;
-    panelVisibility_["inspector"] = layout_.showInspector;
-    panelVisibility_["viewport"] = layout_.showViewport;
-    panelVisibility_["game"] = layout_.showGame;
-    panelVisibility_["assets"] = layout_.showAssets;
-    panelVisibility_["console"] = layout_.showConsole;
-    panelVisibility_["profiler"] = layout_.showProfiler;
-    panelVisibility_["render-graph"] = layout_.showRenderGraph;
-    panelVisibility_["settings"] = layout_.showSettings;
-    panelVisibility_["media"] = layout_.showMedia;
-    sync_workspace_visibility();
-    ImGui::Render();
-    renderer.set_imgui_draw_data(ImGui::GetDrawData());
-#else
-    (void)renderer;
-    (void)world;
-    (void)frame;
-#endif
+    return;
 }
 
 #if defined(SHINKOU_WITH_IMGUI)
@@ -1398,11 +1796,11 @@ void EditorLayer::draw_status_bar(const render::Renderer& renderer) {
 }
 
 void EditorLayer::apply_theme() {
+    if (!imguiEnabled_ || !ImGui::GetCurrentContext()) return;
     sync_layout_to_style();
     ui::ImGuiApplyOptions options;
     options.projectRoot = fileSystem_.root();
     options.applyFont = false;
-    options.defaultFontFamily = "Microsoft YaHei";
     const auto result = ui::ImGuiAdapter::apply(themeRegistry_, styleConfig_, options);
     const float requestedScale = result.scale;
     if (std::abs(requestedScale - appliedUiScale_) > 0.001f) {
@@ -1415,13 +1813,12 @@ void EditorLayer::apply_theme() {
         io.Fonts->Clear();
         bool loaded = false;
         std::vector<std::filesystem::path> fontCandidates;
-        if (!styleConfig_.fontPath.empty()) fontCandidates.emplace_back(styleConfig_.fontPath);
-        if (!styleConfig_.fallbackFontPath.empty()) fontCandidates.emplace_back(styleConfig_.fallbackFontPath);
-        fontCandidates.emplace_back(fileSystem_.root() / "Fonts" / "Microsoft YaHei.ttf");
-        fontCandidates.emplace_back("C:/Windows/Fonts/msyh.ttc");
-        fontCandidates.emplace_back("C:/Windows/Fonts/msyh.ttf");
+        const auto resolvedFont = ui::ImGuiAdapter::resolve_font_path(styleConfig_, options);
+        const auto resolvedFallback = ui::ImGuiAdapter::resolve_fallback_font_path(styleConfig_, options);
+        if (!resolvedFont.empty()) fontCandidates.emplace_back(resolvedFont);
+        if (!resolvedFallback.empty() && resolvedFallback != resolvedFont)
+            fontCandidates.emplace_back(resolvedFallback);
         for (auto fontPath : fontCandidates) {
-            if (fontPath.is_relative()) fontPath = fileSystem_.root() / fontPath;
             if (std::filesystem::exists(fontPath)) {
                 loaded = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), styleConfig_.fontSize) != nullptr;
                 if (loaded) break;
@@ -1437,23 +1834,38 @@ void EditorLayer::apply_theme() {
 #endif
 
 void EditorLayer::shutdown() {
+    if (const char* path = std::getenv("SHINKOU_UI_METRICS_PATH")) ui::ui_performance().write_csv(path);
     if (!initialized_) return;
+    if (fileScanFuture_.valid()) fileScanFuture_.wait();
     save_layout();
     uninstall_native_menu();
-#if defined(SHINKOU_WITH_UIKIT)
-    uiKitPanels_.reset();
-#endif
+    editorUi_.shutdown();
 #if defined(SHINKOU_WITH_IMGUI)
+    if (imguiPlatformInitialized_) {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
-    if (nativeWindow_) ImGui_ImplWin32_Shutdown();
+        ImGui_ImplWin32_Shutdown();
 #endif
+        imguiPlatformInitialized_ = false;
+    }
     if (uiContextOwned_ && ImGui::GetCurrentContext()) {
         ImGui::DestroyContext();
         uiContextOwned_ = false;
     }
+    imguiEnabled_ = false;
 #endif
     activeWorld_ = nullptr;
     initialized_ = false;
+}
+
+std::size_t EditorLayer::ui_command_count() const noexcept {
+    return editorUi_.render_list().commands().size();
+}
+
+std::size_t EditorLayer::ui_text_command_count() const noexcept {
+    return static_cast<std::size_t>(std::count_if(editorUi_.render_list().commands().begin(),
+        editorUi_.render_list().commands().end(), [](const ui::UiDrawCommand& command) {
+            return command.type == ui::DrawCommandType::Text;
+        }));
 }
 
 } // namespace shinkou::editor

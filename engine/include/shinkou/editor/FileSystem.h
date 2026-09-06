@@ -25,11 +25,17 @@ struct FileChange {
     FileChangeType type{FileChangeType::Modified};
 };
 
+struct FileScanResult {
+    std::vector<FileEntry> entries;
+    std::vector<FileChange> changes;
+};
+
 // Editor-scoped file access. All paths are relative to the project root and
 // are checked before reading or writing, preventing accidental traversal.
 class FileSystemService final {
     std::filesystem::path root_;
     std::unordered_map<std::string, std::uint64_t> snapshot_;
+    std::string snapshotScope_;
 
     std::filesystem::path resolve(std::filesystem::path relative, bool allowMissing) const;
     static std::uint64_t stamp(const std::filesystem::directory_entry& entry) noexcept;
@@ -47,7 +53,13 @@ public:
     bool write_text_atomic(const std::filesystem::path& relative, std::string_view content,
                            std::string* error = nullptr) const;
     bool ensure_directory(const std::filesystem::path& relative, std::string* error = nullptr) const;
+    bool exists(const std::filesystem::path& relative, bool* directory = nullptr) const noexcept;
+    bool remove(const std::filesystem::path& relative, std::string* error = nullptr) const;
+    bool rename(const std::filesystem::path& from, const std::filesystem::path& to,
+                std::string* error = nullptr) const;
 
+    FileScanResult scan(bool recursive = true, std::size_t maxEntries = 8192);
+    FileScanResult scan(std::filesystem::path relative, bool recursive, std::size_t maxEntries = 8192);
     std::vector<FileChange> poll_changes(bool recursive = true, std::size_t maxEntries = 8192);
 };
 

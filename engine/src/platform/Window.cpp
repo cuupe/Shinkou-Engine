@@ -1,5 +1,8 @@
 #include "shinkou/platform/Window.h"
 
+#include <algorithm>
+#include <cstring>
+
 #if defined(SHINKOU_PLATFORM_WINDOWS)
 #include <windows.h>
 
@@ -19,6 +22,15 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         if (owner) owner->set_client_size(static_cast<std::uint32_t>(LOWORD(lParam)), static_cast<std::uint32_t>(HIWORD(lParam)));
     }
     if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_DPICHANGED) {
+        const auto* rect = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(window,nullptr,rect->left,rect->top,rect->right-rect->left,rect->bottom-rect->top,SWP_NOACTIVATE|SWP_NOZORDER);
+        return 0;
+    }
+    if (message == WM_CLOSE) {
+        auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window,GWLP_USERDATA));
+        if (owner && !owner->request_close()) return 0;
+    }
     if (message == WM_CLOSE || message == WM_DESTROY) {
         PostQuitMessage(0);
         return 0;
@@ -31,6 +43,21 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
 namespace shinkou::platform {
 bool Window::create(const WindowConfig& config) {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
+    // Opt into the native per-monitor coordinate space before creating the
+    // first HWND. Without this, Windows virtualizes GetClientRect/WM_SIZE on
+    // a 125%/150% display and the editor's logical layout, swapchain and
+    // RenderView seam disagree by the DPI factor.
+    using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(HANDLE);
+    if (const auto address = GetProcAddress(GetModuleHandleW(L"user32.dll"),
+                                            "SetProcessDpiAwarenessContext")) {
+        SetProcessDpiAwarenessContextFn setAwareness = nullptr;
+        static_assert(sizeof(setAwareness) == sizeof(address));
+        std::memcpy(&setAwareness, &address, sizeof(setAwareness));
+        if (setAwareness) {
+            // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is -4 on Windows 10.
+            (void)setAwareness(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(-4)));
+        }
+    }
     static const char* className = "ShinkouEngineWindow";
     static bool registered = false;
     if (!registered) {
@@ -57,6 +84,14 @@ bool Window::create(const WindowConfig& config) {
     if (config.visible) {
         ShowWindow(window, SW_SHOW);
         UpdateWindow(window);
+    }
+    RECT client{};
+    if (GetClientRect(window, &client) && client.right > 0 && client.bottom > 0) {
+        // The renderer consumes framebuffer pixels, not the logical outer
+        // window size. Resolve the actual client extent once so the first
+        // editor frame does not immediately recreate the swapchain.
+        width_ = static_cast<std::uint32_t>(client.right - client.left);
+        height_ = static_cast<std::uint32_t>(client.bottom - client.top);
     }
     return true;
 #else
@@ -90,5 +125,22 @@ void Window::destroy() {
     width_ = 0;
     height_ = 0;
     open_ = false;
+}
+
+float Window::dpi_scale() const noexcept {
+#if defined(SHINKOU_PLATFORM_WINDOWS)
+    if (nativeHandle_) {
+        using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+        static const GetDpiForWindowFn getDpi = [] {
+            FARPROC address = GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
+            GetDpiForWindowFn function = nullptr;
+            static_assert(sizeof(function) == sizeof(address));
+            std::memcpy(&function, &address, sizeof(function));
+            return function;
+        }();
+        if (getDpi) return std::max(0.25f, static_cast<float>(getDpi(static_cast<HWND>(nativeHandle_))) / 96.0f);
+    }
+#endif
+    return 1.0f;
 }
 }

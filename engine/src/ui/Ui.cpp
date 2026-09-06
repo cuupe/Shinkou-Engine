@@ -543,6 +543,7 @@ bool UiRuntime::dispatch(UiEvent& event) {
     if (event.type == UiEventType::PointerDown && target != InvalidWidgetId) {
         const Widget* targetWidget = widget(target);
         if (targetWidget && targetWidget->style.focusable) focus(target);
+        else clear_focus();
     }
     if (event.type == UiEventType::PointerUp || event.type == UiEventType::PointerCancel) release_pointer();
     return handled;

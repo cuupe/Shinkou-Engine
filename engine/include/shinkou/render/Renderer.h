@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace shinkou::ui { class UiRenderList; }
+
 namespace shinkou::render {
 class Renderer {
     std::unique_ptr<IRenderBackend> backend_;
@@ -31,10 +33,11 @@ private:
     std::uint32_t nextPersistentResource_{0x40000000u};
     std::uint32_t nextPersistentBindlessTable_{0x40000000u};
     ImDrawData* imguiDrawData_{nullptr};
-#if defined(SHINKOU_WITH_UIKIT)
-    const ::shinkou::uikit::RenderList* uiRenderList_{nullptr};
-#endif
+    const ::shinkou::ui::UiRenderList* editorUiRenderList_{nullptr};
+    bool imguiReady_{false};
     bool initialized_{false};
+    bool editorFrameActive_{false};
+    EditorViewportSeam editorViewport_{};
     std::string lastError_;
     BackendApi api_{BackendApi::Null};
     RenderBackendConfig config_{};
@@ -48,10 +51,20 @@ public:
     bool initialize();
     bool initialize_imgui();
     void shutdown_imgui();
+    bool imgui_ready() const noexcept { return imguiReady_; }
     void set_imgui_draw_data(ImDrawData* drawData) noexcept { imguiDrawData_ = drawData; }
-#if defined(SHINKOU_WITH_UIKIT)
-    void set_ui_render_list(const ::shinkou::uikit::RenderList* renderList) noexcept { uiRenderList_ = renderList; }
-#endif
+    void set_editor_ui_render_list(const ::shinkou::ui::UiRenderList* renderList) noexcept {
+        editorUiRenderList_ = renderList;
+    }
+    // Starts a per-frame editor contract. A RenderView integration must call
+    // set_editor_viewport() after this and before adding scene passes. The
+    // contract is cleared at the next editor frame so stale geometry cannot
+    // accidentally render after a resize or dock-layout change.
+    void begin_editor_frame() noexcept;
+    bool set_editor_viewport(EditorViewportSeam seam);
+    void clear_editor_viewport() noexcept;
+    const EditorViewportSeam& editor_viewport() const noexcept { return editorViewport_; }
+    bool editor_frame_active() const noexcept { return editorFrameActive_; }
     bool recover();
     bool resize(std::uint32_t width, std::uint32_t height);
     void set_config(RenderBackendConfig config);

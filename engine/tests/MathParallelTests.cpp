@@ -41,6 +41,9 @@ int main() {
         ParallelLerp(executor, {input.data(), input.size()}, {output.data(), output.size()}, {lerped.data(), lerped.size()}, 0.5f);
     }
     if (!near(output[123].x, 125.0f) || !near(output[123].y, 4.0f) || !near(lerped[123].z, 0.0f)) return 6;
+    ParallelTransformVectors(executor, Mat4::Identity(), {input.data(), input.size()}, {output.data(), output.size()}, 64);
+    ParallelLerpSimd(executor, {input.data(), input.size()}, {output.data(), output.size()}, {lerped.data(), lerped.size()}, 0.5f, 64);
+    if (!near(output[123].x, input[123].x) || !near(lerped[123].x, input[123].x)) return 61;
 
     const Mat4 simdMatrix = TransformMatrix({{2, -1, 3}, FromAxisAngle({0, 1, 0}, Pi * 0.25f), {2, 1, 0.5f}});
     std::vector<Vec3> simdOutput(count);
@@ -48,6 +51,30 @@ int main() {
     for (std::size_t index : {std::size_t{0}, std::size_t{123}, count - 1}) {
         const Vec3 expected = TransformPoint(simdMatrix, input[index]);
         if (!near(simdOutput[index].x, expected.x) || !near(simdOutput[index].y, expected.y) || !near(simdOutput[index].z, expected.z)) return 7;
+    }
+    std::vector<Vec3> vectorOutput(count), lerpSimdOutput(count);
+    TransformVectorsSimd(simdMatrix, {input.data(), input.size()}, {vectorOutput.data(), vectorOutput.size()});
+    for (std::size_t index = 0; index < count; ++index) lerpSimdOutput[index] = Lerp(input[index], output[index], 0.25f);
+    for (std::size_t index : {std::size_t{0}, std::size_t{123}, count - 1}) {
+        const Vec3 expectedVector = TransformVector(simdMatrix, input[index]);
+        const Vec3 expectedLerp = Lerp(input[index], output[index], 0.25f);
+        if (!near(vectorOutput[index].x, expectedVector.x) || !near(vectorOutput[index].y, expectedVector.y) || !near(vectorOutput[index].z, expectedVector.z) ||
+            !near(lerpSimdOutput[index].x, expectedLerp.x) || !near(lerpSimdOutput[index].y, expectedLerp.y) || !near(lerpSimdOutput[index].z, expectedLerp.z)) return 71;
+    }
+    TransformPointsSimd(simdMatrix, {input.data(), input.size()}, {input.data(), input.size()});
+    for (std::size_t index : {std::size_t{0}, std::size_t{123}, count - 1}) {
+        const Vec3 originalPoint{static_cast<float>(index), 1.0f, -2.0f};
+        const Vec3 expected = TransformPoint(simdMatrix, originalPoint);
+        if (!near(input[index].x, expected.x) || !near(input[index].y, expected.y) || !near(input[index].z, expected.z)) return 72;
+    }
+    std::vector<float> soaX(count), soaY(count), soaZ(count), soaOutX(count), soaOutY(count), soaOutZ(count), soaLerpX(count), soaLerpY(count), soaLerpZ(count);
+    for (std::size_t index = 0; index < count; ++index) { soaX[index] = static_cast<float>(index); soaY[index] = 1.0f; soaZ[index] = -2.0f; }
+    TransformPointsSoaSimd(simdMatrix, {soaX.data(), soaY.data(), soaZ.data(), count}, {soaOutX.data(), soaOutY.data(), soaOutZ.data(), count});
+    ParallelLerpSoa(executor, {soaX.data(), soaY.data(), soaZ.data(), count}, {soaOutX.data(), soaOutY.data(), soaOutZ.data(), count}, {soaLerpX.data(), soaLerpY.data(), soaLerpZ.data(), count}, 0.5f, 64);
+    for (std::size_t index : {std::size_t{0}, std::size_t{123}, count - 1}) {
+        const Vec3 expected = TransformPoint(simdMatrix, {static_cast<float>(index), 1.0f, -2.0f});
+        if (!near(soaOutX[index], expected.x) || !near(soaOutY[index], expected.y) || !near(soaOutZ[index], expected.z) ||
+            !near(soaLerpX[index], (static_cast<float>(index) + expected.x) * 0.5f)) return 73;
     }
 
     const Obb unitBox{Transform{{0, 0, 0}, Quat::Identity(), {1, 1, 1}}, {1, 1, 1}};

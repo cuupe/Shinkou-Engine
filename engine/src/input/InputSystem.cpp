@@ -54,6 +54,7 @@ class ShinkouInputBackend final : public IInputBackend {
         case SHINKOU_INPUT_EVENT_GAMEPAD_BUTTON_DOWN: return InputEventType::GamepadButtonDown;
         case SHINKOU_INPUT_EVENT_GAMEPAD_BUTTON_UP: return InputEventType::GamepadButtonUp;
         case SHINKOU_INPUT_EVENT_GAMEPAD_AXIS_MOTION: return InputEventType::GamepadAxisMotion;
+        case SHINKOU_INPUT_EVENT_FOCUS_LOST: return InputEventType::FocusLost;
         default: return InputEventType::Quit;
         }
     }

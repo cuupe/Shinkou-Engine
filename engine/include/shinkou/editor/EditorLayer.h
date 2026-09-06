@@ -4,16 +4,16 @@
 #include "shinkou/editor/DockLayout.h"
 #include "shinkou/editor/FileSystem.h"
 #include "shinkou/editor/EditorUiModel.h"
+#include "shinkou/editor/EditorUi.h"
+#include "shinkou/editor/EditorDocument.h"
 #include "shinkou/render/Renderer.h"
 #include "shinkou/ui/InputBridge.h"
 #include "shinkou/ui/Components.h"
 #include "shinkou/ui/Media.h"
 #include "shinkou/ui/Style.h"
 #include "shinkou/ui/Theme.h"
-#if defined(SHINKOU_WITH_UIKIT)
-#include "shinkou/editor/UiKitPanelHost.h"
-#endif
 #include <cstdint>
+#include <future>
 #include <functional>
 #include <memory>
 #include <string>
@@ -79,6 +79,13 @@ struct EditorPanel {
 };
 
 class EditorLayer {
+    struct AsyncFileScan {
+        std::uint64_t generation{0};
+        FileSystemService service{};
+        std::vector<FileEntry> entries;
+        std::vector<FileChange> changes;
+    };
+
     EditorUiModel uiModel_;
     EditorLayoutState layout_{};
     std::vector<EditorPanel> panels_;
@@ -90,16 +97,27 @@ class EditorLayer {
     std::string assetFilter_;
     std::string selectedAsset_;
     std::vector<FileEntry> projectFiles_;
+    std::filesystem::path assetDirectory_{};
+    std::string projectRootOverride_{};
+    std::uint64_t projectFilesRevision_{0};
     bool initialized_{false};
     bool uiContextOwned_{false};
+    bool imguiEnabled_{false};
+    bool imguiPlatformInitialized_{false};
+    bool uiPresentationWarningEmitted_{false};
     void* nativeWindow_{nullptr};
     void* nativeMenu_{nullptr};
     bool assetsDirty_{true};
     float displayWidth_{1280.0f};
     float displayHeight_{720.0f};
+    float displayDpiScale_{1.0f};
     float appliedUiScale_{1.0f};
+    std::string renderViewMode_{"Perspective"};
     std::string appliedFontPath_;
     float appliedFontSize_{0.0f};
+    float editorFilePollAccumulator_{0.0f};
+    std::uint64_t fileScanGeneration_{0};
+    std::future<AsyncFileScan> fileScanFuture_{};
     DockWorkspace dockWorkspace_{};
     ui::ThemeRegistry themeRegistry_{};
     ui::UiStyleConfig styleConfig_{};
@@ -108,10 +126,18 @@ class EditorLayer {
     ui::UiRuntime uiRuntime_{};
     ui::InputBridgeStats uiInputStats_{};
     FileSystemService fileSystem_{};
-#if defined(SHINKOU_WITH_UIKIT)
-    std::unique_ptr<UiKitPanelHost> uiKitPanels_;
-#endif
+    EditorUi editorUi_{};
     World* activeWorld_{nullptr};
+    float orbitDistance_{5.0f};
+    void navigate_viewport(ViewportNavigation action, math::Vec2 delta);
+    std::vector<EditorDocument> undo_, redo_;
+    bool sceneDirty_{false};
+    bool stepPending_{false};
+    bool quitRequested_{false};
+    std::string scenePath_{"assets/Scenes/Untitled.scene"};
+    bool checkpoint(World& world);
+    bool edit_field(std::string_view id, std::string_view value);
+    void document_changed(bool preserveRedo = false);
 
     void register_builtin_panels();
     void build_default_workspace();
@@ -119,6 +145,10 @@ class EditorLayer {
     void sync_page_visibility() noexcept;
     void refresh_asset_cache();
     void poll_editor_files();
+    void request_file_scan();
+    void consume_file_scan();
+    void set_asset_directory(std::filesystem::path directory);
+    void handle_asset_action(EditorAssetAction action, std::string path, std::string value);
     void draw_toolbar(render::Renderer& renderer, World& world);
     void draw_main_menu(render::Renderer& renderer, World& world);
     void draw_hierarchy(World& world);
@@ -146,14 +176,32 @@ class EditorLayer {
     void sync_style_to_layout() noexcept;
     void sync_layout_to_style() noexcept;
     void apply_theme();
+    void apply_render_view_mode(World& world, std::string_view mode);
 
 public:
+    void execute_command(EditorCommand command, std::string_view target, World& world) { activeWorld_ = &world; dispatch_command(command, target, world); }
+    bool consume_simulation_step() noexcept;
+    bool quit_requested() const noexcept { return quitRequested_; }
+    const EditorUi& editor_ui() const noexcept { return editorUi_; }
     void set_native_window(void* nativeWindow) noexcept { nativeWindow_ = nativeWindow; }
     void handle_native_menu_command(std::uint32_t command, World& world);
-    bool initialize();
+    bool initialize(bool enableImGui = true);
     void process_input(const input::InputSystem& input, World& world);
+    // Resolve the UE/Slate-style editor layout before scene passes are built.
+    // The renderer uses this seam to constrain world rendering to the viewport.
+    void prepare_frame(render::Renderer& renderer, World& world);
     void draw(render::Renderer& renderer, World& world, Seconds dt, FrameIndex frame);
     void shutdown();
+    std::size_t ui_command_count() const noexcept;
+    std::size_t ui_text_command_count() const noexcept;
+    std::size_t ui_asset_file_count() const noexcept { return projectFiles_.size(); }
+    std::size_t ui_visible_asset_file_count() const noexcept { return editorUi_.visible_asset_count(); }
+    std::string ui_asset_directory() const { return assetDirectory_.generic_string(); }
+    std::string ui_first_asset_path() const {
+        return projectFiles_.empty() ? std::string{} : projectFiles_.front().relativePath.generic_string();
+    }
+    DockRect ui_viewport_rect() const noexcept { return editorUi_.viewport_rect(); }
+    float ui_dpi_scale() const noexcept { return editorUi_.dpi_scale(); }
 
     bool register_panel(EditorPanel panel);
     bool unregister_panel(std::string_view id);
@@ -162,7 +210,9 @@ public:
 
     void set_project_root(std::string path);
     void set_layout_path(std::string path);
-    void set_display_size(float width, float height) noexcept;
+    void set_display_size(float width, float height, float dpiScale = 1.0f) noexcept;
+    void set_asset_view(EditorAssetView view) noexcept { editorUi_.set_asset_view(view); }
+    EditorAssetView asset_view() const noexcept { return editorUi_.asset_view(); }
     bool save_layout();
     bool load_layout();
     void reset_layout();

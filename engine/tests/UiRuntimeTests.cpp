@@ -115,6 +115,12 @@ int main() {
     assert(ui.frame_stats().hitTestCount >= 1);
     assert(ui.frame_stats().dispatchedEventCount >= 3);
 
+    UiEvent focusAway;
+    focusAway.type = UiEventType::PointerDown;
+    focusAway.position = {ui.widget(panel)->rect.x + 1.0f, ui.widget(panel)->rect.y + 1.0f};
+    ui.dispatch(focusAway);
+    assert(ui.focused() == InvalidWidgetId);
+
     assert(ui.destroy_widget(overlayId));
     assert(ui.widget(over) == nullptr);
     assert(ui.widget(overlayId) == nullptr);

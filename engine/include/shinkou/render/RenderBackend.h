@@ -9,7 +9,7 @@
 #include <vector>
 
 struct ImDrawData;
-namespace shinkou::uikit { class RenderList; }
+namespace shinkou::ui { class UiRenderList; }
 
 namespace shinkou::render {
 struct RenderBackendConfig {
@@ -18,6 +18,34 @@ struct RenderBackendConfig {
     std::uint32_t height{720};
     bool vsync{true};
     bool enableValidation{false};
+};
+
+// Editor viewport coordinates are physical client pixels with a top-left
+// origin. This is deliberately independent from render::RenderView: that
+// type owns camera/projection state, while this seam owns where an editor
+// scene is allowed to write in the desktop editor surface.
+struct EditorViewportRect {
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
+
+    bool valid() const noexcept {
+        return x >= 0.0f && y >= 0.0f && width > 0.0f && height > 0.0f;
+    }
+};
+
+struct EditorViewportSeam {
+    EditorViewportRect viewport{};
+    // A zero-sized scissor inherits viewport. Otherwise it must be contained
+    // by viewport and is applied in the same physical client-pixel space.
+    EditorViewportRect scissor{};
+    // An empty color target means the swapchain/backbuffer. A non-empty
+    // target makes the scene pass target identity explicit at the graph seam.
+    ResourceHandle colorTarget{};
+    ResourceHandle depthTarget{};
+    bool enabled{false};
+    bool strictTarget{true};
 };
 
 enum class RenderDeviceState { Uninitialized, Ready, NeedsResize, Lost };
@@ -54,6 +82,16 @@ struct RenderCapabilities {
     BackendApi api{BackendApi::Null};
     bool deviceReady{false};
     RenderDeviceState deviceState{RenderDeviceState::Uninitialized};
+    // Overlay capabilities are explicit because an engine UI is a separate
+    // presentation pass from the scene renderer. The editor must select one
+    // supported path per frame instead of submitting multiple overlays and
+    // hoping a backend consumes them.
+    bool supportsImGui{false};
+    bool supportsNativeUi{false};
+    // This is separate from ordinary set_viewport support. It means the
+    // backend can enforce an editor scene viewport/scissor without allowing
+    // the scene pass to bleed into the shell or UI regions.
+    bool supportsEditorViewportScissor{false};
     bool supportsCompute{false};
     bool supportsBindless{false};
     bool supportsRayTracing{false};
@@ -90,11 +128,15 @@ struct RenderStats {
     std::uint64_t materialBinds{0};
     std::uint64_t descriptorBinds{0};
     std::uint64_t discardedFrames{0};
+    std::uint64_t presentCount{0};
+    std::uint64_t editorViewportPasses{0};
+    std::uint64_t editorViewportRejectedPasses{0};
 };
 
 class IRenderBackend {
 public:
     virtual ~IRenderBackend() = default;
+    virtual void request_ui_capture() {}
     virtual RenderCapabilities capabilities() const noexcept = 0;
     // Optional compatibility surface. Existing backends inherit this safely.
     virtual TextureCapabilities texture_capabilities() const noexcept {
@@ -161,9 +203,16 @@ public:
     virtual bool initialize_imgui() { return false; }
     virtual void shutdown_imgui() {}
     virtual void render_imgui(ImDrawData*) {}
-    // Optional retained UI seam. Backends that provide a native 2D UI path
-    // can consume the same command list without coupling UIKit to a GPU API.
-    virtual void render_ui(const ::shinkou::uikit::RenderList&) {}
+    // Retained editor UI seam. The widget tree and layout are backend-neutral;
+    // the backend owns batching, clipping, text and presentation.
+    virtual void render_editor_ui(const ::shinkou::ui::UiRenderList&) {}
+    // Optional editor scene seam. The default is intentionally unsupported
+    // for backends that have not proved viewport/scissor enforcement and
+    // target binding. Disabled state is always accepted so callers can clear
+    // stale backend state during frame teardown.
+    virtual bool set_editor_viewport(const EditorViewportSeam& seam) {
+        return !seam.enabled;
+    }
     virtual bool begin_queue(RenderQueue) { return true; }
     virtual bool begin_queue(RenderQueue queue, std::uint32_t batchIndex,
                              const std::vector<std::uint32_t>& waitBatches) {

@@ -315,7 +315,7 @@ public:
 
 protected:
     void define_properties(PropertyBuilder& builder) override {
-        builder.add("remaining", &remaining, PropertyFlags::Serialized, 0.0, 3600.0, 0.01);
+        builder.add("remaining", &remaining, PropertyFlags::Serialized, -1.0, 3600.0, 0.01);
         builder.add("destroyWhenExpired", &destroyWhenExpired);
     }
     void on_update(Seconds dt) override;

@@ -18,6 +18,11 @@ int main() {
     shinkou::editor::EditorUiModel model;
     model.sync(world);
     if (model.menus().size() < 6 || model.pages().size() < 8 || model.object_roots().size() != 1) return 1;
+    const auto stableRevision = model.revision();
+    model.sync(world);
+    if (model.revision() != stableRevision) return 5;
+    player.set_name("Renamed externally"); player.set_active(false); model.sync(world);
+    if (model.object_roots().front().name != "Renamed externally" || model.object_roots().front().active) return 6;
 
     model.select_object(camera.id());
     model.sync(world);

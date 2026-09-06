@@ -41,6 +41,11 @@ enum class EditorCommand : std::uint8_t {
     SetHighContrastTheme,
     ProjectSettings,
     Quit,
+    DeleteObject,
+    ClearConsole,
+    SetUiScale,
+    ToggleCompact,
+    ToggleDocking,
 };
 
 struct EditorMenuItemModel {
@@ -75,6 +80,14 @@ struct EditorObjectTreeNode {
     std::vector<EditorObjectTreeNode> children;
 };
 
+struct EditorInspectorField {
+    std::string id;
+    std::string label;
+    std::string value;
+    bool editable{false};
+    bool boolean{false};
+};
+
 class EditorUiModel {
     std::vector<EditorMenuModel> menus_;
     std::vector<EditorPageModel> pages_;
@@ -85,6 +98,14 @@ class EditorUiModel {
     EditorCommand lastCommand_{EditorCommand::None};
     bool playing_{false};
     bool paused_{false};
+    bool treeDirty_{true};
+    std::uint64_t revision_{0};
+    const World* syncedWorld_{nullptr};
+    std::size_t syncedObjectCount_{0};
+    std::uint64_t treeSignature_{0};
+    std::vector<EditorInspectorField> inspectorFields_;
+    std::vector<std::string> componentTypes_;
+    std::string inspectorSignature_;
 
     static EditorObjectTreeNode make_tree_node(const GameObject& object, std::string_view filter,
                                                ObjectId selected);
@@ -96,11 +117,22 @@ public:
     EditorUiModel();
 
     void sync(World& world);
-    void select_object(ObjectId id) noexcept { selectedObject_ = id; }
-    void set_object_filter(std::string filter) { objectFilter_ = std::move(filter); }
+    void invalidate() noexcept { treeDirty_ = true; }
+    void select_object(ObjectId id) noexcept {
+        if (selectedObject_ == id) return;
+        selectedObject_ = id;
+        treeDirty_ = true;
+    }
+    void set_object_filter(std::string filter) {
+        if (objectFilter_ == filter) return;
+        objectFilter_ = std::move(filter);
+        treeDirty_ = true;
+    }
     void set_active_page(std::string pageId);
     void set_page_visible(std::string_view pageId, bool visible) noexcept;
     void execute(EditorCommand command) noexcept;
+    const std::vector<EditorInspectorField>& inspector_fields() const noexcept { return inspectorFields_; }
+    const std::vector<std::string>& component_types() const noexcept { return componentTypes_; }
 
     const std::vector<EditorMenuModel>& menus() const noexcept { return menus_; }
     const std::vector<EditorPageModel>& pages() const noexcept { return pages_; }
@@ -111,6 +143,7 @@ public:
     EditorCommand last_command() const noexcept { return lastCommand_; }
     bool playing() const noexcept { return playing_; }
     bool paused() const noexcept { return paused_; }
+    std::uint64_t revision() const noexcept { return revision_; }
 };
 
 } // namespace editor

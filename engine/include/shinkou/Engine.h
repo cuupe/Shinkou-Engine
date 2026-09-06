@@ -13,6 +13,7 @@
 #include "shinkou/scripting/ScriptHost.h"
 #include <functional>
 #include <cstdint>
+#include <string>
 
 namespace shinkou {
 struct EngineConfig {
@@ -23,6 +24,9 @@ struct EngineConfig {
     network::NetworkConfig network{};
     log::LogConfig logging{};
     bool editor{false};
+    // Set this for editor applications so resource browsing is independent
+    // of the executable's launch directory.
+    std::string editorProjectRoot{};
     double targetFrameRate{60.0};
     Seconds maxDeltaSeconds{0.1f};
 };

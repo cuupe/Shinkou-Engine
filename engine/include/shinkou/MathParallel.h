@@ -103,11 +103,67 @@ inline void ParallelTransformPointsScalar(ParallelExecutor& executor, const Mat4
     executor.for_each(input.size(), [&](std::size_t index) { output[index] = TransformPoint(matrix, input[index]); }, grainSize);
 }
 
+inline void ParallelTransformVectors(ParallelExecutor& executor, const Mat4& matrix,
+                                     ConstArrayView<Vec3> input, ArrayView<Vec3> output,
+                                     std::size_t grainSize = 0) {
+    if (input.size() != output.size()) return;
+    const std::size_t blockCount = input.size() / 4 + (input.size() % 4 != 0 ? 1 : 0);
+    const std::size_t blockGrain = grainSize == 0 ? 0 : std::max<std::size_t>(1, grainSize / 4);
+    executor.for_each(blockCount, [&](std::size_t block) {
+        const std::size_t begin = block * 4;
+        const std::size_t count = std::min<std::size_t>(4, input.size() - begin);
+        TransformVectorsSimd(matrix, {input.data() + begin, count}, {output.data() + begin, count});
+    }, blockGrain);
+}
+
+inline void ParallelTransformPointsSoa(ParallelExecutor& executor, const Mat4& matrix,
+                                      Vec3SoaConstView input, Vec3SoaView output,
+                                      std::size_t grainSize = 0) {
+    if (!input.valid() || !output.valid() || input.count != output.count) return;
+    const std::size_t blockCount = input.count / 8 + (input.count % 8 != 0 ? 1 : 0);
+    const std::size_t blockGrain = grainSize == 0 ? 0 : std::max<std::size_t>(1, grainSize / 8);
+    executor.for_each(blockCount, [&](std::size_t block) {
+        const std::size_t begin = block * 8;
+        const std::size_t count = std::min<std::size_t>(8, input.count - begin);
+        TransformPointsSoaSimd(matrix,
+            {input.x + begin, input.y + begin, input.z + begin, count},
+            {output.x + begin, output.y + begin, output.z + begin, count});
+    }, blockGrain);
+}
+
 inline void ParallelLerp(ParallelExecutor& executor, ConstArrayView<Vec3> a,
                          ConstArrayView<Vec3> b, ArrayView<Vec3> output, float weight,
                          std::size_t grainSize = 0) {
     if (a.size() != b.size() || a.size() != output.size()) return;
     executor.for_each(a.size(), [&](std::size_t index) { output[index] = Lerp(a[index], b[index], weight); }, grainSize);
+}
+
+inline void ParallelLerpSimd(ParallelExecutor& executor, ConstArrayView<Vec3> a,
+                             ConstArrayView<Vec3> b, ArrayView<Vec3> output, float weight,
+                             std::size_t grainSize = 0) {
+    if (a.size() != b.size() || a.size() != output.size()) return;
+    const std::size_t blockCount = a.size() / 4 + (a.size() % 4 != 0 ? 1 : 0);
+    const std::size_t blockGrain = grainSize == 0 ? 0 : std::max<std::size_t>(1, grainSize / 4);
+    executor.for_each(blockCount, [&](std::size_t block) {
+        const std::size_t begin = block * 4;
+        const std::size_t count = std::min<std::size_t>(4, a.size() - begin);
+        LerpSimd({a.data() + begin, count}, {b.data() + begin, count}, {output.data() + begin, count}, weight);
+    }, blockGrain);
+}
+
+inline void ParallelLerpSoa(ParallelExecutor& executor, Vec3SoaConstView a,
+                            Vec3SoaConstView b, Vec3SoaView output, float weight,
+                            std::size_t grainSize = 0) {
+    if (!a.valid() || !b.valid() || !output.valid() || a.count != b.count || a.count != output.count) return;
+    const std::size_t blockCount = a.count / 8 + (a.count % 8 != 0 ? 1 : 0);
+    const std::size_t blockGrain = grainSize == 0 ? 0 : std::max<std::size_t>(1, grainSize / 8);
+    executor.for_each(blockCount, [&](std::size_t block) {
+        const std::size_t begin = block * 8;
+        const std::size_t count = std::min<std::size_t>(8, a.count - begin);
+        LerpSoaSimd({a.x + begin, a.y + begin, a.z + begin, count},
+                    {b.x + begin, b.y + begin, b.z + begin, count},
+                    {output.x + begin, output.y + begin, output.z + begin, count}, weight);
+    }, blockGrain);
 }
 
 }

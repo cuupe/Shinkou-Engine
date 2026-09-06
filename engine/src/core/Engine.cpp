@@ -1,4 +1,6 @@
+#include <cstdlib>
 #include "shinkou/Engine.h"
+#include "shinkou/ui/Performance.h"
 #include "shinkou/physics/SimplePhysicsWorld.h"
 #include <algorithm>
 #include <chrono>
@@ -36,24 +38,50 @@ bool Engine::initialize() {
     windowHeight_ = window_.height();
     if (config_.editor) {
         editor_.set_native_window(window_.native_handle());
-        editor_.set_display_size(static_cast<float>(config_.window.width), static_cast<float>(config_.window.height));
+        window_.set_close_handler([this] {
+            editor_.execute_command(editor::EditorCommand::Quit,{},world_);
+            return editor_.quit_requested();
+        });
+        editor_.set_display_size(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_), window_.dpi_scale());
         window_.set_menu_command_handler([this](std::uint32_t command) {
-            editor_.handle_native_menu_command(command, world_);
+            if (command == 49001 && std::getenv("SHINKOU_UI_CAPTURE_PATH") && renderer_.backend()) renderer_.backend()->request_ui_capture();
+            else editor_.handle_native_menu_command(command, world_);
         });
     }
-    renderer_.set_config({window_.native_handle(), config_.window.width, config_.window.height, true});
+    renderer_.set_config({window_.native_handle(), windowWidth_, windowHeight_, true});
     if (!renderer_.initialize()) {
         SHINKOU_LOG_ERROR("Renderer initialization failed: {}", renderer_.last_error());
         shutdown();
         return false;
     }
+    if (config_.editor && !config_.editorProjectRoot.empty())
+        editor_.set_project_root(config_.editorProjectRoot);
     if (!physics_ || !audio_.initialize() || !input_.initialize() || !scripts_.initialize() ||
-        (config_.editor && !editor_.initialize())) {
+        (config_.editor && !editor_.initialize(false))) {
         SHINKOU_LOG_ERROR("Engine subsystem initialization failed");
         shutdown();
         return false;
     }
-    if (config_.editor) renderer_.initialize_imgui();
+    if (config_.editor) {
+        // Installing the native Windows menu can synchronously or lazily
+        // change the client framebuffer height. Resolve that resize before
+        // callers create scene targets, otherwise the first editor frame can
+        // bind a target/depth pair with stale dimensions.
+        window_.process_events();
+        const auto currentWidth = window_.width();
+        const auto currentHeight = window_.height();
+        if (currentWidth > 0 && currentHeight > 0 &&
+            (currentWidth != windowWidth_ || currentHeight != windowHeight_)) {
+            if (!renderer_.resize(currentWidth, currentHeight)) {
+                SHINKOU_LOG_ERROR("Renderer resize after editor shell setup failed: {}", renderer_.last_error());
+                shutdown();
+                return false;
+            }
+            windowWidth_ = currentWidth;
+            windowHeight_ = currentHeight;
+            editor_.set_display_size(static_cast<float>(currentWidth), static_cast<float>(currentHeight), window_.dpi_scale());
+        }
+    }
     initialized_ = true;
     running_ = true;
     frame_ = 0;
@@ -63,6 +91,7 @@ bool Engine::initialize() {
 
 void Engine::tick(Seconds dt) {
     if (!initialized_ || !running_) return;
+    if (config_.editor) ui::ui_performance().begin_frame();
     lastDeltaSeconds_ = std::clamp(dt, 0.0f, config_.maxDeltaSeconds);
     window_.process_events();
     const auto currentWidth = window_.width();
@@ -70,7 +99,7 @@ void Engine::tick(Seconds dt) {
     if (currentWidth != windowWidth_ || currentHeight != windowHeight_) {
         if (currentWidth > 0 && currentHeight > 0) {
             renderer_.resize(currentWidth, currentHeight);
-            if (config_.editor) editor_.set_display_size(static_cast<float>(currentWidth), static_cast<float>(currentHeight));
+            if (config_.editor) editor_.set_display_size(static_cast<float>(currentWidth), static_cast<float>(currentHeight), window_.dpi_scale());
             windowWidth_ = currentWidth;
             windowHeight_ = currentHeight;
         }
@@ -82,17 +111,26 @@ void Engine::tick(Seconds dt) {
     if (config_.editor) editor_.process_input(input_, world_);
     const bool quitRequested = std::any_of(input_.events().begin(), input_.events().end(),
         [](const input::InputEvent& event) { return event.type == input::InputEventType::Quit; });
-    if (quitRequested || !window_.is_open()) {
+    if (quitRequested || !window_.is_open() || (config_.editor && editor_.quit_requested())) {
         running_ = false;
         return;
     }
-    physics_->step(lastDeltaSeconds_);
-    world_.update(lastDeltaSeconds_);
+    if (!config_.editor || editor_.consume_simulation_step()) {
+        physics_->step(lastDeltaSeconds_);
+        world_.update(lastDeltaSeconds_);
+    }
     audio_.update(lastDeltaSeconds_);
     renderer_.begin_graph();
+    if (config_.editor) {
+        renderer_.begin_editor_frame();
+        // Resolve the editor's dock layout before the scene callback. The
+        // callback therefore renders only into the active LevelViewport seam.
+        editor_.prepare_frame(renderer_, world_);
+    }
     if (renderCallback_) renderCallback_(renderer_, world_, dt, frame_);
     if (config_.editor) editor_.draw(renderer_, world_, lastDeltaSeconds_, frame_);
     renderer_.submit();
+    if (config_.editor) ui::ui_performance().end_frame();
     ++frame_;
 }
 
@@ -130,7 +168,6 @@ void Engine::shutdown() {
     audio_.shutdown();
     input_.shutdown();
     if (config_.editor) {
-        renderer_.shutdown_imgui();
         editor_.shutdown();
     }
     window_.destroy();

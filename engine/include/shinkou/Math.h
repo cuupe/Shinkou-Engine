@@ -10,6 +10,8 @@
 namespace shinkou::math {
 
 constexpr float Pi = 3.14159265358979323846f;
+constexpr float TwoPi = 2.0f * Pi;
+constexpr float HalfPi = 0.5f * Pi;
 constexpr float Epsilon = 1.0e-6f;
 
 inline bool IsFinite(float value) noexcept { return std::isfinite(value) != 0; }
@@ -66,7 +68,9 @@ struct Vec2 {
     Vec2 operator- (Vec2 rhs) const noexcept { return {x - rhs.x, y - rhs.y}; }
     Vec2 operator- () const noexcept { return {-x, -y}; }
     Vec2 operator* (float s) const noexcept { return {x * s, y * s}; }
+    Vec2 operator* (Vec2 rhs) const noexcept { return {x * rhs.x, y * rhs.y}; }
     Vec2 operator/ (float s) const noexcept { return std::abs(s) > Epsilon ? Vec2{x / s, y / s} : Vec2{}; }
+    Vec2 operator/ (Vec2 rhs) const noexcept { return {std::abs(rhs.x) > Epsilon ? x / rhs.x : 0.0f, std::abs(rhs.y) > Epsilon ? y / rhs.y : 0.0f}; }
     Vec2& operator+=(Vec2 rhs) noexcept { x += rhs.x; y += rhs.y; return *this; }
     Vec2& operator-=(Vec2 rhs) noexcept { x -= rhs.x; y -= rhs.y; return *this; }
     Vec2& operator*=(float s) noexcept { x *= s; y *= s; return *this; }
@@ -94,6 +98,9 @@ struct alignas(16) Vec4 {
     Vec4 operator-(Vec4 rhs) const noexcept { return {x - rhs.x, y - rhs.y, z - rhs.z, w - rhs.w}; }
     Vec4 operator-() const noexcept { return {-x, -y, -z, -w}; }
     Vec4 operator*(float scalar) const noexcept { return {x * scalar, y * scalar, z * scalar, w * scalar}; }
+    Vec4 operator*(Vec4 rhs) const noexcept { return {x * rhs.x, y * rhs.y, z * rhs.z, w * rhs.w}; }
+    Vec4 operator/(float scalar) const noexcept { return std::abs(scalar) > Epsilon ? (*this) * (1.0f / scalar) : Vec4{}; }
+    Vec4 operator/(Vec4 rhs) const noexcept { return {std::abs(rhs.x) > Epsilon ? x / rhs.x : 0.0f, std::abs(rhs.y) > Epsilon ? y / rhs.y : 0.0f, std::abs(rhs.z) > Epsilon ? z / rhs.z : 0.0f, std::abs(rhs.w) > Epsilon ? w / rhs.w : 0.0f}; }
     Vec4& operator+=(Vec4 rhs) noexcept { x += rhs.x; y += rhs.y; z += rhs.z; w += rhs.w; return *this; }
     Vec4& operator-=(Vec4 rhs) noexcept { x -= rhs.x; y -= rhs.y; z -= rhs.z; w -= rhs.w; return *this; }
     Vec4& operator*=(float scalar) noexcept { x *= scalar; y *= scalar; z *= scalar; w *= scalar; return *this; }
@@ -122,6 +129,7 @@ struct Vec3 {
     Vec3 operator* (float s) const noexcept { return {x * s, y * s, z * s}; }
     Vec3 operator* (Vec3 rhs) const noexcept { return {x * rhs.x, y * rhs.y, z * rhs.z}; }
     Vec3 operator/ (float s) const noexcept { return std::abs(s) > Epsilon ? Vec3{x / s, y / s, z / s} : Vec3{}; }
+    Vec3 operator/ (Vec3 rhs) const noexcept { return {std::abs(rhs.x) > Epsilon ? x / rhs.x : 0.0f, std::abs(rhs.y) > Epsilon ? y / rhs.y : 0.0f, std::abs(rhs.z) > Epsilon ? z / rhs.z : 0.0f}; }
     Vec3& operator+=(Vec3 rhs) noexcept { x += rhs.x; y += rhs.y; z += rhs.z; return *this; }
     Vec3& operator-=(Vec3 rhs) noexcept { x -= rhs.x; y -= rhs.y; z -= rhs.z; return *this; }
     Vec3& operator*=(float s) noexcept { x *= s; y *= s; z *= s; return *this; }
@@ -166,7 +174,7 @@ inline Quat Normalize(Quat value) noexcept {
 inline Quat Conjugate(Quat value) noexcept { return {-value.x, -value.y, -value.z, value.w}; }
 inline Quat Inverse(Quat value) noexcept {
     const float lengthSquared = LengthSquared(value);
-    return lengthSquared > Epsilon ? Conjugate(value) * (1.0f / lengthSquared) : Quat::Identity();
+    return IsFinite(lengthSquared) && lengthSquared > Epsilon ? Conjugate(value) * (1.0f / lengthSquared) : Quat::Identity();
 }
 inline Quat Multiply(Quat lhs, Quat rhs) noexcept {
     return {lhs.w * rhs.x + lhs.x * rhs.w + lhs.y * rhs.z - lhs.z * rhs.y,
@@ -182,6 +190,7 @@ inline Vec3 Rotate(Quat rotation, Vec3 value) noexcept {
 }
 inline Quat FromAxisAngle(Vec3 axis, float radians) noexcept {
     const Vec3 normalizedAxis = Normalize(axis);
+    if (LengthSquared(normalizedAxis) <= Epsilon || !IsFinite(radians)) return Quat::Identity();
     const float half = radians * 0.5f;
     const float sine = std::sin(half);
     return Normalize(Quat{normalizedAxis.x * sine, normalizedAxis.y * sine, normalizedAxis.z * sine, std::cos(half)});
@@ -293,13 +302,28 @@ inline bool Inverse(const Mat3& value, Mat3& result) noexcept {
 
 inline Mat4 Multiply(const Mat4& lhs, const Mat4& rhs) noexcept {
     Mat4 result{};
-    for (int column = 0; column < 4; ++column)
-        for (int row = 0; row < 4; ++row)
-            for (int index = 0; index < 4; ++index)
-                result(row, column) += lhs(row, index) * rhs(index, column);
+    // Column-major, column-vector convention. Keeping the four values of
+    // each output column explicit removes index arithmetic from this hot path
+    // and gives the optimizer a straightforward register schedule.
+    for (int column = 0; column < 4; ++column) {
+        const float r0 = rhs.m[column * 4 + 0];
+        const float r1 = rhs.m[column * 4 + 1];
+        const float r2 = rhs.m[column * 4 + 2];
+        const float r3 = rhs.m[column * 4 + 3];
+        result.m[column * 4 + 0] = lhs.m[0] * r0 + lhs.m[4] * r1 + lhs.m[8] * r2 + lhs.m[12] * r3;
+        result.m[column * 4 + 1] = lhs.m[1] * r0 + lhs.m[5] * r1 + lhs.m[9] * r2 + lhs.m[13] * r3;
+        result.m[column * 4 + 2] = lhs.m[2] * r0 + lhs.m[6] * r1 + lhs.m[10] * r2 + lhs.m[14] * r3;
+        result.m[column * 4 + 3] = lhs.m[3] * r0 + lhs.m[7] * r1 + lhs.m[11] * r2 + lhs.m[15] * r3;
+    }
     return result;
 }
 inline Mat4 operator*(const Mat4& lhs, const Mat4& rhs) noexcept { return Multiply(lhs, rhs); }
+inline bool IsAffine(const Mat4& value, float tolerance = 1.0e-5f) noexcept {
+    return IsFinite(tolerance) && tolerance >= 0.0f && IsFinite(value.m[3]) && IsFinite(value.m[7]) &&
+           IsFinite(value.m[11]) && IsFinite(value.m[15]) && std::abs(value.m[3]) <= tolerance &&
+           std::abs(value.m[7]) <= tolerance && std::abs(value.m[11]) <= tolerance &&
+           std::abs(value.m[15] - 1.0f) <= tolerance;
+}
 inline Mat4 Transpose(const Mat4& value) noexcept {
     Mat4 result{};
     for (int row = 0; row < 4; ++row) for (int column = 0; column < 4; ++column) result(row, column) = value(column, row);
@@ -344,7 +368,25 @@ inline Vec4 TransformVector4(const Mat4& matrix, Vec4 value) noexcept {
             value.x * matrix.m[2] + value.y * matrix.m[6] + value.z * matrix.m[10] + value.w * matrix.m[14],
             value.x * matrix.m[3] + value.y * matrix.m[7] + value.z * matrix.m[11] + value.w * matrix.m[15]};
 }
+inline bool InverseAffine(const Mat4& value, Mat4& result) noexcept {
+    if (!IsAffine(value)) return false;
+    Mat3 linear{};
+    for (int column = 0; column < 3; ++column)
+        for (int row = 0; row < 3; ++row) linear(row, column) = value(row, column);
+    Mat3 inverseLinear{};
+    if (!Inverse(linear, inverseLinear)) return false;
+    result = Mat4::Identity();
+    for (int column = 0; column < 3; ++column)
+        for (int row = 0; row < 3; ++row) result(row, column) = inverseLinear(row, column);
+    const Vec3 translation{value.m[12], value.m[13], value.m[14]};
+    result.m[12] = -(inverseLinear.m[0] * translation.x + inverseLinear.m[3] * translation.y + inverseLinear.m[6] * translation.z);
+    result.m[13] = -(inverseLinear.m[1] * translation.x + inverseLinear.m[4] * translation.y + inverseLinear.m[7] * translation.z);
+    result.m[14] = -(inverseLinear.m[2] * translation.x + inverseLinear.m[5] * translation.y + inverseLinear.m[8] * translation.z);
+    for (float item : result.m) if (!IsFinite(item)) return false;
+    return true;
+}
 inline bool Inverse(const Mat4& value, Mat4& result) noexcept {
+    if (IsAffine(value) && InverseAffine(value, result)) return true;
     float augmented[4][8]{};
     for (int row = 0; row < 4; ++row) {
         for (int column = 0; column < 4; ++column) {
@@ -368,6 +410,7 @@ inline bool Inverse(const Mat4& value, Mat4& result) noexcept {
     }
     result = {};
     for (int row = 0; row < 4; ++row) for (int column = 0; column < 4; ++column) result(row, column) = augmented[row][column + 4];
+    for (float item : result.m) if (!IsFinite(item)) return false;
     return true;
 }
 inline Mat4 InverseOrIdentity(const Mat4& value) noexcept {
@@ -381,6 +424,7 @@ inline Mat4 Perspective(float verticalFieldOfView, float aspect, float nearPlane
     const float safeAspect = aspect;
     const float safeDepth = farPlane - nearPlane;
     const float tangent = std::tan(verticalFieldOfView * 0.5f);
+    if (!IsFinite(tangent)) return Mat4::Identity();
     const float scaleY = std::abs(tangent) > Epsilon ? 1.0f / tangent : 1.0f;
     result.m[0] = scaleY / safeAspect; result.m[5] = scaleY;
     result.m[10] = farPlane / safeDepth; result.m[11] = 1.0f;
@@ -400,7 +444,12 @@ inline Mat4 LookAt(Vec3 eye, Vec3 target, Vec3 up = {0.0f, 1.0f, 0.0f}) noexcept
     const Vec3 forward = Normalize(target - eye);
     const Vec3 safeForward = LengthSquared(forward) > Epsilon ? forward : Vec3{0.0f, 0.0f, 1.0f};
     Vec3 right = Normalize(Cross(up, safeForward));
-    if (LengthSquared(right) <= Epsilon) right = Normalize(Cross(Vec3{0.0f, 0.0f, 1.0f}, safeForward));
+    if (LengthSquared(right) <= Epsilon) {
+        // Choose a non-parallel fallback instead of always crossing with +Z;
+        // the fixed fallback degenerates for views looking exactly along +/-Z.
+        const Vec3 fallbackUp = std::abs(safeForward.y) < 0.999f ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+        right = Normalize(Cross(fallbackUp, safeForward));
+    }
     const Vec3 correctedUp = Cross(safeForward, right);
     Mat4 result = Mat4::Identity();
     result.m[0] = right.x; result.m[1] = correctedUp.x; result.m[2] = safeForward.x;
@@ -428,6 +477,7 @@ inline Mat4 TransformMatrix(const Transform& transform) noexcept {
 }
 inline bool Decompose(const Mat4& matrix, Transform& result) noexcept {
     for (float value : matrix.m) if (!IsFinite(value)) return false;
+    if (!IsAffine(matrix)) return false;
     result.position = {matrix.m[12], matrix.m[13], matrix.m[14]};
     const Vec3 x{matrix.m[0], matrix.m[1], matrix.m[2]}, y{matrix.m[4], matrix.m[5], matrix.m[6]}, z{matrix.m[8], matrix.m[9], matrix.m[10]};
     result.scale = {Length(x), Length(y), Length(z)};
@@ -436,6 +486,11 @@ inline bool Decompose(const Mat4& matrix, Transform& result) noexcept {
     const Vec3 normalizedX = x / result.scale.x;
     const Vec3 normalizedY = y / result.scale.y;
     const Vec3 normalizedZ = z / result.scale.z;
+    // A TRS decomposition is not defined for a matrix with shear. Reject it
+    // rather than returning a plausible-looking but incorrect quaternion.
+    if (std::abs(Dot(normalizedX, normalizedY)) > 1.0e-3f ||
+        std::abs(Dot(normalizedX, normalizedZ)) > 1.0e-3f ||
+        std::abs(Dot(normalizedY, normalizedZ)) > 1.0e-3f) return false;
     if (Dot(Cross(normalizedX, normalizedY), normalizedZ) < 0.0f) {
         if (result.scale.x >= result.scale.y && result.scale.x >= result.scale.z) result.scale.x = -result.scale.x;
         else if (result.scale.y >= result.scale.z) result.scale.y = -result.scale.y;

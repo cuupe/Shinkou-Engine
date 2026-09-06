@@ -1,15 +1,47 @@
 #include "shinkou/render/Renderer.h"
-#if defined(SHINKOU_WITH_UIKIT)
-#include "shinkou/uikit/Render.h"
-#endif
+#include "shinkou/ui/Render.h"
 #include "shinkou/render/ShaderCompiler.h"
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <unordered_set>
 #include <limits>
 
 namespace shinkou::render {
 namespace {
+bool is_color_attachment_usage(ResourceUsage usage) {
+    return usage >= ResourceUsage::ColorAttachment0 && usage <= ResourceUsage::ColorAttachment7;
+}
+
+bool graph_has_color_writes(const RenderGraph& graph) {
+    return std::any_of(graph.passes().begin(), graph.passes().end(), [](const RenderGraph::Pass& pass) {
+        return std::any_of(pass.accesses.begin(), pass.accesses.end(), [](const ResourceAccess& access) {
+            return is_color_attachment_usage(access.usage);
+        });
+    });
+}
+
+std::size_t graph_present_access_count(const RenderGraph& graph) {
+    std::size_t count = 0;
+    for (const auto& pass : graph.passes()) {
+        count += static_cast<std::size_t>(std::count_if(pass.accesses.begin(), pass.accesses.end(),
+            [](const ResourceAccess& access) { return access.usage == ResourceUsage::Present; }));
+    }
+    return count;
+}
+
+bool finite_rect(const EditorViewportRect& rect) {
+    return std::isfinite(rect.x) && std::isfinite(rect.y) &&
+        std::isfinite(rect.width) && std::isfinite(rect.height) && rect.valid();
+}
+
+bool rect_inside(const EditorViewportRect& child, const EditorViewportRect& parent) {
+    constexpr float epsilon = 0.01f;
+    return child.x + epsilon >= parent.x && child.y + epsilon >= parent.y &&
+        child.x + child.width <= parent.x + parent.width + epsilon &&
+        child.y + child.height <= parent.y + parent.height + epsilon;
+}
+
 std::string pipeline_cache_key(const PipelineDesc& description) {
     std::string key;
     key += std::to_string(description.vertexShader);
@@ -425,6 +457,7 @@ bool Renderer::restore_persistent_state(IRenderBackend& backend) {
 
 Renderer::~Renderer() {
     if (!backend_) return;
+    if (imguiReady_) backend_->shutdown_imgui();
     while (!persistentResources_.empty()) {
         backend_->destroy_resource(persistentResources_.back().handle);
         persistentResources_.pop_back();
@@ -434,6 +467,76 @@ Renderer::~Renderer() {
 void Renderer::begin_graph() {
     graph_.reset();
     if (backend_ && initialized_) backend_->begin_upload_batch();
+}
+
+void Renderer::begin_editor_frame() noexcept {
+    editorFrameActive_ = true;
+    editorViewport_ = {};
+    if (backend_ && initialized_) backend_->set_editor_viewport(editorViewport_);
+}
+
+bool Renderer::set_editor_viewport(EditorViewportSeam seam) {
+    if (!seam.enabled) {
+        clear_editor_viewport();
+        return true;
+    }
+    if (!finite_rect(seam.viewport)) {
+        lastError_ = "editor viewport seam requires a finite, non-empty viewport rect";
+        return false;
+    }
+    if (seam.scissor.width <= 0.0f || seam.scissor.height <= 0.0f) seam.scissor = seam.viewport;
+    if (!finite_rect(seam.scissor) || !rect_inside(seam.scissor, seam.viewport)) {
+        lastError_ = "editor viewport seam scissor must be finite and contained by viewport";
+        return false;
+    }
+    if (!seam.colorTarget) {
+        // The editor seam owns presentation, while the scene graph owns the
+        // actual color target. Resolve the first color attachment here so a
+        // caller cannot accidentally reintroduce a full-window present pass.
+        for (const auto& pass : graph_.passes()) {
+            for (const auto& access : pass.accesses) {
+                if (access.usage >= ResourceUsage::ColorAttachment0 &&
+                    access.usage <= ResourceUsage::ColorAttachment7) {
+                    seam.colorTarget = access.resource;
+                    break;
+                }
+            }
+            if (seam.colorTarget) break;
+        }
+    }
+    if (config_.width == 0 || config_.height == 0 ||
+        seam.viewport.x + seam.viewport.width > static_cast<float>(config_.width) + 0.01f ||
+        seam.viewport.y + seam.viewport.height > static_cast<float>(config_.height) + 0.01f) {
+        lastError_ = "editor viewport seam is outside the renderer client dimensions";
+        return false;
+    }
+    if (seam.colorTarget && seam.colorTarget.kind != ResourceKind::Texture2D) {
+        lastError_ = "editor viewport seam color target must be a texture or the swapchain";
+        return false;
+    }
+    if (seam.depthTarget && seam.depthTarget.kind != ResourceKind::DepthStencil) {
+        lastError_ = "editor viewport seam depth target must be a depth-stencil resource";
+        return false;
+    }
+    editorFrameActive_ = true;
+    editorViewport_ = seam;
+    if (!backend_ || !initialized_) return true;
+    const auto capabilities = backend_->capabilities();
+    if (!capabilities.supportsEditorViewportScissor) {
+        lastError_ = "editor viewport seam is not supported by the active backend";
+        return false;
+    }
+    if (!backend_->set_editor_viewport(editorViewport_)) {
+        lastError_ = backend_->last_error();
+        if (lastError_.empty()) lastError_ = "backend rejected the editor viewport seam";
+        return false;
+    }
+    return true;
+}
+
+void Renderer::clear_editor_viewport() noexcept {
+    editorViewport_ = {};
+    if (backend_ && initialized_) backend_->set_editor_viewport(editorViewport_);
 }
 
 bool Renderer::initialize() {
@@ -462,19 +565,26 @@ bool Renderer::initialize() {
 }
 
 bool Renderer::initialize_imgui() {
-    return backend_ && initialized_ && backend_->initialize_imgui();
+    imguiReady_ = backend_ && initialized_ && backend_->initialize_imgui();
+    return imguiReady_;
 }
 
 void Renderer::shutdown_imgui() {
     if (backend_) backend_->shutdown_imgui();
+    imguiReady_ = false;
     imguiDrawData_ = nullptr;
 }
 
 bool Renderer::recover() {
+    const bool restoreImgui = imguiReady_;
     if (backend_) {
+        if (imguiReady_) backend_->shutdown_imgui();
         backend_->wait_idle();
         backend_.reset();
     }
+    imguiReady_ = false;
+    editorFrameActive_ = false;
+    editorViewport_ = {};
     initialized_ = false;
     auto replacement = create_backend(api_);
     if (!replacement || !replacement->initialize(config_) || !replacement->capabilities().deviceReady ||
@@ -485,6 +595,7 @@ bool Renderer::recover() {
     }
     backend_ = std::move(replacement);
     initialized_ = true;
+    if (restoreImgui) imguiReady_ = backend_->initialize_imgui();
     if (!restore_persistent_state(*backend_)) {
         initialized_ = false;
         backend_->wait_idle();
@@ -498,6 +609,7 @@ bool Renderer::recover() {
 void Renderer::set_config(RenderBackendConfig config) {
     const bool dimensionsChanged = config.width != config_.width || config.height != config_.height;
     config_ = config;
+    if (dimensionsChanged) clear_editor_viewport();
     if (initialized_ && dimensionsChanged && backend_ && !backend_->resize(config_.width, config_.height)) {
         lastError_ = backend_->last_error();
         if (lastError_.empty()) lastError_ = "render backend rejected the new dimensions";
@@ -511,6 +623,7 @@ bool Renderer::resize(std::uint32_t width, std::uint32_t height) {
     }
     config_.width = width;
     config_.height = height;
+    clear_editor_viewport();
     if (!initialized_ || !backend_) return true;
     const bool success = backend_->resize(width, height);
     if (!success) lastError_ = backend_->last_error();
@@ -1014,41 +1127,85 @@ const RenderStats Renderer::stats() const noexcept {
 
 void Renderer::submit() {
     lastError_.clear();
-    if (!backend_) return;
+    const auto clear_overlay_submission = [this]() {
+        imguiDrawData_ = nullptr;
+        editorUiRenderList_ = nullptr;
+        if (backend_ && initialized_) backend_->set_editor_viewport({});
+        editorFrameActive_ = false;
+        editorViewport_ = {};
+    };
+    if (!backend_) {
+        clear_overlay_submission();
+        return;
+    }
     const auto device = backend_->capabilities();
     if (!initialized_ || !device.deviceReady || device.deviceState == RenderDeviceState::Lost) {
         lastError_ = backend_->last_error();
         if (lastError_.empty()) lastError_ = "render submission skipped because the device is lost or unavailable";
+        clear_overlay_submission();
         return;
     }
     if (device.deviceState == RenderDeviceState::NeedsResize) {
         lastError_ = backend_->last_error();
         if (lastError_.empty()) lastError_ = "render submission skipped until the swapchain is resized";
+        clear_overlay_submission();
         return;
     }
     if (!backend_->flush_upload_batch()) {
         lastError_ = backend_->last_error();
         if (lastError_.empty()) lastError_ = "render upload batch submission failed";
+        clear_overlay_submission();
         return;
     }
     auto* drawData = imguiDrawData_;
-#if defined(SHINKOU_WITH_UIKIT)
-    auto* uiRenderList = uiRenderList_;
-#endif
-#if defined(SHINKOU_WITH_UIKIT)
-    graph_.execute(*backend_, &lastError_, [drawData, uiRenderList](IRenderBackend& backend) {
+    auto* editorUiRenderList = editorUiRenderList_;
+    const bool hasEditorSceneColorWrites = editorFrameActive_ && graph_has_color_writes(graph_);
+    const auto presentAccessCount = graph_present_access_count(graph_);
+    const auto replace_with_editor_diagnostic = [this](std::string reason) {
+        lastError_ = std::move(reason);
+        graph_.reset();
+        graph_.add_pass("editor_viewport_diagnostic_present", {}, {},
+            [](IRenderBackend&, const RenderPassContext&) {}, RenderQueue::Graphics, true, false);
+    };
+    if (editorFrameActive_ && presentAccessCount > 1) {
+        replace_with_editor_diagnostic("editor submission rejected: more than one Present access was declared");
+    } else if (hasEditorSceneColorWrites && !editorViewport_.enabled) {
+        replace_with_editor_diagnostic(
+            "editor scene submission rejected: no RenderView viewport/scissor seam was declared");
+    } else if (hasEditorSceneColorWrites && editorViewport_.enabled) {
+        if (!device.supportsEditorViewportScissor) {
+            replace_with_editor_diagnostic(
+                "editor scene submission rejected: active backend cannot enforce viewport/scissor seam");
+        } else if (!backend_->set_editor_viewport(editorViewport_)) {
+            auto error = backend_->last_error();
+            replace_with_editor_diagnostic(error.empty()
+                ? "editor scene submission rejected: backend refused viewport/scissor seam"
+                : "editor scene submission rejected: " + error);
+        }
+    }
+    // A UI-only editor frame still needs a terminal graphics batch so the
+    // backend can execute the overlay and present the swapchain. This keeps
+    // the editor independent from sample/game render callbacks while leaving
+    // an authored Present pass untouched when one already exists.
+    bool hasPresentPass = false;
+    for (const auto& pass : graph_.passes()) {
+        if (std::any_of(pass.accesses.begin(), pass.accesses.end(), [](const ResourceAccess& access) {
+                return access.usage == ResourceUsage::Present;
+            })) {
+            hasPresentPass = true;
+            break;
+        }
+    }
+    const bool hasUiSubmission = drawData != nullptr || editorUiRenderList != nullptr;
+    if (hasUiSubmission && !hasPresentPass) {
+        graph_.add_pass("ui_overlay_present", {}, {}, [](IRenderBackend&, const RenderPassContext&) {},
+            RenderQueue::Graphics, true, false);
+    }
+    graph_.execute(*backend_, &lastError_, [drawData, editorUiRenderList](IRenderBackend& backend) {
         if (drawData) backend.render_imgui(drawData);
-        if (uiRenderList) backend.render_ui(*uiRenderList);
+        if (editorUiRenderList) backend.render_editor_ui(*editorUiRenderList);
     });
-#else
-    graph_.execute(*backend_, &lastError_, [drawData](IRenderBackend& backend) {
-        if (drawData) backend.render_imgui(drawData);
-    });
-#endif
-    imguiDrawData_ = nullptr;
-#if defined(SHINKOU_WITH_UIKIT)
-    uiRenderList_ = nullptr;
-#endif
+    clear_overlay_submission();
     if (lastError_.empty() && backend_) lastError_ = backend_->last_error();
     if (lastError_.empty() && backend_ && backend_->capabilities().deviceState == RenderDeviceState::Lost) {
         lastError_ = backend_->last_error();

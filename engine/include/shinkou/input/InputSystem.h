@@ -27,7 +27,8 @@ enum class InputEventType {
     GamepadRemoved,
     GamepadButtonDown,
     GamepadButtonUp,
-    GamepadAxisMotion
+    GamepadAxisMotion,
+    FocusLost
 };
 
 struct InputEvent {

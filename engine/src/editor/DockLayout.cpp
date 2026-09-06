@@ -41,6 +41,18 @@ bool has_any_panel(const DockNode& node) {
     return std::any_of(node.children.begin(), node.children.end(), [](const auto& child) { return has_any_panel(child); });
 }
 
+bool has_visible_content(const DockNode& node) {
+    if (node.kind == DockNode::Kind::Leaf) return !node.panelId.empty() && node.visible;
+    if (node.kind == DockNode::Kind::TabStack) {
+        return std::any_of(node.tabs.begin(), node.tabs.end(), [](const auto& tab) { return !tab.id.empty() && tab.visible; });
+    }
+    if (node.kind == DockNode::Kind::Floating)
+        return !node.children.empty() && has_visible_content(node.children.front());
+    return std::any_of(node.children.begin(), node.children.end(), [](const auto& child) {
+        return has_visible_content(child);
+    });
+}
+
 bool has_any_panel(const DockWorkspace& workspace) {
     if (has_any_panel(workspace.root())) return true;
     return std::any_of(workspace.floating().begin(), workspace.floating().end(), [](const auto& node) {
@@ -215,11 +227,26 @@ void normalize_node(DockNode& node) {
     }
 }
 
+DockLayoutOptions normalized_options(const DockLayoutOptions& input) noexcept {
+    DockLayoutOptions options = input;
+    if (!std::isfinite(options.splitterThickness) || options.splitterThickness < 0.0f) options.splitterThickness = 0.0f;
+    if (!std::isfinite(options.splitterHitSlop) || options.splitterHitSlop < 0.0f) options.splitterHitSlop = 0.0f;
+    if (!std::isfinite(options.tabBarHeight) || options.tabBarHeight < 0.0f) options.tabBarHeight = 0.0f;
+    if (!std::isfinite(options.tabWidth) || options.tabWidth < 0.0f) options.tabWidth = 0.0f;
+    if (!std::isfinite(options.minTabWidth) || options.minTabWidth < 0.0f) options.minTabWidth = 0.0f;
+    if (options.minTabWidth > options.tabWidth && options.tabWidth > 0.0f) options.minTabWidth = options.tabWidth;
+    return options;
+}
+
 math::Vec2 min_size_impl(const DockNode& node) noexcept {
-    if (node.kind == DockNode::Kind::Leaf) return node.panelId.empty() ? math::Vec2{} : node.minSize;
+    if (node.kind == DockNode::Kind::Leaf) return node.panelId.empty() || !node.visible ? math::Vec2{} : node.minSize;
     if (node.kind == DockNode::Kind::TabStack) {
         math::Vec2 result{};
-        for (const auto& tab : node.tabs) { result.x = std::max(result.x, tab.minSize.x); result.y = std::max(result.y, tab.minSize.y); }
+        for (const auto& tab : node.tabs) {
+            if (!tab.visible) continue;
+            result.x = std::max(result.x, tab.minSize.x);
+            result.y = std::max(result.y, tab.minSize.y);
+        }
         return result;
     }
     if (node.children.empty()) return {};
@@ -231,39 +258,93 @@ math::Vec2 min_size_impl(const DockNode& node) noexcept {
     return {std::max(first.x, second.x), first.y + second.y};
 }
 
-float layout_ratio(const DockNode& node, math::Vec2 size, float bar) noexcept {
-    if (node.children.size() < 2) return std::clamp(node.ratio, kMinRatio, kMaxRatio);
-    const auto first = min_size_impl(node.children[0]);
-    const auto second = min_size_impl(node.children[1]);
+math::Vec2 layout_min_size(const DockNode& node, const DockLayoutOptions& options) noexcept {
+    if (node.kind != DockNode::Kind::TabStack) return min_size_impl(node);
+    if (node.tabs.empty()) return {};
+    math::Vec2 result{};
+    for (const auto& tab : node.tabs) {
+        if (!tab.visible) continue;
+        result.x = std::max(result.x, tab.minSize.x);
+        result.y = std::max(result.y, tab.minSize.y);
+    }
+    result.y = std::max(result.y, options.tabBarHeight);
+    return result;
+}
+
+struct SplitRatioInfo {
+    float ratio{0.5f};
+    float minRatio{kMinRatio};
+    float maxRatio{kMaxRatio};
+    bool minimumSizeExceeded{false};
+};
+
+SplitRatioInfo split_ratio(const DockNode& node, math::Vec2 size, const DockLayoutOptions& options) noexcept {
+    SplitRatioInfo result;
+    result.ratio = std::clamp(std::isfinite(node.ratio) ? node.ratio : 0.5f, kMinRatio, kMaxRatio);
+    if (node.children.size() < 2) return result;
+
+    const auto first = layout_min_size(node.children[0], options);
+    const auto second = layout_min_size(node.children[1], options);
     const float total = node.orientation == DockSplitOrientation::Horizontal ? size.x : size.y;
     const float firstMin = node.orientation == DockSplitOrientation::Horizontal ? first.x : first.y;
     const float secondMin = node.orientation == DockSplitOrientation::Horizontal ? second.x : second.y;
-    const float usable = std::max(0.0f, total - std::max(0.0f, bar));
-    if (usable <= 0.0f) return 0.5f;
-    const float low = std::clamp(firstMin / usable, 0.0f, 1.0f);
-    const float high = std::clamp(1.0f - secondMin / usable, 0.0f, 1.0f);
-    if (low > high) return std::clamp((low + high) * 0.5f, 0.0f, 1.0f);
-    return std::clamp(node.ratio, low, high);
+    const float usable = std::max(0.0f, total - options.splitterThickness);
+    if (usable <= 0.0f) {
+        result.minimumSizeExceeded = firstMin > 0.0f || secondMin > 0.0f;
+        result.ratio = 0.5f;
+        return result;
+    }
+
+    const float minimumTotal = firstMin + secondMin;
+    if (minimumTotal > usable) {
+        // The window cannot satisfy both minimums. Keep both panes present,
+        // distribute the compressed space in proportion to their requested
+        // minimums, and expose the condition to callers instead of emitting
+        // a negative rectangle or silently hiding a panel.
+        result.minimumSizeExceeded = true;
+        result.ratio = minimumTotal > 0.0f ? firstMin / minimumTotal : result.ratio;
+        result.ratio = std::clamp(result.ratio, kMinRatio, kMaxRatio);
+        result.minRatio = kMinRatio;
+        result.maxRatio = kMaxRatio;
+        return result;
+    }
+
+    result.minRatio = std::max(kMinRatio, std::clamp(firstMin / usable, 0.0f, 1.0f));
+    result.maxRatio = std::min(kMaxRatio, std::clamp(1.0f - secondMin / usable, 0.0f, 1.0f));
+    if (result.minRatio > result.maxRatio) {
+        result.minimumSizeExceeded = true;
+        result.ratio = std::clamp((result.minRatio + result.maxRatio) * 0.5f, kMinRatio, kMaxRatio);
+    } else {
+        result.ratio = std::clamp(result.ratio, result.minRatio, result.maxRatio);
+    }
+    return result;
 }
 
-void rebalance_node(DockNode& node, math::Vec2 size, float bar) noexcept {
+float layout_ratio(const DockNode& node, math::Vec2 size, float bar) noexcept {
+    DockLayoutOptions options;
+    options.splitterThickness = std::max(0.0f, bar);
+    return split_ratio(node, size, options).ratio;
+}
+
+void rebalance_node(DockNode& node, math::Vec2 size, const DockLayoutOptions& options) noexcept {
     if (node.kind == DockNode::Kind::Floating) {
-        if (!node.children.empty()) rebalance_node(node.children.front(), {node.bounds.width, node.bounds.height}, bar);
+        if (!node.children.empty()) rebalance_node(node.children.front(), {node.bounds.width, node.bounds.height}, options);
         return;
     }
     if (node.kind != DockNode::Kind::Split || node.children.size() < 2) return;
-    node.ratio = layout_ratio(node, size, bar);
+    const auto ratio = split_ratio(node, size, options);
+    node.ratio = ratio.ratio;
     const float total = node.orientation == DockSplitOrientation::Horizontal ? size.x : size.y;
-    const float firstExtent = std::max(0.0f, (total - bar) * node.ratio);
+    const float firstExtent = std::max(0.0f, (total - options.splitterThickness) * node.ratio);
     math::Vec2 firstSize = size;
     math::Vec2 secondSize = size;
     if (node.orientation == DockSplitOrientation::Horizontal) {
-        firstSize.x = firstExtent; secondSize.x = std::max(0.0f, total - bar - firstExtent);
+        firstSize.x = firstExtent; secondSize.x = std::max(0.0f, total - options.splitterThickness - firstExtent);
     } else {
-        firstSize.y = firstExtent; secondSize.y = std::max(0.0f, total - bar - firstExtent);
+        firstSize.y = firstExtent; secondSize.y = std::max(0.0f, total - options.splitterThickness - firstExtent);
     }
-    rebalance_node(node.children[0], firstSize, bar);
-    rebalance_node(node.children[1], secondSize, bar);
+    rebalance_node(node.children[0], firstSize, options);
+    rebalance_node(node.children[1], secondSize, options);
 }
 
 struct JsonValue {
@@ -508,8 +589,193 @@ std::optional<DockSplitHit> hit_node(const DockNode& node, DockRect area, math::
     else { first.height = firstExtent; splitBar = {area.x, area.y + firstExtent, area.width, bar}; second.y = area.y + firstExtent + bar; second.height = std::max(0.0f, area.height - firstExtent - bar); }
     if (first.contains(point)) if (auto hit = hit_node(node.children[0], first, point, bar)) return hit;
     if (second.contains(point)) if (auto hit = hit_node(node.children[1], second, point, bar)) return hit;
-    if (splitBar.contains(point)) return DockSplitHit{&node, splitBar, node.orientation, ratio};
+    if (splitBar.contains(point)) {
+        DockSplitHit hit;
+        hit.node = &node;
+        hit.bar = splitBar;
+        hit.hitZone = splitBar;
+        hit.parentRect = area;
+        hit.orientation = node.orientation;
+        hit.ratio = ratio;
+        return hit;
+    }
     return std::nullopt;
+}
+
+DockRect normalized_rect(DockRect area) noexcept {
+    if (!std::isfinite(area.x)) area.x = 0.0f;
+    if (!std::isfinite(area.y)) area.y = 0.0f;
+    if (!finite_non_negative(area.width)) area.width = 0.0f;
+    if (!finite_non_negative(area.height)) area.height = 0.0f;
+    return area;
+}
+
+DockRect expanded_splitter_zone(DockRect bar, DockRect parent, DockSplitOrientation orientation, float slop) noexcept {
+    slop = std::max(0.0f, slop);
+    if (orientation == DockSplitOrientation::Horizontal) {
+        bar.x = std::max(parent.x, bar.x - slop);
+        bar.width = std::min(parent.x + parent.width - bar.x, bar.width + slop * 2.0f);
+    } else {
+        bar.y = std::max(parent.y, bar.y - slop);
+        bar.height = std::min(parent.y + parent.height - bar.y, bar.height + slop * 2.0f);
+    }
+    return bar;
+}
+
+DockNodePath child_path(const DockNodePath& parent, std::size_t childIndex) {
+    DockNodePath result = parent;
+    result.childIndices.push_back(childIndex);
+    return result;
+}
+
+void layout_node(const DockNode& node, DockRect area, const DockNodePath& path, bool floating,
+                 const DockLayoutOptions& options, DockLayoutResult& result) {
+    area = normalized_rect(area);
+    const auto minimum = layout_min_size(node, options);
+    result.minimumSizeExceeded = result.minimumSizeExceeded || area.width < minimum.x || area.height < minimum.y;
+
+    if (node.kind == DockNode::Kind::Floating) {
+        if (!node.children.empty()) layout_node(node.children.front(), normalized_rect(node.bounds), path, true, options, result);
+        return;
+    }
+    if (node.kind == DockNode::Kind::Leaf) {
+        if (!node.visible || node.panelId.empty()) return;
+        DockPanelLayout panel;
+        panel.panelId = node.panelId;
+        panel.title = node.title;
+        panel.rect = area;
+        panel.nodePath = path;
+        panel.visible = node.visible;
+        panel.active = true;
+        panel.renderable = node.visible;
+        panel.floating = floating;
+        result.panels.push_back(std::move(panel));
+        return;
+    }
+    if (node.kind == DockNode::Kind::TabStack) {
+        std::vector<std::size_t> visibleTabs;
+        visibleTabs.reserve(node.tabs.size());
+        for (std::size_t i = 0; i < node.tabs.size(); ++i) if (node.tabs[i].visible) visibleTabs.push_back(i);
+        if (visibleTabs.empty()) return;
+        const float tabHeight = std::min(options.tabBarHeight, area.height);
+        const DockRect content{area.x, area.y + tabHeight, area.width, std::max(0.0f, area.height - tabHeight)};
+        const std::size_t count = visibleTabs.size();
+        const float widthLimit = count == 0 ? 0.0f : area.width / static_cast<float>(count);
+        const float tabWidth = count == 0 ? 0.0f : std::min(options.tabWidth, widthLimit);
+        const auto activeIt = std::find(visibleTabs.begin(), visibleTabs.end(),
+                                        std::min(node.activeTab, node.tabs.size() - 1));
+        const std::size_t activeOriginal = activeIt == visibleTabs.end() ? visibleTabs.front() : *activeIt;
+        float offset = 0.0f;
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::size_t originalIndex = visibleTabs[i];
+            const auto& tab = node.tabs[originalIndex];
+            DockTabLayout tabLayout;
+            tabLayout.panelId = tab.id;
+            tabLayout.title = tab.title;
+            tabLayout.rect = {area.x + offset, area.y, tabWidth, tabHeight};
+            tabLayout.stackPath = path;
+            tabLayout.tabIndex = originalIndex;
+            tabLayout.visible = tab.visible;
+            tabLayout.active = originalIndex == activeOriginal;
+            tabLayout.closeable = tab.closeable;
+            result.tabs.push_back(std::move(tabLayout));
+
+            DockPanelLayout panel;
+            panel.panelId = tab.id;
+            panel.title = tab.title;
+            panel.rect = content;
+            panel.nodePath = path;
+            panel.tabIndex = originalIndex;
+            panel.visible = tab.visible;
+            panel.active = originalIndex == activeOriginal;
+            panel.renderable = panel.visible && panel.active;
+            panel.floating = floating;
+            result.panels.push_back(std::move(panel));
+            offset += tabWidth;
+        }
+        return;
+    }
+    if (node.children.empty()) return;
+    if (node.children.size() == 1) {
+        layout_node(node.children.front(), area, child_path(path, 0), floating, options, result);
+        return;
+    }
+
+    const bool firstVisible = has_visible_content(node.children[0]);
+    const bool secondVisible = has_visible_content(node.children[1]);
+    if (!firstVisible && !secondVisible) return;
+    if (!firstVisible) {
+        layout_node(node.children[1], area, child_path(path, 1), floating, options, result);
+        return;
+    }
+    if (!secondVisible) {
+        layout_node(node.children[0], area, child_path(path, 0), floating, options, result);
+        return;
+    }
+
+    const auto ratio = split_ratio(node, {area.width, area.height}, options);
+    const float total = node.orientation == DockSplitOrientation::Horizontal ? area.width : area.height;
+    const float firstExtent = std::max(0.0f, (total - options.splitterThickness) * ratio.ratio);
+    DockRect first = area;
+    DockRect second = area;
+    DockRect bar = area;
+    if (node.orientation == DockSplitOrientation::Horizontal) {
+        first.width = firstExtent;
+        bar = {area.x + firstExtent, area.y, std::min(options.splitterThickness, std::max(0.0f, area.width - firstExtent)), area.height};
+        second.x = bar.x + bar.width;
+        second.width = std::max(0.0f, area.x + area.width - second.x);
+    } else {
+        first.height = firstExtent;
+        bar = {area.x, area.y + firstExtent, area.width, std::min(options.splitterThickness, std::max(0.0f, area.height - firstExtent))};
+        second.y = bar.y + bar.height;
+        second.height = std::max(0.0f, area.y + area.height - second.y);
+    }
+
+    DockSplitterLayout splitter;
+    splitter.path = path;
+    splitter.parentRect = area;
+    splitter.bar = bar;
+    splitter.hitZone = expanded_splitter_zone(bar, area, node.orientation, options.splitterHitSlop);
+    splitter.orientation = node.orientation;
+    splitter.ratio = ratio.ratio;
+    splitter.minRatio = ratio.minRatio;
+    splitter.maxRatio = ratio.maxRatio;
+    splitter.minimumSizeExceeded = ratio.minimumSizeExceeded;
+    result.minimumSizeExceeded = result.minimumSizeExceeded || ratio.minimumSizeExceeded;
+    result.splitters.push_back(std::move(splitter));
+
+    layout_node(node.children[0], first, child_path(path, 0), floating, options, result);
+    layout_node(node.children[1], second, child_path(path, 1), floating, options, result);
+}
+
+DockNode* node_at(DockWorkspace& workspace, const DockNodePath& path) noexcept {
+    DockNode* current = nullptr;
+    if (path.floating) {
+        if (path.floatingIndex >= workspace.floating().size()) return nullptr;
+        current = &workspace.floating()[path.floatingIndex];
+    } else {
+        current = &workspace.root();
+    }
+    for (const auto childIndex : path.childIndices) {
+        if (current == nullptr || childIndex >= current->children.size()) return nullptr;
+        current = &current->children[childIndex];
+    }
+    return current;
+}
+
+const DockNode* node_at(const DockWorkspace& workspace, const DockNodePath& path) noexcept {
+    const DockNode* current = nullptr;
+    if (path.floating) {
+        if (path.floatingIndex >= workspace.floating().size()) return nullptr;
+        current = &workspace.floating()[path.floatingIndex];
+    } else {
+        current = &workspace.root();
+    }
+    for (const auto childIndex : path.childIndices) {
+        if (current == nullptr || childIndex >= current->children.size()) return nullptr;
+        current = &current->children[childIndex];
+    }
+    return current;
 }
 
 } // namespace
@@ -530,6 +796,34 @@ DockNode DockNode::floating(DockNode child, DockRect rectangle) {
 bool DockWorkspace::add_floating(DockNode node) {
     if (node.kind != DockNode::Kind::Floating || node.children.size() != 1 || !valid_new_node(*this, node)) return false;
     floating_.push_back(std::move(node)); return true;
+}
+
+bool DockWorkspace::float_panel(std::string_view panelId, DockRect bounds) {
+    if (panelId.empty()) return false;
+    const auto found = find_panel(*this, panelId);
+    if (found.node == nullptr) return false;
+
+    DockPanel panel;
+    if (found.node->kind == DockNode::Kind::Leaf) panel = panel_from_leaf(*found.node);
+    else if (found.node->kind == DockNode::Kind::TabStack && found.tabIndex < found.node->tabs.size()) panel = found.node->tabs[found.tabIndex];
+    else return false;
+
+    if (!remove_tab(panelId)) return false;
+    DockNode floatingNode = DockNode::floating(DockNode::leaf(std::move(panel)), normalized_rect(bounds));
+    if (!add_floating(std::move(floatingNode))) return false;
+    return true;
+}
+
+bool DockWorkspace::move_floating(std::string_view panelId, DockRect bounds) {
+    if (panelId.empty()) return false;
+    const auto normalized = normalized_rect(bounds);
+    for (auto& node : floating_) {
+        if (!panel_id_in(node, panelId)) continue;
+        if (node.kind != DockNode::Kind::Floating || node.children.empty()) return false;
+        node.bounds = normalized;
+        return true;
+    }
+    return false;
 }
 
 bool DockWorkspace::add_tab(std::string_view targetPanelId, DockPanel panel, bool activate) {
@@ -590,7 +884,109 @@ bool DockWorkspace::set_minimum_size(std::string_view panelId, math::Vec2 size) 
 math::Vec2 DockWorkspace::minimum_size() const noexcept { return min_size_impl(root_); }
 math::Vec2 DockWorkspace::minimum_size(const DockNode& node) noexcept { return min_size_impl(node); }
 void DockWorkspace::normalize() { normalize_node(root_); for (auto& node : floating_) normalize_node(node); floating_.erase(std::remove_if(floating_.begin(), floating_.end(), is_empty), floating_.end()); }
-void DockWorkspace::rebalance(math::Vec2 availableSize, float splitterThickness) { if (!finite_non_negative(availableSize.x) || !finite_non_negative(availableSize.y) || !finite_non_negative(splitterThickness)) return; rebalance_node(root_, availableSize, splitterThickness); for (auto& node : floating_) rebalance_node(node, {node.bounds.width, node.bounds.height}, splitterThickness); }
+DockLayoutResult DockWorkspace::layout(DockRect area, const DockLayoutOptions& input) const {
+    const auto options = normalized_options(input);
+    DockLayoutResult result;
+    result.area = normalized_rect(area);
+    result.panels.reserve(32);
+    result.tabs.reserve(16);
+    result.splitters.reserve(16);
+    layout_node(root_, result.area, {}, false, options, result);
+    for (std::size_t i = 0; i < floating_.size(); ++i) {
+        DockNodePath path;
+        path.floating = true;
+        path.floatingIndex = i;
+        layout_node(floating_[i], floating_[i].bounds, path, true, options, result);
+    }
+    return result;
+}
+
+void DockWorkspace::rebalance(math::Vec2 availableSize, float splitterThickness, const DockLayoutOptions& input) {
+    if (!finite_non_negative(availableSize.x) || !finite_non_negative(availableSize.y) || !finite_non_negative(splitterThickness)) return;
+    auto options = normalized_options(input);
+    options.splitterThickness = splitterThickness;
+    rebalance_node(root_, availableSize, options);
+    for (auto& node : floating_) rebalance_node(node, {node.bounds.width, node.bounds.height}, options);
+}
+
+bool DockWorkspace::set_splitter_ratio(const DockNodePath& path, float ratio) {
+    if (!std::isfinite(ratio) || ratio < 0.0f || ratio > 1.0f) return false;
+    DockNode* node = node_at(*this, path);
+    if (node == nullptr || node->kind != DockNode::Kind::Split || node->children.size() < 2) return false;
+    node->ratio = std::clamp(ratio, kMinRatio, kMaxRatio);
+    return true;
+}
+
+bool DockWorkspace::drag_splitter(const DockNodePath& path, float delta, DockRect area, const DockLayoutOptions& input) {
+    if (!std::isfinite(delta)) return false;
+    const auto options = normalized_options(input);
+    const auto snapshot = layout(area, options);
+    const auto it = std::find_if(snapshot.splitters.begin(), snapshot.splitters.end(), [&path](const auto& splitter) {
+        return splitter.path == path;
+    });
+    if (it == snapshot.splitters.end()) return false;
+    const float total = it->orientation == DockSplitOrientation::Horizontal ? it->parentRect.width : it->parentRect.height;
+    const float usable = std::max(0.0f, total - options.splitterThickness);
+    if (usable <= 0.0f) return false;
+    return set_splitter_ratio(path, it->ratio + delta / usable);
+}
+
+bool DockWorkspace::drag_splitter(const DockNodePath& path, math::Vec2 pointer, DockRect area, const DockLayoutOptions& input) {
+    if (!std::isfinite(pointer.x) || !std::isfinite(pointer.y)) return false;
+    const auto options = normalized_options(input);
+    const auto snapshot = layout(area, options);
+    const auto it = std::find_if(snapshot.splitters.begin(), snapshot.splitters.end(), [&path](const auto& splitter) {
+        return splitter.path == path;
+    });
+    if (it == snapshot.splitters.end()) return false;
+    const float total = it->orientation == DockSplitOrientation::Horizontal ? it->parentRect.width : it->parentRect.height;
+    const float origin = it->orientation == DockSplitOrientation::Horizontal ? it->parentRect.x : it->parentRect.y;
+    const float position = it->orientation == DockSplitOrientation::Horizontal ? pointer.x : pointer.y;
+    const float usable = std::max(0.0f, total - options.splitterThickness);
+    if (usable <= 0.0f) return false;
+    return set_splitter_ratio(path, (position - origin) / usable);
+}
+
+bool DockWorkspace::activate_tab(const DockNodePath& stackPath, std::size_t tabIndex) {
+    DockNode* node = node_at(*this, stackPath);
+    if (node == nullptr || node->kind != DockNode::Kind::TabStack || tabIndex >= node->tabs.size()) return false;
+    node->activeTab = tabIndex;
+    return true;
+}
+
+std::optional<DockTabHit> DockWorkspace::hit_test_tab(DockRect area, math::Vec2 point, const DockLayoutOptions& options) const {
+    const auto snapshot = layout(area, options);
+    for (auto it = snapshot.tabs.rbegin(); it != snapshot.tabs.rend(); ++it) {
+        if (!it->rect.contains(point)) continue;
+        DockTabHit hit;
+        hit.stackPath = it->stackPath;
+        hit.panelId = it->panelId;
+        hit.tabRect = it->rect;
+        hit.tabIndex = it->tabIndex;
+        return hit;
+    }
+    return std::nullopt;
+}
+
+std::optional<DockSplitHit> DockWorkspace::hit_test_splitter(DockRect area, math::Vec2 point, const DockLayoutOptions& options) const {
+    const auto snapshot = layout(area, options);
+    for (auto it = snapshot.splitters.rbegin(); it != snapshot.splitters.rend(); ++it) {
+        if (!it->hitZone.contains(point)) continue;
+        DockSplitHit hit;
+        hit.node = node_at(*this, it->path);
+        hit.path = it->path;
+        hit.bar = it->bar;
+        hit.hitZone = it->hitZone;
+        hit.parentRect = it->parentRect;
+        hit.orientation = it->orientation;
+        hit.ratio = it->ratio;
+        hit.minRatio = it->minRatio;
+        hit.maxRatio = it->maxRatio;
+        hit.minimumSizeExceeded = it->minimumSizeExceeded;
+        return hit;
+    }
+    return std::nullopt;
+}
 
 std::optional<DockSplitHit> DockWorkspace::hit_test_split_bar(DockRect area, math::Vec2 point, float splitterThickness) const noexcept {
     if (!finite_non_negative(area.width) || !finite_non_negative(area.height) || !finite_non_negative(splitterThickness)) return std::nullopt;
