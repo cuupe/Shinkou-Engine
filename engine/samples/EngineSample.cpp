@@ -259,7 +259,22 @@ int main(int argc, char** argv) {
     shinkou::render::ForwardRenderer forwardRenderer;
     const shinkou::render::MaterialDesc presentDescription{"present_material", pipeline,
         {{"color", color, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false};
-    engine.set_render_callback([&, color, colorDesc, depth, depthDesc, presentMaterial, presentDescription](
+    shinkou::render::SceneFrameData editorPresentFrame;
+    editorPresentFrame.cameraPositionAndFlags[3] = 2.0f;
+    std::vector<std::uint8_t> editorPresentSceneBytes(sizeof(editorPresentFrame));
+    std::memcpy(editorPresentSceneBytes.data(), &editorPresentFrame, editorPresentSceneBytes.size());
+    const shinkou::render::BufferDesc editorPresentSceneDescription{
+        sizeof(editorPresentFrame), sizeof(float) * 4, false, false, editorPresentSceneBytes};
+    const auto editorPresentScene = engine.renderer().create_buffer(editorPresentSceneDescription);
+    shinkou::render::ObjectFrameData editorPresentObjectFrame;
+    std::vector<std::uint8_t> editorPresentObjectBytes(sizeof(editorPresentObjectFrame));
+    std::memcpy(editorPresentObjectBytes.data(), &editorPresentObjectFrame, editorPresentObjectBytes.size());
+    const shinkou::render::BufferDesc editorPresentObjectDescription{
+        sizeof(editorPresentObjectFrame), sizeof(float) * 4, false, false, editorPresentObjectBytes};
+    const auto editorPresentObject = engine.renderer().create_buffer(editorPresentObjectDescription);
+    engine.set_render_callback([&, color, colorDesc, depth, depthDesc, presentMaterial, presentDescription,
+                                editorPresentScene, editorPresentSceneDescription,
+                                editorPresentObject, editorPresentObjectDescription](
         shinkou::render::Renderer& renderer, shinkou::World& world, shinkou::Seconds, shinkou::FrameIndex) {
         if (editorRequested) {
             // Editor mode still renders the world, but the Renderer will apply
@@ -276,13 +291,24 @@ int main(int argc, char** argv) {
             renderScene.extract(world, renderer,
                 sceneAspect);
             forwardRenderer.build(renderer, renderScene, color, colorDesc, depth, depthDesc);
-            // Keep the scene chain live without pretending that the
-            // offscreen scene color is the swapchain. The pass is a
-            // side-effect lifetime marker; the editor overlay pass owns
-            // actual window submission.
-            renderer.graph().add_pass("editor_viewport_lifetime",
-                {{color, shinkou::render::ResourceUsage::ShaderRead}},
-                [color](auto&, const auto&) { (void)color; });
+            auto& graph = renderer.graph();
+            graph.import_resource(presentMaterial, presentDescription);
+            graph.import_resource(editorPresentScene, editorPresentSceneDescription);
+            graph.import_resource(editorPresentObject, editorPresentObjectDescription);
+            graph.add_pass("editor_scene_present", {
+                {color, shinkou::render::ResourceUsage::ShaderRead},
+                {presentMaterial, shinkou::render::ResourceUsage::ShaderRead},
+                {editorPresentScene, shinkou::render::ResourceUsage::UniformBuffer},
+                {editorPresentObject, shinkou::render::ResourceUsage::UniformBuffer}
+            }, [color, presentMaterial, editorPresentScene, editorPresentObject,
+                width = static_cast<float>(colorDesc.width), height = static_cast<float>(colorDesc.height)](
+                auto& backend, const auto&) {
+                if (!backend.bind_editor_render_target({}, {}, false)) return;
+                backend.bind_material(presentMaterial);
+                backend.bind_uniform_buffer(editorPresentScene, 2, 0);
+                backend.bind_uniform_buffer(editorPresentObject, 3, 0);
+                backend.draw_sprite({color, {0.0f, 0.0f}, {width, height}, 0.0f});
+            }, shinkou::render::RenderQueue::Graphics, true, false);
             return;
         }
         renderScene.extract(world, renderer, static_cast<float>(colorDesc.width) / static_cast<float>(colorDesc.height));
@@ -350,6 +376,8 @@ int main(int argc, char** argv) {
     engine.renderer().destroy_resource(vertexBuffer);
     engine.renderer().destroy_resource(spriteTexture);
     engine.renderer().destroy_resource(spriteSampler);
+    engine.renderer().destroy_resource(editorPresentObject);
+    engine.renderer().destroy_resource(editorPresentScene);
     engine.renderer().destroy_resource(depth);
     engine.renderer().destroy_resource(color);
     const auto capabilities = engine.renderer().capabilities();

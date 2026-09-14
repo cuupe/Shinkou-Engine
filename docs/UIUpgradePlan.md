@@ -787,3 +787,21 @@
 - 单元/集成：保留 WAV provider、fake backend、seek/暂停/停止状态回归，新增播放后 AudioSystem asset pool 增长、停止后 path-only clip 回收断言。
 - 安全/性能：clip cache 只保存整数句柄，不把文件句柄或 decoder 写入 UI/World；加载入口仍受项目根校验，重复播放不重复注册同一路径，所有 unload 发生在系统切换/停止/关闭边界。
 - 下一入口：manifest audio binding 稳定后，再设计可序列化的 AudioSource component 与场景运行时同步；模型方向并行推进 depth/material/texture。
+
+### 第 4.24 子阶段：编辑器场景 color target 到 backbuffer 的宿主呈现
+
+目标：补齐“场景 pass 已提交但窗口仍只显示 UI”的宿主集成链路，让 editor 分支把当前场景 color target 显式呈现到编辑器 backbuffer，再交给 retained UI overlay；该轮只修正呈现顺序和 uniform 隔离，不扩大模型材质范围。
+
+实现范围：
+
+- `EngineSample` 的 editor 分支新增独立 `editor_scene_present` pass：导入场景 color target 和 present material，绑定独立 identity scene/object uniform，并用 `bind_editor_render_target` + fullscreen sprite 将场景结果提交到编辑器 backbuffer。
+- 不复用 forward renderer 的场景相机 uniform，避免 present pass 为了 identity transform 修改后续 UI 或场景数据；原有 `editor_viewport_lifetime` 空 pass 移除，场景 present、model scene、UI overlay 形成可读的顺序链。
+- 保持当前 color target 的尺寸、D3D11 编辑器 viewport seam 和后端能力约束；本轮不引入通用跨后端 present API、深度 attachment、模型材质/纹理或 OS 文件拖放。
+
+审计与验证安排：
+
+- 集成：全量构建必须包含 sample、capture、renderer 和全部测试；直接运行 `shinkou_engine_sample --frames 1 --editor dx11`，检查 native UI、viewport scissor、RenderGraph pass/draw trace。
+- 视觉：至少覆盖 1280×720 dark/tree 与 1600×900 light/tree；capture 必须使用绝对输出路径并报告 `mode=EngineGpuReadback` / `surface-kind=GpuClientSurface`，避免把 child 工作目录下的 GDI fallback 当作 GPU 证据。
+- 安全/性能：present 只读已存在的 renderer-owned target，不访问文件系统、不启动进程；identity uniform 为有界小 buffer，pass 不复制场景数据或创建每帧持久资源。
+- 本轮实际证据：完整构建通过；CTest `52/52` 通过、0 失败、总计 `21.11 sec`；direct sample 输出 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=1 passes=4 draws=3`，其中包含 `editor_scene_present draws=1`；dark capture `1280×720` 与 light capture `1600×900` 均退出 `0`，分别报告 GPU readback、DPI `144`，dark retained trace 为 `commands=184 text=41 assets=11 viewport=225,67,383.333,184`，light 为 `commands=195 text=41 assets=11 viewport=225,67,596.667,304`。
+- 下一入口：把 present seam 提炼成 renderer-owned 的通用 editor scene presentation contract，再补 D3D11 depth/clear policy、模型材质/纹理和跨后端 shader；并继续处理 OS drag/drop adapter 与 AudioSource runtime binding。

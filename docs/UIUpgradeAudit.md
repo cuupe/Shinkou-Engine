@@ -1386,6 +1386,38 @@
 - 目前 manifest ID 由 AssetSystem 的 canonical key 派生，尚未做重命名历史迁移、跨项目引用或依赖图持久化；manifest 本身仍由显式扫描维护。
 - 下一轮进入 model scene instance：以 AssetId 解析模型，创建 renderer-owned preview/scene handle，并保持 World 文档只保存引用描述；音频 clip 绑定继续单独审计生命周期和取消。
 
+## 第 4.24 子阶段：编辑器场景 color target 到 backbuffer 的宿主呈现
+
+### 实现与范围
+
+- `engine/samples/EngineSample.cpp` 在 editor 分支增加 `editor_scene_present` RenderGraph pass。它导入 forward scene color target 与 present material，声明 scene/object uniform 读依赖，调用 `Renderer::bind_editor_render_target`，再用 fullscreen sprite 把 color target 送到编辑器 backbuffer。
+- present pass 使用独立的 identity `SceneFrameData` / `ObjectFrameData` buffer；没有复用或覆盖 forward renderer 的场景相机 buffer，避免改变场景 pass、model scene pass 或 retained UI overlay 的坐标契约。
+- 移除旧的 `editor_viewport_lifetime` 空 side-effect pass，保留顺序为 scene draw → scene present → model/editor viewport work → UI overlay；sample 结束时显式销毁新增的 transient/persistent handles。
+
+### 契约与证据
+
+- direct smoke：`shinkou_engine_sample.exe --frames 1 --editor dx11` 退出 `0`，输出 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=1 passes=4 draws=3`；trace 包含 `editor_scene_present draws=1`，证明 present callback 在 D3D11 native window 路径实际执行。
+- 全量构建：`cmake --build out/build/mingw-debug --config Debug --parallel 4` 通过，sample 与 `shinkou_ui_capture` 均重新链接。
+- 全量测试：`ctest --test-dir out/build/mingw-debug -C Debug --output-on-failure` 为 `52/52` passed、0 failures、总计 `21.11 sec`；其中 editor interaction 仍通过，未改变已有 4.20–4.23 契约。
+- GPU 视觉证据：绝对输出路径下的 dark/tree `1280×720` capture 退出 `0`，报告 `mode=EngineGpuReadback surface-kind=GpuClientSurface client=1280x720 dpi=144 captured=1`，child trace 为 `commands=184 text=41 assets=11 viewport=225,67,383.333,184`；light/tree `1600×900` 也退出 `0`，报告 `mode=EngineGpuReadback surface-kind=GpuClientSurface client=1600x900 dpi=144 captured=1`，trace 为 `commands=195 text=41 assets=11 viewport=225,67,596.667,304`。dark BMP 已通过图像查看工具检查；light capture 的 GPU header/metadata 有效，但查看器拒绝该大尺寸 BMP，因此不把它额外宣称为像素人工检查通过。
+
+### 安全、性能与视觉审计
+
+- pass 只读取 RenderGraph 中已经存在的 color target/material/uniform，不在渲染回调中访问项目路径、AssetSystem、shell 或网络；新增两个 uniform buffer 大小固定且单帧只上传 identity 数据。
+- scene camera uniform 与 present identity uniform 分离，降低“呈现 pass 改写共享 buffer”导致的跨帧/跨 pass 污染风险；pass 顺序由 sample 的明确 build 顺序与 side effect 保证。
+- capture 使用 `--require-gpu` 和绝对 BMP 路径，实际获得 `GpuClientSurface`；此前相对路径导致的 GDI fallback 只保留为失败教训，不作为本轮 GPU 通过证据。
+
+### 失败状态与回滚路径
+
+- 非 D3D11、editor target 不可用、material/buffer 创建失败时沿用既有 backend fallback，不在 sample 中伪造 GPU 通过；场景和 UI 数据不被修改。
+- 若回退本轮，只需移除 `editor_scene_present` 接入和两个 identity uniform 资源；4.22 model scene、4.23 audio binding、World 文档和 AssetId 格式均可独立保留。
+
+### 未解决风险与下一轮
+
+- 当前仍是 sample-level present seam，不是所有宿主都自动获得的通用 renderer contract；模型 scene pass 仍只在 D3D11 使用 POSITION-only 固定材质、无 depth/material/texture/animation。
+- light 大尺寸 BMP 尚未通过人工像素查看器检查；下一轮应将 GPU capture 结果标准化为稳定的 PNG/readback artifact，并加入清屏/非零像素和 viewport 内容 oracle。
+- 下一轮入口：提炼通用 editor scene presentation API，并为模型补 depth target、材质/纹理以及至少一个跨后端实现；音频继续进入可序列化 AudioSource 和运行时生命周期。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：
