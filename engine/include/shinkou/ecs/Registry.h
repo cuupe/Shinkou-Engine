@@ -3,6 +3,7 @@
 #include "shinkou/Types.h"
 #include <entt/entt.hpp>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
@@ -10,12 +11,17 @@
 
 namespace shinkou::ecs {
 class Registry {
+    using DestroyObserver = void (*)(void*, Entity) noexcept;
+
     entt::registry registry_;
     EntityId nextId_{1};
     std::vector<Generation> generations_{1, 0};
     std::vector<EntityId> freeIds_;
     std::vector<entt::entity> entities_{entt::null};
     std::unordered_map<std::uint32_t, Entity> entityLookup_;
+    std::vector<Entity> pendingDestroy_;
+    void* destroyObserverContext_{nullptr};
+    DestroyObserver destroyObserver_{nullptr};
 
     entt::entity native(Entity entity) const noexcept {
         return valid(entity) ? entities_[entity.id] : entt::null;
@@ -29,11 +35,41 @@ class Registry {
 public:
     Entity create();
     void destroy(Entity entity);
+    void destroy_deferred(Entity entity);
+    std::size_t flush_destroyed() noexcept;
     void clear() noexcept;
     bool valid(Entity entity) const noexcept;
+    void set_destroy_observer(void* context, DestroyObserver observer) noexcept {
+        destroyObserverContext_ = context;
+        destroyObserver_ = observer;
+    }
+    void reserve(std::size_t entityCapacity);
+    std::size_t alive_count() const noexcept { return entityLookup_.size(); }
+    std::size_t capacity() const noexcept { return generations_.size() > 0 ? generations_.size() - 1u : 0u; }
+    std::size_t pending_destroy_count() const noexcept { return pendingDestroy_.size(); }
+
+    template<class Fn>
+    void each_pending_destroy(Fn&& fn) const {
+        for (const auto entity : pendingDestroy_)
+            if (valid(entity)) fn(entity);
+    }
 
     entt::registry& native_registry() noexcept { return registry_; }
     const entt::registry& native_registry() const noexcept { return registry_; }
+
+    // Returns the native EnTT view directly.  This is intentionally a thin
+    // zero-allocation facade for ECS hot loops: it avoids converting every
+    // entity through entityLookup_.  Use Registry::each when a generational
+    // shinkou::Entity is required by the callback.
+    template<class... Components>
+    auto view() noexcept {
+        return registry_.view<Components...>();
+    }
+
+    template<class... Components>
+    auto view() const noexcept {
+        return registry_.view<Components...>();
+    }
 
     template<class T>
     bool has(Entity entity) const {

@@ -20,6 +20,11 @@ bool approximately_equal(Size a, Size b) noexcept {
     return approximately_equal(a.width, b.width) && approximately_equal(a.height, b.height);
 }
 
+bool approximately_equal(Rect a, Rect b) noexcept {
+    return approximately_equal(a.x, b.x) && approximately_equal(a.y, b.y) &&
+           approximately_equal(a.width, b.width) && approximately_equal(a.height, b.height);
+}
+
 } // namespace
 
 UiRuntime::UiRuntime() {
@@ -366,7 +371,11 @@ void UiRuntime::arrange(Widget& widget, const Rect& rect) {
                                                  availableWidth, item.widget->style.minSize.width, item.widget->style.maxSize.width);
             const float height = resolve_dimension(item.widget->style.size.height, item.widget->style.preferredSize.height,
                                                    availableHeight, item.widget->style.minSize.height, item.widget->style.maxSize.height);
-            arrange(*item.widget, {content.x + non_negative(margin.left), content.y + non_negative(margin.top), width, height});
+            const Rect childRect{content.x + non_negative(margin.left), content.y + non_negative(margin.top), width, height};
+            if (item.widget->subtreeDirty || !approximately_equal(item.widget->rect, childRect))
+                arrange(*item.widget, childRect);
+            else
+                item.widget->rect = childRect;
         }
         return;
     }
@@ -404,7 +413,14 @@ void UiRuntime::arrange(Widget& widget, const Rect& rect) {
         const Rect childRect = row
             ? Rect{cursor, crossStart, item.main, item.cross}
             : Rect{crossStart, cursor, item.cross, item.main};
-        arrange(*item.widget, childRect);
+        // A dirty parent may need to recompute every child's slot, but a clean
+        // child whose slot did not move can reuse its entire arranged subtree.
+        // If a preceding flex/flow item moved, the geometry comparison forces
+        // the affected sibling back through arrange().
+        if (item.widget->subtreeDirty || !approximately_equal(item.widget->rect, childRect))
+            arrange(*item.widget, childRect);
+        else
+            item.widget->rect = childRect;
         cursor += item.main + item.mainMarginEnd;
     }
 }

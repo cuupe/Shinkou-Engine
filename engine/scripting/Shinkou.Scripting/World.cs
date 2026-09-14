@@ -20,12 +20,16 @@ public sealed class GameObject
     private bool destroyRequested;
     private LifecycleState state = LifecycleState.Constructing;
 
-    internal GameObject(World owner, ObjectId objectId, string objectName, GameObject? objectParent)
+    internal GameObject(World owner, ObjectId objectId, string objectName, GameObject? objectParent,
+        ObjectStorage objectStorage)
     {
         world = owner;
         Id = objectId;
         Name = objectName;
         parent = objectParent;
+        Storage = objectStorage;
+        if (Storage == ObjectStorage.Ecs)
+            EcsEntity = world.Ecs.Create();
     }
 
     public ObjectId Id { get; }
@@ -38,6 +42,7 @@ public sealed class GameObject
     public bool ActiveInHierarchy => activeInHierarchy;
     public bool DestroyRequested => destroyRequested;
     public LifecycleState LifecycleState => state;
+    public ObjectStorage Storage { get; private set; }
     public bool HasEcsEntity => EcsEntity.IsValid;
     public Entity EcsEntity { get; private set; }
     public TransformComponent Transform => GetComponent<TransformComponent>()
@@ -57,7 +62,8 @@ public sealed class GameObject
 
     public void Destroy() => world.DestroyObject(this);
 
-    public GameObject CreateChild(string name = "") => world.CreateObject(name, this);
+    public GameObject CreateChild(string name = "", ObjectStorage storage = ObjectStorage.Regular) =>
+        world.CreateObject(name, this, storage);
 
     public void SetParent(GameObject? nextParent)
     {
@@ -125,6 +131,7 @@ public sealed class GameObject
             return default;
         if (!EcsEntity.IsValid)
             EcsEntity = world.Ecs.Create();
+        Storage = ObjectStorage.Ecs;
         return EcsEntity;
     }
 
@@ -134,10 +141,13 @@ public sealed class GameObject
             return;
         world.Ecs.Destroy(EcsEntity);
         EcsEntity = default;
+        Storage = ObjectStorage.Regular;
     }
 
     public T AddEcsComponent<T>(T value) where T : notnull
     {
+        if (value is ScriptComponent script)
+            return (T)(object)AddComponent(script);
         if (!EcsEntity.IsValid)
             throw new InvalidOperationException("Enable ECS on the game object before adding ECS components.");
         return world.Ecs.Add(EcsEntity, value);
@@ -145,11 +155,28 @@ public sealed class GameObject
 
     public T AddEcsComponent<T>() where T : notnull, new() => AddEcsComponent(new T());
 
-    public T? GetEcsComponent<T>() where T : notnull =>
-        EcsEntity.IsValid ? world.Ecs.TryGet<T>(EcsEntity) : default;
+    public T? GetEcsComponent<T>() where T : notnull
+    {
+        if (typeof(ScriptComponent).IsAssignableFrom(typeof(T)))
+            return componentLookup.TryGetValue(typeof(T), out var component) ? (T)(object)component : default;
+        return EcsEntity.IsValid ? world.Ecs.TryGet<T>(EcsEntity) : default;
+    }
 
-    public bool RemoveEcsComponent<T>() where T : notnull =>
-        EcsEntity.IsValid && world.Ecs.Remove<T>(EcsEntity);
+    public bool RemoveEcsComponent<T>() where T : notnull
+    {
+        if (typeof(ScriptComponent).IsAssignableFrom(typeof(T)))
+        {
+            if (!componentLookup.TryGetValue(typeof(T), out var component))
+                return false;
+            if (activeInHierarchy && component.Enabled)
+                component.NotifyActiveState(false);
+            component.Dispose();
+            componentLookup.Remove(typeof(T));
+            components.Remove(component);
+            return true;
+        }
+        return EcsEntity.IsValid && world.Ecs.Remove<T>(EcsEntity);
+    }
 
     internal void Initialize()
     {
@@ -289,11 +316,12 @@ public sealed class World : IDisposable
         scriptAssemblies.Add(assembly);
     }
 
-    public GameObject CreateObject(string name = "", GameObject? parent = null)
+    public GameObject CreateObject(string name = "", GameObject? parent = null,
+        ObjectStorage storage = ObjectStorage.Regular)
     {
         if (parent is not null && parent.World != this)
             throw new InvalidOperationException("The parent belongs to another world.");
-        var gameObject = new GameObject(this, new ObjectId(nextObjectId++), name, parent);
+        var gameObject = new GameObject(this, new ObjectId(nextObjectId++), name, parent, storage);
         objectLookup.Add(gameObject.Id, gameObject);
         if (parent is null) roots.Add(gameObject);
         else parent.AddChild(gameObject);

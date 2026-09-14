@@ -35,6 +35,99 @@ EditorMenuItemModel separator() {
     return result;
 }
 
+bool same_build_state(const EditorBuildUiState& left, const EditorBuildUiState& right) {
+    if (left.profileName != right.profileName || left.selectedProfileId != right.selectedProfileId ||
+        left.profileStatus != right.profileStatus ||
+        left.status != right.status || left.ideStatus != right.ideStatus || left.running != right.running ||
+        left.compileCommandCount != right.compileCommandCount || left.compileCommandsStatus != right.compileCommandsStatus ||
+        left.diagnosticFilter != right.diagnosticFilter ||
+        left.projectStatus != right.projectStatus || left.recommendedProjectFile != right.recommendedProjectFile ||
+        left.clangdStatus != right.clangdStatus ||
+        left.diagnosticTotalCount != right.diagnosticTotalCount ||
+        left.diagnosticErrorCount != right.diagnosticErrorCount ||
+        left.diagnosticWarningCount != right.diagnosticWarningCount ||
+        left.diagnosticNoteCount != right.diagnosticNoteCount ||
+        left.selectedDiagnostic != right.selectedDiagnostic ||
+        left.profileIds != right.profileIds || left.profileFields.size() != right.profileFields.size() ||
+        left.tools.size() != right.tools.size() || left.ides.size() != right.ides.size() ||
+        left.projectFiles.size() != right.projectFiles.size() ||
+        left.diagnostics.size() != right.diagnostics.size() ||
+        left.outputLines != right.outputLines) return false;
+    for (std::size_t index = 0; index < left.profileFields.size(); ++index) {
+        const auto& a = left.profileFields[index];
+        const auto& b = right.profileFields[index];
+        if (a.id != b.id || a.label != b.label || a.value != b.value ||
+            a.editable != b.editable || a.boolean != b.boolean) return false;
+    }
+    for (std::size_t index = 0; index < left.tools.size(); ++index) {
+        const auto& a = left.tools[index];
+        const auto& b = right.tools[index];
+        if (a.name != b.name || a.executable != b.executable || a.available != b.available) return false;
+    }
+    for (std::size_t index = 0; index < left.ides.size(); ++index) {
+        const auto& a = left.ides[index];
+        const auto& b = right.ides[index];
+        if (a.name != b.name || a.executable != b.executable || a.available != b.available) return false;
+    }
+    for (std::size_t index = 0; index < left.projectFiles.size(); ++index) {
+        const auto& a = left.projectFiles[index];
+        const auto& b = right.projectFiles[index];
+        if (a.kind != b.kind || a.path != b.path || a.recommended != b.recommended) return false;
+    }
+    for (std::size_t index = 0; index < left.diagnostics.size(); ++index) {
+        const auto& a = left.diagnostics[index];
+        const auto& b = right.diagnostics[index];
+        if (a.severity != b.severity || a.file != b.file || a.line != b.line || a.column != b.column ||
+            a.code != b.code || a.message != b.message) return false;
+    }
+    return true;
+}
+
+bool same_asset_preview(const EditorAssetPreviewUiState& left, const EditorAssetPreviewUiState& right) {
+    return left.path == right.path && left.kind == right.kind && left.title == right.title &&
+        left.status == right.status && left.loading == right.loading && left.truncated == right.truncated &&
+        left.textLines == right.textLines && left.imageWidth == right.imageWidth &&
+        left.imageHeight == right.imageHeight && left.imageSnapshot == right.imageSnapshot &&
+        left.modelPreview == right.modelPreview && left.modelPreviewScene == right.modelPreviewScene &&
+        left.modelTextureWidth == right.modelTextureWidth &&
+        left.modelTextureHeight == right.modelTextureHeight &&
+        left.modelTextureSnapshot == right.modelTextureSnapshot &&
+        left.modelTextureStatus == right.modelTextureStatus &&
+        left.modelMaterialIndex == right.modelMaterialIndex &&
+        left.modelTextureIndex == right.modelTextureIndex &&
+        left.modelTextureImageIndex == right.modelTextureImageIndex &&
+        left.modelMaterialLabel == right.modelMaterialLabel &&
+        left.modelTextureLabel == right.modelTextureLabel &&
+        left.modelTextureRole == right.modelTextureRole &&
+        left.modelGpuPreviewReady == right.modelGpuPreviewReady &&
+        left.modelGpuMaterialApplied == right.modelGpuMaterialApplied &&
+        left.modelGpuMaterialFactorsApplied == right.modelGpuMaterialFactorsApplied &&
+        left.modelGpuTextureRoleApplied == right.modelGpuTextureRoleApplied &&
+        left.modelGpuBaseColorTextureSampled == right.modelGpuBaseColorTextureSampled &&
+        left.modelGpuNormalTextureSampled == right.modelGpuNormalTextureSampled &&
+        left.modelGpuMetallicRoughnessTextureSampled == right.modelGpuMetallicRoughnessTextureSampled &&
+        left.modelGpuTextureSampled == right.modelGpuTextureSampled &&
+        left.modelGpuOffscreenTargetReady == right.modelGpuOffscreenTargetReady &&
+        left.modelGpuOffscreenCompositeApplied == right.modelGpuOffscreenCompositeApplied &&
+        left.modelGpuPreviewStatus == right.modelGpuPreviewStatus &&
+        left.assetSystemStatus == right.assetSystemStatus &&
+        left.assetSystemFormat == right.assetSystemFormat &&
+        left.assetSystemMetadataFormat == right.assetSystemMetadataFormat &&
+        left.assetSystemMetadataBytes == right.assetSystemMetadataBytes &&
+        left.assetSystemSourceHash == right.assetSystemSourceHash &&
+        left.assetSystemLoading == right.assetSystemLoading &&
+        left.assetSystemReady == right.assetSystemReady;
+}
+
+bool same_media_state(const EditorMediaUiState& left, const EditorMediaUiState& right) {
+    return left.path == right.path && left.kind == right.kind && left.status == right.status &&
+        left.playbackState == right.playbackState && left.currentTime == right.currentTime &&
+        left.duration == right.duration && left.volume == right.volume &&
+        left.available == right.available && left.loop == right.loop &&
+        left.previewLoading == right.previewLoading && left.previewStatus == right.previewStatus &&
+        left.audioPreview == right.audioPreview && left.videoPreview == right.videoPreview;
+}
+
 } // namespace
 
 EditorUiModel::EditorUiModel() {
@@ -52,6 +145,8 @@ void EditorUiModel::build_default_pages() {
         {"console", "Console", "Ctrl+Shift+C", true, false},
         {"profiler", "Profiler", "", false, false},
         {"render-graph", "Render Graph", "", false, false},
+        {"build", "Build", "Ctrl+B", false, false},
+        {"media", "Media Preview", "", false, false},
         {"settings", "Project Settings", "", false, false},
     };
 }
@@ -82,6 +177,21 @@ void EditorUiModel::build_default_menus() {
             item("import-asset", "Import New Asset...", EditorCommand::None),
             item("refresh-assets", "Refresh", EditorCommand::RefreshAssets),
         }},
+        {"build", "Build", {
+            item("build-project", "Build Project", EditorCommand::BuildProject, "Ctrl+B"),
+            item("cancel-build", "Cancel Build", EditorCommand::CancelBuild),
+            item("refresh-build-tools", "Refresh Toolchains", EditorCommand::RefreshBuildTools),
+            item("refresh-project-files", "Discover Project Files", EditorCommand::RefreshProjectFiles),
+            item("generate-clangd-config", "Generate .clangd", EditorCommand::GenerateClangdConfig),
+            item("import-compile-commands", "Import compile_commands.json", EditorCommand::ImportCompileCommands),
+            item("export-compile-commands", "Export compile_commands.json", EditorCommand::ExportCompileCommands),
+            separator(),
+            item("open-visual-studio", "Open in Visual Studio", EditorCommand::OpenProjectInIde, {}, "visual-studio"),
+            item("open-rider", "Open in Rider", EditorCommand::OpenProjectInIde, {}, "rider"),
+            item("open-vscode", "Open in VS Code", EditorCommand::OpenProjectInIde, {}, "vscode"),
+            item("save-build-profile", "Save Build Profile", EditorCommand::SaveBuildProfile),
+            item("reload-build-profile", "Reload Build Profile", EditorCommand::ReloadBuildProfile),
+        }},
         {"game-object", "GameObject", {
             item("create-empty", "Create Empty", EditorCommand::CreateEmpty, "Ctrl+Shift+N"),
             item("create-child", "Create Child", EditorCommand::CreateChild),
@@ -102,6 +212,8 @@ void EditorUiModel::build_default_menus() {
             item("console", "Console", EditorCommand::TogglePage, {}, "console"),
             item("profiler", "Profiler", EditorCommand::TogglePage, {}, "profiler"),
             item("render-graph", "Render Graph", EditorCommand::TogglePage, {}, "render-graph"),
+            item("build", "Build", EditorCommand::TogglePage, {}, "build"),
+            item("media", "Media Preview", EditorCommand::TogglePage, {}, "media"),
         }},
         {"theme", "Theme", {
             item("dark", "Dark", EditorCommand::SetDarkTheme),
@@ -191,6 +303,24 @@ void EditorUiModel::set_active_page(std::string pageId) {
 
 void EditorUiModel::set_page_visible(std::string_view pageId, bool visible) noexcept {
     for (auto& page : pages_) if (page.id == pageId) { page.visible = visible; return; }
+}
+
+void EditorUiModel::set_build_state(EditorBuildUiState state) {
+    if (same_build_state(buildState_, state)) return;
+    buildState_ = std::move(state);
+    ++revision_;
+}
+
+void EditorUiModel::set_asset_preview(EditorAssetPreviewUiState state) {
+    if (same_asset_preview(assetPreview_, state)) return;
+    assetPreview_ = std::move(state);
+    ++revision_;
+}
+
+void EditorUiModel::set_media_state(EditorMediaUiState state) {
+    if (same_media_state(mediaState_, state)) return;
+    mediaState_ = std::move(state);
+    ++revision_;
 }
 
 void EditorUiModel::execute(EditorCommand command) noexcept {

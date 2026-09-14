@@ -145,7 +145,7 @@ if(SHINKOU_WITH_CSHARP)
 endif()
 
 if(WIN32)
-    target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid d2d1 dwrite gdi32 ws2_32)
+    target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid d2d1 dwrite windowscodecs mfplat mfreadwrite mfuuid propsys gdi32 ws2_32)
     target_compile_definitions(shinkou_engine PRIVATE SHINKOU_PLATFORM_WINDOWS=1)
 endif()
 
@@ -418,9 +418,57 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_file_system_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_file_system_tests COMMAND shinkou_file_system_tests)
 
+        add_executable(shinkou_asset_preview_tests "${SHINKOU_TEST_ROOT}/AssetPreviewTests.cpp")
+        target_link_libraries(shinkou_asset_preview_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_asset_preview_tests COMMAND shinkou_asset_preview_tests)
+
+        add_executable(shinkou_editor_asset_index_tests "${SHINKOU_TEST_ROOT}/EditorAssetIndexTests.cpp")
+        target_link_libraries(shinkou_editor_asset_index_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_asset_index_tests COMMAND shinkou_editor_asset_index_tests)
+
+        add_executable(shinkou_editor_audio_preview_tests "${SHINKOU_TEST_ROOT}/EditorAudioPreviewTests.cpp")
+        target_link_libraries(shinkou_editor_audio_preview_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_audio_preview_tests COMMAND shinkou_editor_audio_preview_tests)
+
+        add_executable(shinkou_editor_image_preview_tests "${SHINKOU_TEST_ROOT}/EditorImagePreviewTests.cpp")
+        target_link_libraries(shinkou_editor_image_preview_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_image_preview_tests COMMAND shinkou_editor_image_preview_tests)
+
+        add_executable(shinkou_editor_video_preview_tests "${SHINKOU_TEST_ROOT}/EditorVideoPreviewTests.cpp")
+        target_link_libraries(shinkou_editor_video_preview_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_video_preview_tests COMMAND shinkou_editor_video_preview_tests)
+
+        add_executable(shinkou_editor_model_preview_tests "${SHINKOU_TEST_ROOT}/EditorModelPreviewTests.cpp")
+        target_link_libraries(shinkou_editor_model_preview_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_model_preview_tests COMMAND shinkou_editor_model_preview_tests)
+
+        add_executable(shinkou_editor_model_preview_scene_tests "${SHINKOU_TEST_ROOT}/EditorModelPreviewSceneTests.cpp")
+        target_link_libraries(shinkou_editor_model_preview_scene_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_model_preview_scene_tests COMMAND shinkou_editor_model_preview_scene_tests)
+
+        add_executable(shinkou_editor_model_preview_renderer_tests "${SHINKOU_TEST_ROOT}/EditorModelPreviewRendererTests.cpp")
+        target_link_libraries(shinkou_editor_model_preview_renderer_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_model_preview_renderer_tests COMMAND shinkou_editor_model_preview_renderer_tests)
+
+        add_executable(shinkou_editor_gltf_preview_tests "${SHINKOU_TEST_ROOT}/EditorGltfPreviewTests.cpp")
+        target_link_libraries(shinkou_editor_gltf_preview_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_gltf_preview_tests COMMAND shinkou_editor_gltf_preview_tests)
+
         add_executable(shinkou_editor_command_bus_tests "${SHINKOU_TEST_ROOT}/EditorCommandBusTests.cpp")
         target_link_libraries(shinkou_editor_command_bus_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_command_bus_tests COMMAND shinkou_editor_command_bus_tests)
+
+        add_executable(shinkou_editor_build_system_tests "${SHINKOU_TEST_ROOT}/EditorBuildSystemTests.cpp")
+        target_link_libraries(shinkou_editor_build_system_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_build_system_tests COMMAND shinkou_editor_build_system_tests)
+
+        add_executable(shinkou_editor_compile_commands_tests "${SHINKOU_TEST_ROOT}/EditorCompileCommandsTests.cpp")
+        target_link_libraries(shinkou_editor_compile_commands_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_compile_commands_tests COMMAND shinkou_editor_compile_commands_tests)
+
+        add_executable(shinkou_editor_project_integration_tests "${SHINKOU_TEST_ROOT}/EditorProjectIntegrationTests.cpp")
+        target_link_libraries(shinkou_editor_project_integration_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_project_integration_tests COMMAND shinkou_editor_project_integration_tests)
 
         add_executable(shinkou_editor_selection_tests "${SHINKOU_TEST_ROOT}/EditorSelectionTests.cpp")
         target_link_libraries(shinkou_editor_selection_tests PRIVATE shinkou_engine)
@@ -502,8 +550,8 @@ if(SHINKOU_BUILD_TESTS)
             shinkou_render_feature_graph_builder_tests shinkou_descriptor_allocator_tests
             shinkou_audio_tests shinkou_assets_tests shinkou_input_tests
             shinkou_game_object_tests shinkou_reflection_tests shinkou_animation_tests shinkou_math_tests
-            shinkou_editor_ui_model_tests shinkou_file_system_tests shinkou_editor_command_bus_tests shinkou_editor_selection_tests shinkou_render_view_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_asset_icon_library_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests
-            shinkou_math_parallel_tests shinkou_math_advanced_tests shinkou_network_tests)
+            shinkou_editor_ui_model_tests shinkou_file_system_tests shinkou_editor_command_bus_tests shinkou_editor_selection_tests shinkou_render_view_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_asset_icon_library_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests shinkou_editor_compile_commands_tests shinkou_editor_asset_index_tests shinkou_editor_audio_preview_tests shinkou_editor_image_preview_tests shinkou_editor_video_preview_tests
+            shinkou_editor_model_preview_tests shinkou_editor_model_preview_scene_tests shinkou_editor_model_preview_renderer_tests shinkou_editor_gltf_preview_tests shinkou_math_parallel_tests shinkou_math_advanced_tests shinkou_network_tests)
         if(SHINKOU_WITH_SPDLOG)
             list(APPEND SHINKOU_TEST_TARGETS shinkou_logging_tests)
         endif()
@@ -534,6 +582,8 @@ endif()
 if(SHINKOU_BUILD_BENCHMARKS)
     add_executable(shinkou_math_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/MathBenchmarks.cpp")
     target_link_libraries(shinkou_math_benchmarks PRIVATE shinkou_engine)
+    add_executable(shinkou_object_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/ObjectBenchmarks.cpp")
+    target_link_libraries(shinkou_object_benchmarks PRIVATE shinkou_engine)
     if(SHINKOU_ENABLE_AVX2)
         if(MSVC)
             target_compile_options(shinkou_math_benchmarks PRIVATE /arch:AVX2)
@@ -547,8 +597,10 @@ if(SHINKOU_BUILD_BENCHMARKS)
     endif()
     if(MSVC)
         target_compile_options(shinkou_math_benchmarks PRIVATE /O2)
+        target_compile_options(shinkou_object_benchmarks PRIVATE /O2)
     else()
         target_compile_options(shinkou_math_benchmarks PRIVATE -O3)
+        target_compile_options(shinkou_object_benchmarks PRIVATE -O3)
     endif()
 endif()
 

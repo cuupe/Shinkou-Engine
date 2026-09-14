@@ -60,6 +60,21 @@ int main() {
     assert(!ui.frame_stats().layoutRebuilt);
     assert(ui.frame_stats().layoutNodeCount == 0);
 
+    // Changing a leaf invalidates its ancestor chain, but clean siblings keep
+    // their arranged subtrees when their slots are unchanged.
+    ui.set_padding(over, Insets(8.0f));
+    ui.begin_frame();
+    ui.layout({400.0f, 100.0f});
+    assert(ui.frame_stats().layoutRebuilt);
+    assert(ui.frame_stats().layoutNodeCount == 4);
+
+    // A flow change that moves a sibling must still re-arrange that sibling.
+    ui.set_size(first, {120.0f, 20.0f});
+    ui.begin_frame();
+    ui.layout({400.0f, 100.0f});
+    assert(ui.frame_stats().layoutNodeCount == 4);
+    assert(near(ui.widget(second)->rect.x, 137.0f));
+
     ui.set_padding(panel, Insets(20.0f, 5.0f));
     assert(ui.is_dirty(panel));
     assert(ui.is_subtree_dirty(ui.root()));

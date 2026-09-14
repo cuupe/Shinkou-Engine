@@ -206,6 +206,8 @@ class Component {
     std::string registeredName_;
     bool enabled_{true};
     LifecycleState state_{LifecycleState::Constructing};
+    ObjectStorage storage_{ObjectStorage::Regular};
+    void (*removeFromEcs_)(World&, Entity) noexcept{nullptr};
 
     friend class GameObject;
     friend class World;
@@ -225,6 +227,7 @@ public:
     ComponentId id() const noexcept { return id_; }
     ComponentHandle handle() noexcept;
     LifecycleState lifecycle_state() const noexcept { return state_; }
+    ObjectStorage storage() const noexcept { return storage_; }
     virtual std::string_view type_name() const noexcept { return "Component"; }
     std::string_view registered_type_name() const noexcept {
         return registeredName_.empty() ? type_name() : std::string_view(registeredName_);
@@ -334,6 +337,7 @@ private:
     World* world_{nullptr};
     ObjectId id_{0};
     std::string name_;
+    ObjectStorage storage_{ObjectStorage::Regular};
     GameObject* parent_{nullptr};
     bool activeSelf_{true};
     bool activeInHierarchy_{false};
@@ -341,22 +345,44 @@ private:
     LifecycleState state_{LifecycleState::Constructing};
     LifecycleCallbacks lifecycleCallbacks_{};
     std::vector<std::unique_ptr<Component>> components_;
+    // ECS-backed Component instances are owned by the EnTT registry.  The
+    // pointer list is only an update/lifecycle index; it avoids a second
+    // owning allocation and keeps typed registry queries allocation-free.
+    std::vector<Component*> ecsComponents_;
     std::unordered_map<std::type_index, Component*> componentLookup_;
     std::vector<std::unique_ptr<GameObject>> children_;
     Entity ecsEntity_{};
+    components::TransformComponent* transform_{nullptr};
+    std::size_t objectOrderIndex_{0};
+    std::size_t storageOrderIndex_{0};
 
     friend class World;
     friend class Component;
 
-    GameObject(World& world, ObjectId id, std::string name);
+    GameObject(World& world, ObjectId id, std::string name, ObjectStorage storage);
     void refresh_active_state(bool parentActive) noexcept;
-    void update_recursive(Seconds dt);
+    // The hierarchy transform phase is shared by both update pipelines so a
+    // mixed regular/ECS tree observes the same parent-to-child transforms.
+    void update_transform_recursive() noexcept;
+    // Component updates are deliberately split.  World dispatches these from
+    // independent regular and ECS pipelines in the same frame.
+    void update_regular_components(Seconds dt);
+    void update_ecs_components(Seconds dt);
     void dispose() noexcept;
     void request_destroy_recursive() noexcept;
     void update_world_transform() noexcept;
-    void attach_component(Component& component, std::string_view registeredTypeName);
+    void attach_component(Component& component, std::string_view registeredTypeName,
+                          ObjectStorage storage,
+                          void (*removeFromEcs)(World&, Entity) noexcept = nullptr);
     void remove_component(Component& component) noexcept;
+    void dispose_ecs_components(bool removeFromRegistry = true) noexcept;
     void initialize() noexcept;
+
+    template<class T, class... Args>
+    T* add_component_internal(std::string_view registeredTypeName, Args&&... args);
+
+    template<class T>
+    T* add_registered_component(std::string_view registeredTypeName);
 
 public:
     GameObject(const GameObject&) = delete;
@@ -367,6 +393,8 @@ public:
     GameObjectHandle handle() noexcept { return {world_, id_}; }
     std::string_view name() const noexcept { return name_; }
     void set_name(std::string name) { name_ = std::move(name); }
+    ObjectStorage storage() const noexcept { return storage_; }
+    bool set_storage(ObjectStorage storage);
     LifecycleState lifecycle_state() const noexcept { return state_; }
     void set_lifecycle_callbacks(LifecycleCallbacks callbacks) { lifecycleCallbacks_ = std::move(callbacks); }
     std::vector<PropertyDescriptor> properties();
@@ -389,29 +417,21 @@ public:
     template<class Fn>
     void each_component(Fn&& fn) {
         for (auto& component : components_) if (component) fn(*component);
+        for (auto* component : ecsComponents_) if (component) fn(*component);
     }
 
     template<class Fn>
     void each_component(Fn&& fn) const {
         for (const auto& component : components_) if (component) fn(*component);
+        for (const auto* component : ecsComponents_) if (component) fn(*component);
     }
 
-    GameObject& create_child(std::string name = {});
+    GameObject& create_child(std::string name = {}, ObjectStorage storage = ObjectStorage::Regular);
     void set_parent(GameObject* parent);
     const std::vector<std::unique_ptr<GameObject>>& children() const noexcept { return children_; }
 
     template<class T, class... Args>
-    T* add_component(Args&&... args) {
-        static_assert(std::is_base_of_v<Component, T>, "T must derive from shinkou::Component");
-        const auto key = std::type_index(typeid(T));
-        if (componentLookup_.find(key) != componentLookup_.end()) return nullptr;
-        auto component = std::make_unique<T>(std::forward<Args>(args)...);
-        auto* result = component.get();
-        components_.push_back(std::move(component));
-        componentLookup_.emplace(key, result);
-        attach_component(*result, result->type_name());
-        return result;
-    }
+    T* add_component(Args&&... args);
 
     template<class T, class... Args>
     T& get_or_add_component(Args&&... args) {
@@ -463,4 +483,5 @@ public:
     template<class T>
     void remove_ecs_component() noexcept;
 };
+
 }

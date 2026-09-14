@@ -27,6 +27,15 @@ enum class LifecycleState {
     Destroyed
 };
 
+// Selects where a GameObject's Component instances are stored.  Regular is
+// intentionally the default: it keeps the object-oriented scene path cheap
+// for editor and gameplay objects while allowing data-heavy objects to opt in
+// to EnTT storage at creation time.
+enum class ObjectStorage : std::uint8_t {
+    Regular,
+    Ecs
+};
+
 struct Entity {
     EntityId id{0};
     Generation generation{0};

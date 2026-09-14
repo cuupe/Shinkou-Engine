@@ -5,7 +5,11 @@ the renderer and mirrors the native `World`, `GameObject`, `Component`, and `Reg
 contracts.
 
 - `Shinkou.Scripting` provides OOP scene objects, GameObject components, generational ECS
-  entities/components, ordered ECS systems, and deferred destruction.
+  entities/components, ordered ECS systems, and deferred destruction. `World.CreateObject`
+  defaults to `ObjectStorage.Regular`; pass `ObjectStorage.Ecs` when a GameObject should
+  own an ECS entity from creation.
+- `ScriptComponent` keeps the same lifecycle when entered through `AddComponent` or
+  `AddEcsComponent`; data-only ECS components continue to live in the registry.
 - `Shinkou.ScriptCompiler` compiles one or more C# script files into a managed assembly
   with Roslyn and automatically references the installed .NET platform plus
   `Shinkou.Scripting`.

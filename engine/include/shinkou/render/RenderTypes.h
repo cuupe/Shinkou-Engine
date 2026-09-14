@@ -182,6 +182,12 @@ struct PipelineDesc {
     std::string depthFormat{"d24s8"};
     std::uint32_t sampleCount{1};
     std::vector<std::string> colorFormats;
+    // Appended to preserve existing aggregate initialization. DirectX 11
+    // uses this to opt into the TEXCOORD0 vertex input element.
+    bool vertexTextureCoordinates{false};
+    // Appended to preserve existing aggregate initialization. DirectX 11
+    // uses this to opt into the NORMAL vertex input element.
+    bool vertexNormals{false};
 };
 
 using ResourceDesc = std::variant<TextureDesc, BufferDesc, ShaderDesc, PipelineDesc, MaterialDesc, SamplerDesc>;

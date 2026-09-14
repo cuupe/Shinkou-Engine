@@ -78,6 +78,31 @@ struct TextureUpdate {
 
 using TextureSubresourceUpdate = TextureUpdate;
 
+struct TextureReadbackRequest {
+    ResourceHandle texture{};
+    std::uint32_t mipLevel{0};
+    std::uint32_t layer{0};
+    // A zero width/height reads the full selected mip. Non-zero regions are
+    // copied into a tightly packed CPU result starting at (0, 0).
+    std::uint32_t x{0};
+    std::uint32_t y{0};
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    std::size_t maxBytes{64u * 1024u * 1024u};
+};
+
+struct TextureReadback {
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    std::size_t rowPitch{0};
+    std::vector<std::uint8_t> data;
+
+    bool valid() const noexcept {
+        return width > 0 && height > 0 && rowPitch >= static_cast<std::size_t>(width) * 4u &&
+            data.size() >= rowPitch * height;
+    }
+};
+
 struct RenderCapabilities {
     BackendApi api{BackendApi::Null};
     bool deviceReady{false};
@@ -88,6 +113,10 @@ struct RenderCapabilities {
     // hoping a backend consumes them.
     bool supportsImGui{false};
     bool supportsNativeUi{false};
+    bool supportsTextureReadback{false};
+    // Pass-local editor target binding used by independent preview passes.
+    // This is separate from the ordinary viewport/scissor seam.
+    bool supportsEditorOffscreenTarget{false};
     // This is separate from ordinary set_viewport support. It means the
     // backend can enforce an editor scene viewport/scissor without allowing
     // the scene pass to bleed into the shell or UI regions.
@@ -164,6 +193,11 @@ public:
     virtual void destroy_resource(ResourceHandle handle) = 0;
     virtual bool update_buffer(const BufferUpdate&) { return false; }
     virtual bool update_texture(const TextureUpdate&) { return false; }
+    // Readback is an explicit diagnostic/editor operation. Backends should
+    // use an appropriate staging resource and enforce request.maxBytes.
+    virtual bool read_texture(const TextureReadbackRequest&, TextureReadback&) {
+        return false;
+    }
     // Uploads issued between begin_graph() and submit() are recorded into one
     // backend batch when supported, so the render graph can consume them in
     // submission order without forcing a CPU wait per update.
@@ -190,6 +224,14 @@ public:
     virtual void set_render_targets(ResourceHandle color, ResourceHandle depth, bool clearAttachments) {
         (void)clearAttachments;
         set_render_targets(color, depth);
+    }
+    // An empty color target means the swapchain/backbuffer. Native editor
+    // preview passes use this to switch between an offscreen target and the
+    // protected editor presentation target without changing scene policy.
+    virtual bool bind_editor_render_target(ResourceHandle color, ResourceHandle depth,
+                                           bool clearAttachments = false) {
+        set_render_targets(color, depth, clearAttachments);
+        return true;
     }
     virtual void set_viewport(float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f) {
         (void)x; (void)y; (void)width; (void)height; (void)minDepth; (void)maxDepth;

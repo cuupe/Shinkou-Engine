@@ -33,7 +33,10 @@ field and unknown fields are ignored for forward compatibility.
 ## Performance rules
 
 - Layout is recomputed only for dirty subtrees; unchanged subtrees reuse their
-  measured size and arranged rectangles.
+  measured size and arranged rectangles. During a parent reflow, a clean child
+  is also reused when its arranged rectangle is unchanged; moved flow/flex
+  siblings still recurse through layout. `UiRuntime::FrameStats::layoutNodeCount`
+  exposes the amount of layout work for regression tests and profiling.
 - Hit testing visits children in reverse paint order and stops at the first
   captured or consumed target.
 - Workspace operations mutate the dock tree and normalize once at the end,

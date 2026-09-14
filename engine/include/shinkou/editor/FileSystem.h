@@ -45,11 +45,18 @@ public:
 
     void set_root(std::filesystem::path root);
     const std::filesystem::path& root() const noexcept { return root_; }
+    // Returns a canonical existing path only when the relative file remains
+    // inside the project root. Callers may pass the result to a subsystem
+    // that requires an absolute path, but must not use it for writes.
+    std::filesystem::path resolve_existing(const std::filesystem::path& relative) const;
 
     std::vector<FileEntry> list(std::filesystem::path relative = {}, bool recursive = false,
                                 std::size_t maxEntries = 4096) const;
     bool read_text(const std::filesystem::path& relative, std::string& output,
                    std::string* error = nullptr) const;
+    bool read_text_limited(const std::filesystem::path& relative, std::size_t maxBytes,
+                           std::string& output, bool* truncated = nullptr,
+                           std::string* error = nullptr) const;
     bool write_text_atomic(const std::filesystem::path& relative, std::string_view content,
                            std::string* error = nullptr) const;
     bool ensure_directory(const std::filesystem::path& relative, std::string* error = nullptr) const;

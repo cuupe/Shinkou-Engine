@@ -33,6 +33,25 @@ custom formats, and tests. Production projects can add texture, mesh, material,
 animation, shader, localization, or platform-specific processors without changing
 the engine or renderer.
 
+The default editor-facing extension map also provides typed source processors and
+loaders for text, texture, model, audio, video, font, shader, material, and scene
+assets. These artifacts preserve source bytes with a canonical typed format; they
+are not a claim that decoding or GPU materialization has happened. Applications may
+replace any type with a structured processor/loader during setup.
+
+Typed artifacts may additionally publish a bounded descriptor through
+`AssetArtifact::metadataFormat` and `AssetArtifact::metadata`. The built-in
+processor currently emits versioned source descriptors for text, PNG/JPEG
+dimensions, WAV format fields, and OBJ vertex/face counts. `AssetData` exposes
+that descriptor through an immutable string; the descriptor is cacheable metadata,
+not a decoded texture, audio stream, mesh, or renderer resource.
+
+The editor's OBJ and image previews consume typed payloads: when an initialized
+AssetSystem is attached, the model worker requests the `model` artifact and the
+image worker requests the `texture` artifact. They parse/decode only their
+immutable bytes under their existing bounded provider rules. Other preview
+providers remain separate until their structured artifacts are defined.
+
 ## Caching and live editing
 
 Cooked artifacts use a versioned `.wac` binary format keyed by asset id, source
@@ -40,4 +59,8 @@ hash, and processor version. `poll()` marks changed loaded records stale and emi
 an invalidation event; the next request reloads them. `trim()` evicts the least
 recently used unpinned data until the configured memory budget is satisfied.
 `scan_sources()` and `write_manifest()` expose build/editor tooling without adding
-editor dependencies to the runtime library.
+editor dependencies to the runtime library. Each manifest entry also contains the
+stable `AssetId` derived from its normalized virtual key, so editor caches do not
+need to use a physical path or scan order as identity. `read_manifest()` provides
+a bounded validation-only readback path; callers must still revalidate sources
+through the current mounts before using the entries as a cache seed.

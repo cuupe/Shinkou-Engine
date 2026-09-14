@@ -7,8 +7,21 @@
 #include <thread>
 
 namespace shinkou {
+namespace {
+
+assets::AssetSystemConfig asset_config_for(const EngineConfig& config) {
+    auto result = config.assets;
+    // Editor resource URIs are project-relative. Keep the runtime AssetSystem
+    // on the same root unless the caller explicitly supplied an asset root.
+    if (config.editor && result.projectRoot.empty() && !config.editorProjectRoot.empty())
+        result.projectRoot = config.editorProjectRoot;
+    return result;
+}
+
+} // namespace
+
 Engine::Engine(const EngineConfig& config)
-    : config_(config), assets_(config.assets), renderer_(config.renderBackend), physics_(std::make_unique<physics::SimplePhysicsWorld>()),
+    : config_(config), assets_(asset_config_for(config)), renderer_(config.renderBackend), physics_(std::make_unique<physics::SimplePhysicsWorld>()),
       audio_(audio::create_audio_backend(), config.audio), network_(config.network), input_(input::create_sdl3_input_backend()),
       scripts_(scripting::create_runtime(scripting::Language::CSharp)) {
     if (!log::initialize(config_.logging)) return;
@@ -56,11 +69,19 @@ bool Engine::initialize() {
     }
     if (config_.editor && !config_.editorProjectRoot.empty())
         editor_.set_project_root(config_.editorProjectRoot);
-    if (!physics_ || !audio_.initialize() || !input_.initialize() || !scripts_.initialize() ||
-        (config_.editor && !editor_.initialize(false))) {
+    if (!physics_ || !audio_.initialize() || !input_.initialize() || !scripts_.initialize()) {
         SHINKOU_LOG_ERROR("Engine subsystem initialization failed");
         shutdown();
         return false;
+    }
+    if (config_.editor) {
+        editor_.set_audio_system(&audio_);
+        editor_.set_asset_system(&assets_);
+        if (!editor_.initialize(false)) {
+            SHINKOU_LOG_ERROR("Editor subsystem initialization failed");
+            shutdown();
+            return false;
+        }
     }
     if (config_.editor) {
         // Installing the native Windows menu can synchronously or lazily
@@ -164,12 +185,15 @@ void Engine::shutdown() {
     running_ = false;
     network_.shutdown();
     scripts_.shutdown();
-    assets_.shutdown();
-    audio_.shutdown();
-    input_.shutdown();
     if (config_.editor) {
-        editor_.shutdown();
+        // Editor preview workers may still hold AssetSystem futures. Drain
+        // them before stopping the resource workers, while AudioSystem is
+        // still alive for the media transport teardown.
+        editor_.shutdown(&renderer_);
     }
+    assets_.shutdown();
+    input_.shutdown();
+    audio_.shutdown();
     window_.destroy();
     initialized_ = false;
     windowWidth_ = 0;

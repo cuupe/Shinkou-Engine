@@ -68,6 +68,13 @@ std::uint64_t UiRenderList::content_hash() const noexcept {
         hash_value(hash, command.textAlign);
         hash_value(hash, command.textOverflow);
         hash_value(hash, command.texture);
+        const auto imageIdentity = command.imageSnapshot ? command.imageSnapshot->revision : 0u;
+        hash_value(hash, imageIdentity);
+        if (command.imageSnapshot) {
+            hash_value(hash, command.imageSnapshot->revision);
+            hash_value(hash, command.imageSnapshot->width);
+            hash_value(hash, command.imageSnapshot->height);
+        }
         hash_string(hash, command.fontFamily);
         hash_string(hash, command.text);
         hash_value(hash, command.pathClosed);
@@ -160,6 +167,17 @@ void UiRenderList::image(Rect bounds, std::uint64_t texture, ThemeColor tint) {
     command.rect = bounds;
     command.texture = texture;
     command.color = tint;
+    commands_.push_back(std::move(command));
+    invalidate_hash();
+}
+
+void UiRenderList::image(Rect bounds, std::shared_ptr<const UiImageSnapshot> snapshot,
+                         ThemeColor tint) {
+    UiDrawCommand command;
+    command.type = DrawCommandType::Image;
+    command.rect = bounds;
+    command.color = tint;
+    command.imageSnapshot = std::move(snapshot);
     commands_.push_back(std::move(command));
     invalidate_hash();
 }

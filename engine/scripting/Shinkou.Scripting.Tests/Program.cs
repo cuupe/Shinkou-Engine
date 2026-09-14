@@ -3,6 +3,7 @@ using Shinkou.Engine.Scripting;
 var tests = new ScriptTests();
 tests.ComponentLifecycleMatchesNativeWorld();
 tests.EcsGenerationAndSystemLifecycleWork();
+tests.ObjectStorageAndCommonComponentEntryPointWork();
 Console.WriteLine("C# scripting tests passed");
 
 sealed class ProbeComponent : ScriptComponent
@@ -86,6 +87,23 @@ sealed class ScriptTests
         var loaded = loadedObject.AddComponent(typeof(LoadableComponent).FullName!);
         Assert.True(loaded?.GetType().FullName == typeof(LoadableComponent).FullName,
             "Compiled assemblies must expose constructible script components.");
+    }
+
+    public void ObjectStorageAndCommonComponentEntryPointWork()
+    {
+        using var world = new World();
+        var events = new List<string>();
+        ProbeComponent.Events = events;
+        var ecsObject = world.CreateObject("ecs", storage: ObjectStorage.Ecs);
+        var component = ecsObject.AddEcsComponent(new ProbeComponent());
+        Assert.True(ecsObject.Storage == ObjectStorage.Ecs && ecsObject.HasEcsEntity,
+            "ECS storage must be selected at object creation.");
+        Assert.True(ReferenceEquals(component, ecsObject.GetEcsComponent<ProbeComponent>()),
+            "Script components must use the same object component through the ECS entry point.");
+        world.Update(0.016f);
+        Assert.Equal(1, events.Count(value => value == "update"));
+        ecsObject.Destroy();
+        Assert.Equal(1, events.Count(value => value == "destroy"));
     }
 
     private sealed record Position(int Value);

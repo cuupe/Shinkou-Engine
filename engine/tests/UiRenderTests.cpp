@@ -22,6 +22,14 @@ int main() {
     assert(list.empty());
     assert(!list.has_dirty_rect() && list.dirty_full());
     assert(list.content_hash() != firstHash);
+    auto image = std::make_shared<shinkou::ui::UiImageSnapshot>();
+    image->revision = 19;
+    image->width = 1;
+    image->height = 1;
+    image->bgraPremultiplied = {255, 0, 0, 255};
+    list.image({8, 8, 24, 24}, image);
+    assert(list.commands().back().imageSnapshot == image);
+    assert(list.content_hash() != firstHash);
     const auto range = shinkou::ui::visible_range(10000, 20.0f, 1000.0f, 200.0f, 2);
     assert(range.first < 50 && range.last > range.first && range.last < 10000);
     assert(range.contentExtent == 200000.0f);

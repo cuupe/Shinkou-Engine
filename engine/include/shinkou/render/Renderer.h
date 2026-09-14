@@ -85,6 +85,7 @@ public:
     void destroy_resource(ResourceHandle handle);
     bool update_buffer(const BufferUpdate& update);
     bool update_texture(const TextureUpdate& update);
+    bool read_texture(const TextureReadbackRequest& request, TextureReadback& result);
     bool generate_mips(ResourceHandle texture);
     BindlessTableHandle create_bindless_table(const BindlessTableDesc& description);
     bool update_bindless(BindlessTableHandle table, std::uint32_t slot, ResourceHandle resource,

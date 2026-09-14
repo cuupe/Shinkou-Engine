@@ -27,6 +27,29 @@ protected:
     void on_update(shinkou::Seconds) override { if (counters) ++counters->updates; }
 };
 
+struct Position {
+    float value{0.0f};
+};
+
+struct Velocity {
+    float value{0.0f};
+};
+
+struct CountingEcsSystem final : shinkou::EcsSystem {
+    int creates{0};
+    int enables{0};
+    int disables{0};
+    int updates{0};
+    int destroys{0};
+    int order() const noexcept override { return 7; }
+protected:
+    void on_create() override { ++creates; }
+    void on_enable() override { ++enables; }
+    void on_disable() override { ++disables; }
+    void on_update(shinkou::Seconds) override { ++updates; }
+    void on_destroy() override { ++destroys; }
+};
+
 bool near(float lhs, float rhs) { return std::abs(lhs - rhs) < 0.0001f; }
 }
 
@@ -79,6 +102,58 @@ int main() {
     if (factoryObject.add_component("Missing") != nullptr) return 23;
     if (factoryObject.properties().empty() || !world.find_component(factoryComponent->id())) return 24;
 
+    auto& ecsManaged = world.create_object("ecs-managed", shinkou::ObjectStorage::Ecs);
+    if (ecsManaged.storage() != shinkou::ObjectStorage::Ecs || !ecsManaged.has_ecs_entity()) return 26;
+    auto* ecsTransform = ecsManaged.get_component<shinkou::components::TransformComponent>();
+    if (!ecsTransform || ecsTransform->storage() != shinkou::ObjectStorage::Ecs ||
+        ecsManaged.get_ecs_component<shinkou::components::TransformComponent>() != ecsTransform) return 27;
+    LifecycleCounters ecsCounters;
+    auto* ecsUpdate = ecsManaged.add_component<UpdateComponent>(&ecsCounters);
+    if (!ecsUpdate || ecsUpdate->storage() != shinkou::ObjectStorage::Ecs ||
+        !world.ecs().has<UpdateComponent>(ecsManaged.ecs_entity()) ||
+        ecsManaged.get_ecs_component<UpdateComponent>() != ecsUpdate) return 28;
+    auto& ecsSystem = world.add_ecs_system<CountingEcsSystem>();
+    if (ecsSystem.creates != 1 || ecsSystem.enables != 1 || world.ecs_system_count() != 1) return 29;
+    world.update(0.01f);
+    if (ecsCounters.updates != 1 || ecsSystem.updates != 1) return 30;
+    ecsSystem.set_enabled(false);
+    world.update(0.01f);
+    if (ecsSystem.updates != 1 || ecsSystem.disables != 1) return 31;
+    ecsSystem.set_enabled(true);
+    if (ecsSystem.enables != 2) return 32;
+    if (!ecsManaged.remove_component<UpdateComponent>() || world.ecs().has<UpdateComponent>(ecsManaged.ecs_entity()) ||
+        ecsCounters.destroys != 1) return 33;
+    LifecycleCounters regularPipelineCounters;
+    auto& regularPipelineObject = world.create_object("regular-pipeline");
+    if (!regularPipelineObject.add_component<UpdateComponent>(&regularPipelineCounters)) return 39;
+    auto& ecsPipelineObject = world.create_object("ecs-pipeline", shinkou::ObjectStorage::Ecs);
+    LifecycleCounters ecsPipelineCounters;
+    if (!ecsPipelineObject.add_component<UpdateComponent>(&ecsPipelineCounters)) return 40;
+    world.update(0.01f);
+    if (regularPipelineCounters.updates != 1 || ecsPipelineCounters.updates != 1) return 41;
+    const auto stats = world.statistics();
+    if (stats.objects != world.object_count() || stats.ecsObjects != world.ecs_object_count() ||
+        stats.components != world.component_count() || stats.updates != 6) return 34;
+    std::size_t flatObjects = 0;
+    world.each_game_object([&](const shinkou::GameObject&) { ++flatObjects; });
+    if (flatObjects != world.object_count()) return 35;
+    world.optimize();
+
+    const auto deferredEntity = world.ecs().create();
+    world.ecs().destroy_deferred(deferredEntity);
+    if (!world.ecs().valid(deferredEntity) || world.ecs().pending_destroy_count() != 1) return 36;
+    world.update(0.0f);
+    if (world.ecs().valid(deferredEntity) || world.ecs().pending_destroy_count() != 0) return 37;
+
+    auto& externallyDestroyed = world.create_object("external-destroy", shinkou::ObjectStorage::Ecs);
+    LifecycleCounters externalCounters;
+    auto* externalComponent = externallyDestroyed.add_component<UpdateComponent>(&externalCounters);
+    const auto externalHandle = externalComponent->handle();
+    const auto externallyDestroyedEntity = externallyDestroyed.ecs_entity();
+    world.ecs().destroy(externallyDestroyedEntity);
+    if (world.find_object(externallyDestroyed.id()) != nullptr || externalHandle.valid() || externalCounters.destroys != 1 ||
+        world.ecs().valid(externallyDestroyedEntity)) return 38;
+
     const auto staleEntity = world.ecs().create();
     world.ecs().emplace<int>(staleEntity, 42);
     world.ecs().destroy(staleEntity);
@@ -93,14 +168,25 @@ int main() {
     const auto nativeView = nativeRegistry.view<int>();
     if (nativeView.size() != 1 || nativeRegistry.get<int>(nativeView.front()) != 42) return 25;
 
+    const auto viewEntity = world.ecs().create();
+    world.ecs().emplace<Position>(viewEntity, Position{1.0f});
+    world.ecs().emplace<Velocity>(viewEntity, Velocity{2.0f});
+    std::size_t viewHits = 0;
+    world.ecs().view<Position, Velocity>().each([&](auto, Position& position, Velocity& velocity) {
+        position.value += velocity.value;
+        ++viewHits;
+    });
+    if (viewHits != 1 || world.ecs().get<Position>(viewEntity).value != 3.0f) return 42;
+    world.ecs().destroy(viewEntity);
+
     auto& reparented = world.create_object("reparented");
     reparented.set_parent(&ecsObject);
-    if (reparented.parent() != &ecsObject || world.object_count() != 4) return 10;
+    if (reparented.parent() != &ecsObject || world.object_count() != 7) return 10;
     reparented.set_parent(nullptr);
-    if (reparented.parent() != nullptr || world.object_count() != 4) return 11;
+    if (reparented.parent() != nullptr || world.object_count() != 7) return 11;
 
     world.clear_objects();
-    if (world.object_count() != 0 || world.ecs().valid(recycledEntity)) return 12;
+    if (world.object_count() != 0 || world.ecs().valid(recycledEntity) || ecsSystem.destroys != 0) return 12;
     std::cout << "game object tests passed\n";
     return 0;
 }

@@ -54,6 +54,8 @@ std::string pipeline_cache_key(const PipelineDesc& description) {
     key += description.depthWrite ? '1' : '0';
     key += description.alphaBlend ? '1' : '0';
     key += description.vertexInput ? '1' : '0';
+    key += description.vertexTextureCoordinates ? '1' : '0';
+    key += description.vertexNormals ? '1' : '0';
     key.push_back(':');
     key += description.cullMode;
     key.push_back(':');
@@ -1006,6 +1008,52 @@ bool Renderer::update_texture(const TextureUpdate& update) {
     if (!success) lastError_ = backend_->last_error();
     else retain_texture_update(*texture, update);
     return success;
+}
+
+bool Renderer::read_texture(const TextureReadbackRequest& request, TextureReadback& result) {
+    result = {};
+    const auto* found = find_persistent_resource(request.texture);
+    if (!found || request.texture.kind != ResourceKind::Texture2D) {
+        lastError_ = "texture readback references an unknown persistent texture";
+        return false;
+    }
+    const auto* texture = std::get_if<TextureDesc>(&found->description);
+    if (!texture || request.mipLevel >= texture->mipLevels || request.layer >= texture->layers ||
+        request.maxBytes == 0) {
+        lastError_ = "texture readback request exceeds persistent texture description";
+        return false;
+    }
+    const auto mipWidth = std::max(1u, texture->width >> request.mipLevel);
+    const auto mipHeight = std::max(1u, texture->height >> request.mipLevel);
+    const auto readWidth = request.width == 0 ? mipWidth : request.width;
+    const auto readHeight = request.height == 0 ? mipHeight : request.height;
+    const auto bytesPerPixel = texture_bytes_per_pixel(texture->format);
+    if (request.x > mipWidth || request.y > mipHeight || readWidth == 0 || readHeight == 0 ||
+        readWidth > mipWidth - request.x || readHeight > mipHeight - request.y ||
+        readWidth > std::numeric_limits<std::size_t>::max() / bytesPerPixel ||
+        readWidth * bytesPerPixel > std::numeric_limits<std::size_t>::max() / readHeight ||
+        readWidth * bytesPerPixel * readHeight > request.maxBytes) {
+        lastError_ = "texture readback request exceeds region or byte limit";
+        return false;
+    }
+    if (!initialized_ || !backend_) {
+        lastError_ = "texture readback requires an initialized render backend";
+        return false;
+    }
+    backend_->clear_error();
+    const bool success = backend_->read_texture(request, result);
+    if (!success) {
+        lastError_ = backend_->last_error();
+        if (lastError_.empty()) lastError_ = "texture readback is not supported by the active backend";
+        result = {};
+        return false;
+    }
+    if (!result.valid()) {
+        lastError_ = "render backend returned an invalid texture readback result";
+        result = {};
+        return false;
+    }
+    return true;
 }
 
 bool Renderer::generate_mips(ResourceHandle texture) {

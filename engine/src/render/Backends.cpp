@@ -502,6 +502,7 @@ class DirectX11Backend final : public IRenderBackend {
     std::unordered_map<UiTextFormatKey, IDWriteTextFormat*, UiTextFormatKeyHash> uiTextFormats_;
     std::unordered_map<std::uint32_t, ID2D1SolidColorBrush*> uiBrushes_;
     std::unordered_map<std::uint64_t, ID2D1PathGeometry*> uiPathGeometries_;
+    std::unordered_map<std::uint64_t, ID2D1Bitmap*> uiImageBitmaps_;
     bool uiCaptureWritten_{false};
     std::uint64_t uiSurfaceHash_{0};
     bool uiSurfaceValid_{false};
@@ -516,6 +517,8 @@ class DirectX11Backend final : public IRenderBackend {
         uiBrushes_.clear();
         for (auto& entry : uiPathGeometries_) if (entry.second) entry.second->Release();
         uiPathGeometries_.clear();
+        for (auto& entry : uiImageBitmaps_) if (entry.second) entry.second->Release();
+        uiImageBitmaps_.clear();
         if (uiTarget_) { uiTarget_->Release(); uiTarget_ = nullptr; }
         if (uiPreviousBitmap_ && uiDc_) {
             SelectObject(uiDc_, uiPreviousBitmap_);
@@ -819,6 +822,31 @@ float4 ui_ps(V input) : SV_Target { return ui_texture.Sample(ui_sampler, input.u
         }
         uiPathGeometries_.emplace(key, geometry);
         return geometry;
+    }
+
+    ID2D1Bitmap* image_bitmap(const std::shared_ptr<const ui::UiImageSnapshot>& snapshot) {
+        if (!uiTarget_ || !snapshot || !snapshot->valid()) return nullptr;
+        const auto key = snapshot->revision;
+        const auto found = uiImageBitmaps_.find(key);
+        if (found != uiImageBitmaps_.end()) return found->second;
+        // Preview images are bounded thumbnails. Keep the backend cache
+        // bounded as selections change so the retained seam cannot become an
+        // unbounded GPU/Direct2D resource cache.
+        if (uiImageBitmaps_.size() >= 32u) {
+            auto oldest = uiImageBitmaps_.begin();
+            if (oldest->second) oldest->second->Release();
+            uiImageBitmaps_.erase(oldest);
+        }
+        const auto properties = D2D1::BitmapProperties(
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f, 96.0f);
+        ID2D1Bitmap* bitmap = nullptr;
+        const auto result = uiTarget_->CreateBitmap(
+            D2D1::SizeU(snapshot->width, snapshot->height), snapshot->bgraPremultiplied.data(),
+            snapshot->width * 4u, &properties, &bitmap);
+        if (FAILED(result) || !bitmap) return nullptr;
+        uiImageBitmaps_.emplace(key, bitmap);
+        return bitmap;
     }
 
     static D2D1_COLOR_F ui_color(const ui::ThemeColor& color) {
@@ -1163,20 +1191,18 @@ float4 ui_ps(V input) : SV_Target { return ui_texture.Sample(ui_sampler, input.u
                 break;
             }
             case ui::DrawCommandType::Image: {
-                // Texture lookup is intentionally kept out of the retained UI
-                // seam. Draw a stable placeholder until the asset bridge supplies
-                // an SRV, so image slots remain visible in the editor today.
-                const auto placeholder = ui::ThemeColor{0.08f, 0.11f, 0.15f, command.color.a};
-                if (auto* brush = solid_ui_brush(placeholder)) {
-                    const auto rect = D2D1::RectF(command.rect.x, command.rect.y,
-                        command.rect.x + std::max(0.0f, command.rect.width),
-                        command.rect.y + std::max(0.0f, command.rect.height));
-                    uiTarget_->FillRectangle(rect, brush);
-                }
-                if (auto* border = solid_ui_brush(ui::ThemeColor{0.28f, 0.34f, 0.42f, command.color.a})) {
-                    uiTarget_->DrawRectangle(D2D1::RectF(command.rect.x, command.rect.y,
-                        command.rect.x + std::max(0.0f, command.rect.width),
-                        command.rect.y + std::max(0.0f, command.rect.height)), border, 1.0f);
+                const auto rect = D2D1::RectF(command.rect.x, command.rect.y,
+                    command.rect.x + std::max(0.0f, command.rect.width),
+                    command.rect.y + std::max(0.0f, command.rect.height));
+                if (auto* bitmap = image_bitmap(command.imageSnapshot)) {
+                    const auto opacity = std::max(0.0f, std::min(1.0f, command.color.a));
+                    uiTarget_->DrawBitmap(bitmap, &rect, opacity,
+                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, nullptr);
+                } else {
+                    const auto placeholder = ui::ThemeColor{0.08f, 0.11f, 0.15f, command.color.a};
+                    if (auto* brush = solid_ui_brush(placeholder)) uiTarget_->FillRectangle(rect, brush);
+                    if (auto* border = solid_ui_brush(ui::ThemeColor{0.28f, 0.34f, 0.42f, command.color.a}))
+                        uiTarget_->DrawRectangle(rect, border, 1.0f);
                 }
                 break;
             }
@@ -1349,6 +1375,8 @@ public:
         capabilities_.supportsNativeUi = true;
 #endif
         capabilities_.supportsEditorViewportScissor = true;
+        capabilities_.supportsEditorOffscreenTarget = true;
+        capabilities_.supportsTextureReadback = true;
         capabilities_.supportsCompute = true;
         capabilities_.supportsMultiDrawIndirect = true;
         capabilities_.supportsDedicatedComputeQueue = false;
@@ -1579,9 +1607,19 @@ public:
                 if (desc.vertexInput) {
                     const auto vertex = resources_.find(desc.vertexShader);
                     if (vertex != resources_.end() && vertex->second.shaderBytecode.size() > 0) {
-                        const D3D11_INPUT_ELEMENT_DESC input[] = {{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+                        const D3D11_INPUT_ELEMENT_DESC positionOnly[] = {{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
                             D3D11_INPUT_PER_VERTEX_DATA, 0}};
-                        device_->CreateInputLayout(input, 1, vertex->second.shaderBytecode.data(), vertex->second.shaderBytecode.size(), &record.inputLayout);
+                        const D3D11_INPUT_ELEMENT_DESC positionAndTexture[] = {
+                            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+                            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0}};
+                        const D3D11_INPUT_ELEMENT_DESC positionTextureAndNormal[] = {
+                            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+                            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+                            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0}};
+                        const auto* input = desc.vertexNormals ? positionTextureAndNormal :
+                            (desc.vertexTextureCoordinates ? positionAndTexture : positionOnly);
+                        const auto inputCount = desc.vertexNormals ? 3u : (desc.vertexTextureCoordinates ? 2u : 1u);
+                        device_->CreateInputLayout(input, inputCount, vertex->second.shaderBytecode.data(), vertex->second.shaderBytecode.size(), &record.inputLayout);
                     }
                 }
             } else if constexpr (std::is_same_v<T, MaterialDesc>) {
@@ -1751,6 +1789,91 @@ public:
         }
         return true;
     }
+    bool read_texture(const TextureReadbackRequest& request, TextureReadback& result) override {
+        result = {};
+        const auto it = resources_.find(request.texture.id);
+        if (!context_ || request.texture.kind != ResourceKind::Texture2D ||
+            it == resources_.end() || it->second.kind != ResourceKind::Texture2D ||
+            !it->second.resource || request.maxBytes == 0) {
+            lastError_ = "D3D11 texture readback handle or request is invalid";
+            return false;
+        }
+        auto* source = static_cast<ID3D11Texture2D*>(it->second.resource);
+        D3D11_TEXTURE2D_DESC sourceDescription{};
+        source->GetDesc(&sourceDescription);
+        const auto supportedFormat = sourceDescription.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+            sourceDescription.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+            sourceDescription.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+            sourceDescription.Format == DXGI_FORMAT_R32_FLOAT;
+        if (sourceDescription.SampleDesc.Count != 1 || request.mipLevel >= sourceDescription.MipLevels ||
+            request.layer >= sourceDescription.ArraySize || !supportedFormat) {
+            lastError_ = "D3D11 texture readback requires a single-sample supported color texture";
+            return false;
+        }
+        const auto mipWidth = std::max(1u, sourceDescription.Width >> request.mipLevel);
+        const auto mipHeight = std::max(1u, sourceDescription.Height >> request.mipLevel);
+        const auto readWidth = request.width == 0 ? mipWidth : request.width;
+        const auto readHeight = request.height == 0 ? mipHeight : request.height;
+        if (request.x > mipWidth || request.y > mipHeight || readWidth == 0 || readHeight == 0 ||
+            readWidth > mipWidth - request.x || readHeight > mipHeight - request.y) {
+            lastError_ = "D3D11 texture readback region is outside the selected mip";
+            return false;
+        }
+        const auto pixelSize = bytes_per_pixel(sourceDescription.Format);
+        if (readWidth > std::numeric_limits<std::size_t>::max() / pixelSize ||
+            readWidth * pixelSize > std::numeric_limits<std::size_t>::max() / readHeight ||
+            readWidth * pixelSize * readHeight > request.maxBytes) {
+            lastError_ = "D3D11 texture readback exceeds the requested byte limit";
+            return false;
+        }
+        D3D11_TEXTURE2D_DESC stagingDescription = sourceDescription;
+        stagingDescription.Width = readWidth;
+        stagingDescription.Height = readHeight;
+        stagingDescription.MipLevels = 1;
+        stagingDescription.ArraySize = 1;
+        stagingDescription.Usage = D3D11_USAGE_STAGING;
+        stagingDescription.BindFlags = 0;
+        stagingDescription.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        stagingDescription.MiscFlags = 0;
+        stagingDescription.SampleDesc.Count = 1;
+        stagingDescription.SampleDesc.Quality = 0;
+        ID3D11Texture2D* staging = nullptr;
+        if (FAILED(device_->CreateTexture2D(&stagingDescription, nullptr, &staging)) || !staging) {
+            lastError_ = "D3D11 staging texture creation failed for readback";
+            return false;
+        }
+        const D3D11_BOX sourceBox{request.x, request.y, 0,
+            request.x + readWidth, request.y + readHeight, 1};
+        const auto sourceSubresource = D3D11CalcSubresource(request.mipLevel, request.layer,
+                                                             sourceDescription.MipLevels);
+        context_->CopySubresourceRegion(staging, 0, 0, 0, 0, source, sourceSubresource, &sourceBox);
+        // A readback is an explicit synchronization point. Flush the
+        // immediate context before Map so diagnostics never observe a stale
+        // staging allocation on a deferred driver/WARP path.
+        context_->Flush();
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        const auto mapResult = context_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(mapResult) || !mapped.pData || mapped.RowPitch < readWidth * pixelSize) {
+            if (SUCCEEDED(mapResult)) context_->Unmap(staging, 0);
+            staging->Release();
+            lastError_ = "D3D11 staging texture map failed for readback";
+            return false;
+        }
+        const auto packedPitch = static_cast<std::size_t>(readWidth) * pixelSize;
+        result.width = readWidth;
+        result.height = readHeight;
+        result.rowPitch = packedPitch;
+        result.data.resize(packedPitch * readHeight);
+        for (std::uint32_t row = 0; row < readHeight; ++row) {
+            std::memcpy(result.data.data() + static_cast<std::size_t>(row) * packedPitch,
+                        static_cast<const std::uint8_t*>(mapped.pData) +
+                            static_cast<std::size_t>(row) * mapped.RowPitch,
+                        packedPitch);
+        }
+        context_->Unmap(staging, 0);
+        staging->Release();
+        return true;
+    }
     bool transition_resource(ResourceHandle handle, ResourceUsage usage) override {
         const auto it = resources_.find(handle.id);
         if (it == resources_.end() || it->second.kind != handle.kind || !context_ || !it->second.resource) {
@@ -1799,6 +1922,42 @@ public:
         if (!editorBackbuffer && color && colorIt != resources_.end() && colorIt->second.rtv) rtv = colorIt->second.rtv;
         if (depth && depthIt != resources_.end() && depthIt->second.dsv) dsv = depthIt->second.dsv;
         context_->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);
+    }
+    bool bind_editor_render_target(ResourceHandle color, ResourceHandle depth,
+                                   bool clearAttachments) override {
+        if (!context_) {
+            lastError_ = "D3D11 editor target bind has no device context";
+            return false;
+        }
+        ID3D11RenderTargetView* rtv = renderTarget_;
+        if (color) {
+            const auto colorIt = resources_.find(color.id);
+            if (color.kind != ResourceKind::Texture2D || colorIt == resources_.end() ||
+                !colorIt->second.rtv) {
+                lastError_ = "D3D11 editor target bind color resource is invalid";
+                return false;
+            }
+            rtv = colorIt->second.rtv;
+        }
+        ID3D11DepthStencilView* dsv = nullptr;
+        if (depth) {
+            const auto depthIt = resources_.find(depth.id);
+            if (depth.kind != ResourceKind::DepthStencil || depthIt == resources_.end() ||
+                !depthIt->second.dsv) {
+                lastError_ = "D3D11 editor target bind depth resource is invalid";
+                return false;
+            }
+            dsv = depthIt->second.dsv;
+        }
+        context_->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);
+        if (clearAttachments && rtv) {
+            constexpr float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            context_->ClearRenderTargetView(rtv, clear);
+        }
+        if (clearAttachments && dsv) {
+            context_->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+        }
+        return true;
     }
     void set_render_targets(const std::vector<ResourceHandle>& colors, ResourceHandle depth, bool clearAttachments) override {
         if (!context_) return;

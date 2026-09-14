@@ -151,14 +151,14 @@ full repaint，这是正确性要求，不要为了“看起来快”清空 Rend
 构建目录：
 
 ```text
-C:/Users/Lenovo/Desktop/Shinkou/Shinkou Engine/out/build/ui-current
+C:/Users/Lenovo/Desktop/Shinkou/Shinkou Engine/out/build/mingw-debug
 ```
 
 已执行并通过：
 
 ```powershell
-cmake --build out/build/ui-current -j 2
-ctest --test-dir out/build/ui-current --output-on-failure -j 2
+cmake --build out/build/mingw-debug -j 2
+ctest --test-dir out/build/mingw-debug --output-on-failure -j 2
 ```
 
 当前结果：`39/39 tests passed`。
@@ -322,8 +322,8 @@ brush/gradient/text/path cache 上限，以及 D3D11 immediate context 状态清
 6. 每个实现任务至少执行：
 
    ```powershell
-   cmake --build out/build/ui-current -j 2
-   ctest --test-dir out/build/ui-current --output-on-failure -j 2
+   cmake --build out/build/mingw-debug -j 2
+   ctest --test-dir out/build/mingw-debug --output-on-failure -j 2
    ```
 
 7. Windows/D3D11 UI 修改必须再运行 `shinkou_ui_capture --require-gpu` 并使用 `view_image`

@@ -22,6 +22,9 @@ int main() {
     bool directory = false;
     assert(files.exists("assets/materials", &directory) && directory);
     assert(files.exists("assets/materials/test.mat", &directory) && !directory);
+    const auto resolved = files.resolve_existing("assets/materials/test.mat");
+    assert(!resolved.empty() && resolved.filename() == "test.mat");
+    assert(files.resolve_existing("../outside.mat").empty());
 
     const auto entries = files.list("assets", false, 16);
     assert(entries.size() == 1 && entries.front().directory);
@@ -37,7 +40,12 @@ int main() {
     std::string content;
     assert(files.read_text("assets/materials/renamed.mat", content, &error));
     assert(content == "shader=flat\n");
+    bool truncated = false;
+    assert(files.read_text_limited("assets/materials/renamed.mat", 64, content, &truncated, &error));
+    assert(!truncated && content == "shader=flat\n");
     assert(files.write_text_atomic("assets/materials/renamed.mat", "replacement", &error));
+    assert(files.read_text_limited("assets/materials/renamed.mat", 4, content, &truncated, &error));
+    assert(truncated && content == "repl");
     assert(files.read_text("assets/materials/renamed.mat", content, &error) && content == "replacement");
     assert(!files.write_text_atomic("assets/materials", "must not replace a directory", &error));
     assert(files.exists("assets/materials/renamed.mat"));

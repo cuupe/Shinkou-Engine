@@ -35,6 +35,10 @@ void FileSystemService::set_root(std::filesystem::path root) {
     snapshotScope_.clear();
 }
 
+std::filesystem::path FileSystemService::resolve_existing(const std::filesystem::path& relative) const {
+    return resolve(relative, false);
+}
+
 std::filesystem::path FileSystemService::resolve(std::filesystem::path relative, bool allowMissing) const {
     if (relative.empty()) return root_;
     if (relative.is_absolute()) return {};
@@ -91,16 +95,33 @@ std::vector<FileEntry> FileSystemService::list(std::filesystem::path relative, b
 
 bool FileSystemService::read_text(const std::filesystem::path& relative, std::string& output,
                                   std::string* error) const {
+    bool truncated = false;
+    if (!read_text_limited(relative, 16u * 1024u * 1024u, output, &truncated, error)) return false;
+    if (truncated) {
+        output.clear();
+        set_error(error, "editor text file exceeds 16 MiB");
+        return false;
+    }
+    return true;
+}
+
+bool FileSystemService::read_text_limited(const std::filesystem::path& relative, std::size_t maxBytes,
+                                          std::string& output, bool* truncated, std::string* error) const {
+    if (truncated) *truncated = false;
     const auto path = resolve(relative, false);
     if (path.empty()) { set_error(error, "file path is outside the project root"); return false; }
-    std::ifstream file(path, std::ios::binary);
     std::error_code sizeError;
-    if (std::filesystem::file_size(path, sizeError) > 16 * 1024 * 1024 || sizeError) {
-        set_error(error, "editor text file exceeds 16 MiB or its size is unavailable"); return false;
-    }
+    const auto size = std::filesystem::file_size(path, sizeError);
+    const auto limit = std::min<std::uintmax_t>(maxBytes, 16u * 1024u * 1024u);
+    if (sizeError) { set_error(error, "editor text file size is unavailable"); return false; }
+    std::ifstream file(path, std::ios::binary);
     if (!file) { set_error(error, "cannot open file: " + path.string()); return false; }
-    output.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-    if (!file.good() && !file.eof()) { set_error(error, "cannot read file: " + path.string()); return false; }
+    const auto readSize = std::min<std::uintmax_t>(size, limit);
+    output.resize(static_cast<std::size_t>(readSize));
+    if (readSize != 0 && !file.read(output.data(), static_cast<std::streamsize>(readSize))) {
+        set_error(error, "cannot read file: " + path.string()); return false;
+    }
+    if (truncated) *truncated = size > limit;
     return true;
 }
 

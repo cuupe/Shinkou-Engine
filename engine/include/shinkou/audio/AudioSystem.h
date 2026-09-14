@@ -136,6 +136,12 @@ public:
     virtual void stop(AudioVoiceId voice, Seconds fadeOutSeconds) = 0;
     virtual void pause(AudioVoiceId voice) = 0;
     virtual void resume(AudioVoiceId voice) = 0;
+    // Optional transport seam. Backends that do not expose a decoder cursor
+    // may keep the default no-op/zero behavior; editor transport must report
+    // that limitation rather than inventing a hardware position.
+    virtual void seek(AudioVoiceId, double) {}
+    virtual double cursor_seconds(AudioVoiceId) const { return 0.0; }
+    virtual bool supports_cursor() const noexcept { return false; }
     virtual void set_volume(AudioVoiceId voice, float volume) = 0;
     virtual void set_pitch(AudioVoiceId voice, float pitch) = 0;
     virtual void set_pan(AudioVoiceId voice, float pan) = 0;
@@ -208,6 +214,9 @@ public:
     void stop(AudioVoiceId voice, Seconds fadeOutSeconds = 0.0f);
     void pause(AudioVoiceId voice);
     void resume(AudioVoiceId voice);
+    void seek(AudioVoiceId voice, double seconds);
+    double cursor_seconds(AudioVoiceId voice) const;
+    bool supports_cursor() const noexcept;
     void stop_all(AudioBus bus = AudioBus::Master, Seconds fadeOutSeconds = 0.0f);
     AudioVoiceState state(AudioVoiceId voice) const;
     bool is_playing(AudioVoiceId voice) const;

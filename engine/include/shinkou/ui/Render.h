@@ -34,6 +34,22 @@ enum class DrawCommandType : std::uint8_t {
 enum class TextAlign : std::uint8_t { Start, Center, End };
 enum class TextOverflow : std::uint8_t { Clip, Ellipsis };
 
+// Bounded, immutable pixels for a retained UI image. Providers decode on a
+// worker thread and publish one snapshot; backends may upload/cache it during
+// rasterization without touching the filesystem or a decoder from paint code.
+struct UiImageSnapshot {
+    std::uint64_t revision{0};
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    // Premultiplied BGRA8, matching the Direct2D UI surface format.
+    std::vector<std::uint8_t> bgraPremultiplied;
+
+    bool valid() const noexcept {
+        return revision != 0 && width != 0 && height != 0 &&
+            bgraPremultiplied.size() == static_cast<std::size_t>(width) * height * 4u;
+    }
+};
+
 struct UiDrawCommand {
     DrawCommandType type{DrawCommandType::Rect};
     Rect rect{};
@@ -48,6 +64,7 @@ struct UiDrawCommand {
     TextOverflow textOverflow{TextOverflow::Clip};
     std::string fontFamily{};
     std::uint64_t texture{0};
+    std::shared_ptr<const UiImageSnapshot> imageSnapshot{};
     std::string text{};
     // Immutable normalized vector geometry. Path points are mapped into
     // rect by the backend, so the same SVG geometry is reusable at any DPI.
@@ -115,6 +132,8 @@ public:
               std::string_view fontFamily = {}, TextAlign align = TextAlign::Start,
               TextOverflow overflow = TextOverflow::Clip);
     void image(Rect bounds, std::uint64_t texture, ThemeColor tint = ThemeColor{1, 1, 1, 1});
+    void image(Rect bounds, std::shared_ptr<const UiImageSnapshot> snapshot,
+               ThemeColor tint = ThemeColor{1, 1, 1, 1});
     void path(Rect bounds, std::shared_ptr<const std::vector<Vec2>> points,
               ThemeColor fill, ThemeColor stroke = {}, float thickness = 0.0f,
               bool closed = true, bool normalized = true);

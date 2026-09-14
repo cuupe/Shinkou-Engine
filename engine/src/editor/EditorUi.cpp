@@ -1,4 +1,7 @@
 #include "shinkou/editor/EditorUi.h"
+#include "shinkou/editor/EditorModelPreview.h"
+#include "shinkou/editor/EditorVideoPreview.h"
+#include "shinkou/editor/EditorAudioPreview.h"
 
 #include "shinkou/editor/EditorLayer.h"
 #include "shinkou/editor/FileSystem.h"
@@ -65,17 +68,21 @@ bool is_direct_child(const std::filesystem::path& path, const std::filesystem::p
 }
 
 AssetIconKind asset_icon_kind(const FileEntry& file) {
-    if (file.directory) return AssetIconKind::Folder;
-    const auto extension = lower_text(file.relativePath.extension().string());
-    if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".bmp" || extension == ".tga") return AssetIconKind::Image;
-    if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb" || extension == ".mesh") return AssetIconKind::Mesh;
-    if (extension == ".scene" || extension == ".world" || extension == ".json") return AssetIconKind::Scene;
-    if (extension == ".mat" || extension == ".material") return AssetIconKind::Material;
-    if (extension == ".wav" || extension == ".mp3" || extension == ".ogg" || extension == ".flac") return AssetIconKind::Audio;
-    if (extension == ".mp4" || extension == ".mov" || extension == ".webm") return AssetIconKind::Video;
-    if (extension == ".cs" || extension == ".cpp" || extension == ".h" || extension == ".hpp" || extension == ".lua") return AssetIconKind::Script;
-    if (extension == ".ttf" || extension == ".otf" || extension == ".ttc") return AssetIconKind::Font;
-    if (extension == ".zip" || extension == ".7z" || extension == ".tar" || extension == ".gz") return AssetIconKind::Archive;
+    switch (AssetPreviewCatalog::classify(file)) {
+    case AssetPreviewKind::Folder: return AssetIconKind::Folder;
+    case AssetPreviewKind::Image: return AssetIconKind::Image;
+    case AssetPreviewKind::Model: return AssetIconKind::Mesh;
+    case AssetPreviewKind::Scene: return AssetIconKind::Scene;
+    case AssetPreviewKind::Material: return AssetIconKind::Material;
+    case AssetPreviewKind::Audio: return AssetIconKind::Audio;
+    case AssetPreviewKind::Video: return AssetIconKind::Video;
+    case AssetPreviewKind::Text:
+    case AssetPreviewKind::Shader: return AssetIconKind::Script;
+    case AssetPreviewKind::Font: return AssetIconKind::Font;
+    case AssetPreviewKind::Archive: return AssetIconKind::Archive;
+    case AssetPreviewKind::Unknown:
+    case AssetPreviewKind::Binary: return AssetIconKind::File;
+    }
     return AssetIconKind::File;
 }
 
@@ -188,6 +195,8 @@ void EditorUi::shutdown() noexcept {
     lastAssetClickPath_.clear();
     tabDragActive_ = false;
     floatingDragActive_ = false;
+    assetDragActive_ = false;
+    assetDragPath_.clear();
     layoutPrepared_ = false;
     layoutWidth_ = 0.0f;
     layoutHeight_ = 0.0f;
@@ -322,6 +331,8 @@ void EditorUi::prune_regions() {
         tabDragActive_ = false;
         floatingDragActive_ = false;
         draggedPanelId_.clear();
+        assetDragActive_ = false;
+        assetDragPath_.clear();
     }
     if (!hotRegion_.empty() && activeRegions_.find(hotRegion_) == activeRegions_.end()) hotRegion_.clear();
 }
@@ -381,6 +392,31 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         return ui::EventResult::Handled;
     }
     const auto point = event.position;
+    if (id == "asset-model-preview") {
+        if (event.type == ui::UiEventType::Scroll) {
+            if (callbacks_.navigateModelPreview)
+                callbacks_.navigateModelPreview(ViewportNavigation::Zoom, {0.0f, event.delta.y});
+            mark_region_repaint(id); paintCacheValid_ = false;
+            return ui::EventResult::Handled;
+        }
+        if (event.type == ui::UiEventType::PointerDown && event.button == ui::PointerButton::Middle) {
+            modelPreviewDragging_ = true; viewportPointer_ = point;
+            runtime_.capture_pointer(widget); return ui::EventResult::Handled;
+        }
+        if (event.type == ui::UiEventType::PointerMove && modelPreviewDragging_) {
+            const math::Vec2 delta{point.x - viewportPointer_.x, point.y - viewportPointer_.y};
+            viewportPointer_ = point;
+            if (callbacks_.navigateModelPreview)
+                callbacks_.navigateModelPreview(ViewportNavigation::Orbit, delta);
+            mark_region_repaint(id); paintCacheValid_ = false;
+            return ui::EventResult::Handled;
+        }
+        if ((event.type == ui::UiEventType::PointerUp && event.button == ui::PointerButton::Middle) ||
+            event.type == ui::UiEventType::PointerCancel) {
+            modelPreviewDragging_ = false; runtime_.release_pointer(widget);
+            return ui::EventResult::Handled;
+        }
+    }
     if (event.type == ui::UiEventType::Scroll) for (const auto& panel : toolRects_) {
         if (panel.second.contains({point.x,point.y})) {
             toolScroll_[panel.first] = std::max(0.0f, toolScroll_[panel.first] - event.delta.y * 64.0f);
@@ -410,6 +446,17 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
     const float clientToolbarHeight = dockArea_.y;
     const float clientStatusHeight = std::max(0.0f, physicalHeight_ / dpiScale_ - dockArea_.y - dockArea_.height);
     if (event.type == ui::UiEventType::PointerMove) {
+        if (!assetDragPath_.empty() && activeRegion_.rfind("asset:", 0) == 0) {
+            if (!assetDragActive_ && std::hypot(point.x - pointerDownPosition_.x,
+                                                point.y - pointerDownPosition_.y) >= 5.0f) {
+                assetDragActive_ = true;
+            }
+            if (assetDragActive_) {
+                viewportPointer_ = point;
+                mark_full_repaint();
+                paintCacheValid_ = false;
+            }
+        }
         if (hotRegion_ != id) {
             mark_region_repaint(hotRegion_);
             mark_region_repaint(id);
@@ -593,6 +640,17 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         draggedPanelId_.clear();
         tabDragActive_ = false;
         floatingDragActive_ = false;
+        assetDragActive_ = false;
+        assetDragPath_.clear();
+        if (id.rfind("asset:", 0) == 0) {
+            const auto action = assetActions_.find(std::string(id));
+            // Keep the path for folders too. A click still navigates normally,
+            // while a drag can reach the editor boundary validator and report
+            // why a folder is not instantiable in the viewport.
+            if (action != assetActions_.end() && !action->second.path.empty()) {
+                assetDragPath_ = action->second.path;
+            }
+        }
         if (id.rfind("tab:", 0) == 0 && allowDocking_) {
             const auto action = tabActions_.find(std::string(id));
             if (action != tabActions_.end()) draggedPanelId_ = action->second.panelId;
@@ -613,12 +671,24 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         const auto active = activeRegion_;
         mark_region_repaint(active);
         mark_region_repaint(id);
+        const bool assetDrag = assetDragActive_ && !assetDragPath_.empty();
+        const auto assetPath = assetDragPath_;
+        const bool droppedInViewport = viewportRect_.contains({point.x, point.y});
         activeRegion_.clear();
-        const bool wasDrag = tabDragActive_ || floatingDragActive_;
+        const bool wasDrag = tabDragActive_ || floatingDragActive_ || assetDrag;
         draggedPanelId_.clear();
         tabDragActive_ = false;
         floatingDragActive_ = false;
+        assetDragActive_ = false;
+        assetDragPath_.clear();
         runtime_.release_pointer(widget);
+        if (assetDrag) {
+            if (droppedInViewport && callbacks_.dropAssetToViewport)
+                callbacks_.dropAssetToViewport(assetPath, {point.x, point.y});
+            mark_full_repaint();
+            paintCacheValid_ = false;
+            return ui::EventResult::Handled;
+        }
         const auto hit = regionRects_.find(std::string(id));
         if (!wasDrag && !active.empty() && active == id && hit != regionRects_.end() && hit->second.contains(point)) activate_region(id, point);
         return ui::EventResult::Handled;
@@ -629,6 +699,8 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         draggedPanelId_.clear();
         tabDragActive_ = false;
         floatingDragActive_ = false;
+        assetDragActive_ = false;
+        assetDragPath_.clear();
         runtime_.release_pointer(widget);
         return ui::EventResult::Handled;
     }
@@ -754,6 +826,26 @@ void EditorUi::activate_region(std::string_view id, ui::Vec2 position) {
     // filesystem contents), so its repaint boundary is the whole editor.
     // Pure hover/press transitions stay on the dirty-rectangle path.
     mark_full_repaint();
+    if (id == "asset-model-preview-reset") {
+        if (callbacks_.resetModelPreview) callbacks_.resetModelPreview();
+        return;
+    }
+    if (id == "asset-model-material-prev") {
+        if (callbacks_.selectModelMaterial) callbacks_.selectModelMaterial(-1);
+        return;
+    }
+    if (id == "asset-model-material-next") {
+        if (callbacks_.selectModelMaterial) callbacks_.selectModelMaterial(1);
+        return;
+    }
+    if (id == "asset-model-texture-prev") {
+        if (callbacks_.selectModelTexture) callbacks_.selectModelTexture(-1);
+        return;
+    }
+    if (id == "asset-model-texture-next") {
+        if (callbacks_.selectModelTexture) callbacks_.selectModelTexture(1);
+        return;
+    }
     if (id.rfind("field:", 0) == 0) {
         const auto f = inspectorFields_.find(std::string(id));
         if (f == inspectorFields_.end() || !f->second.editable) return;
@@ -933,6 +1025,15 @@ void EditorUi::activate_region(std::string_view id, ui::Vec2 position) {
         callbacks_.setViewMode(id.substr(5));
         return;
     }
+    if (id == "media-timeline") {
+        const auto found = regionRects_.find(std::string(id));
+        if (found != regionRects_.end() && found->second.width > 0.0f && callbacks_.command) {
+            const auto normalized = std::clamp(
+                (position.x - found->second.x) / found->second.width, 0.0f, 1.0f);
+            callbacks_.command(EditorCommand::MediaSeek, std::to_string(normalized));
+        }
+        return;
+    }
     (void)position;
 }
 
@@ -1072,6 +1173,7 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showRenderGraph));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showSettings));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showMedia));
+    mix_key(paintKey, static_cast<std::uint64_t>(layout.showBuild));
     mix_key(paintKey, std::hash<std::string_view>{}(hotRegion_));
     mix_key(paintKey, std::hash<std::string_view>{}(activeRegion_));
     mix_key(paintKey, std::hash<std::string_view>{}(draggedPanelId_));
@@ -1252,6 +1354,7 @@ void EditorUi::draw_toolbar(const EditorUiModel& model, const render::Renderer& 
     button("step", "Step", EditorCommand::Step);
     x += 8.0f;
     button("save", "Save", EditorCommand::SaveScene);
+    button("build", "Build", EditorCommand::BuildProject);
     button("reset", "Reset", EditorCommand::ResetLayout);
     renderList_.text({x + 12.0f, bar.y + 12.0f, 300.0f, 18.0f}, renderer.last_error().empty() ? "Scene Editor" : "Renderer diagnostic",
                       renderer.last_error().empty() ? color(layout.theme == "light" ? "#69717D" : "#9BA3AF") : color("#F29B8F"), 12.0f);
@@ -1283,7 +1386,8 @@ void EditorUi::draw_dock(const EditorUiModel& model, const std::vector<FileEntry
         else if (panel.panelId == "profiler") draw_tools_panel(content, "profiler", renderer, layout);
         else if (panel.panelId == "render-graph") draw_tools_panel(content, "render-graph", renderer, layout);
         else if (panel.panelId == "settings") draw_tools_panel(content, "settings", renderer, layout);
-        else if (panel.panelId == "media") draw_generic_panel(content, "media", mediaPanel.description().title, layout);
+        else if (panel.panelId == "build") draw_build_panel(content, model, layout);
+        else if (panel.panelId == "media") draw_media_panel(content, model, mediaPanel, layout);
         else draw_generic_panel(content, panel.panelId, panel.title, layout);
         renderList_.end_clip();
         regionClipActive_ = false;
@@ -1438,6 +1542,7 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
             return;
         }
 
+        const auto descriptor = previewCatalog_.describe(*found);
         const auto kind = asset_icon_kind(*found);
         const auto accent = color(asset_icon_color_hex(kind, layout.theme));
         const auto icon = ui::Rect{bounds.x, bounds.y + 24.0f, 42.0f, 32.0f};
@@ -1461,35 +1566,177 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
         if (preview.height > 0.0f) {
             renderList_.rect(preview, color(layout.theme == "light" ? "#F5F6F8" : "#202226"), 4.0f);
             renderList_.border(preview, border, 1.0f, 4.0f);
-            const auto title = kind == AssetIconKind::Image ? "Texture Preview" :
-                kind == AssetIconKind::Mesh ? "Mesh Preview" :
-                kind == AssetIconKind::Scene ? "Scene Document" :
-                kind == AssetIconKind::Material ? "Material Properties" :
-                kind == AssetIconKind::Audio ? "Audio Preview" :
-                kind == AssetIconKind::Video ? "Video Preview" :
-                kind == AssetIconKind::Script ? "Text Resource" :
-                kind == AssetIconKind::Font ? "Font Preview" :
-                kind == AssetIconKind::Archive ? "Archive Contents" :
-                kind == AssetIconKind::Folder ? "Folder Contents" : "File Details";
             renderList_.text({preview.x + 12.0f, preview.y + 10.0f,
-                              std::max(0.0f, preview.width - 24.0f), 20.0f}, title, text, 12.0f,
+                              std::max(0.0f, preview.width - 24.0f), 20.0f}, descriptor.previewTitle, text, 12.0f,
                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
-            const auto previewIcon = ui::Rect{preview.x + preview.width * 0.5f - 24.0f,
-                                              preview.y + 42.0f, 48.0f, 36.0f};
-            if (!iconLibrary_.paint(renderList_, previewIcon, kind, accent, iconInk, iconPaper))
-                renderList_.text(previewIcon, asset_icon_code(kind), text, 9.0f, {}, ui::TextAlign::Center);
-            const auto hint = kind == AssetIconKind::Folder ? "Double-click to open this folder" :
-                kind == AssetIconKind::Image ? "No texture preview provider" :
-                kind == AssetIconKind::Mesh ? "No mesh preview provider" :
-                kind == AssetIconKind::Scene ? "Scene document actions" :
-                kind == AssetIconKind::Material ? "Material editor actions" :
-                kind == AssetIconKind::Audio || kind == AssetIconKind::Video ? "No media decoder registered" :
-                kind == AssetIconKind::Script ? "Text editor actions" :
-                kind == AssetIconKind::Font ? "Font preview actions" :
-                kind == AssetIconKind::Archive ? "Archive browser actions" : "Resource actions";
-            renderList_.text({preview.x + 10.0f, preview.y + 90.0f,
-                              std::max(0.0f, preview.width - 20.0f), 32.0f}, hint, muted, 10.0f,
-                             {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+            const auto& previewState = model.asset_preview();
+            std::string previewStatus = previewState.status;
+            if (!previewState.assetSystemStatus.empty() &&
+                previewState.assetSystemStatus != "AssetSystem not connected") {
+                previewStatus += " | " + previewState.assetSystemStatus;
+                if (previewState.assetSystemReady && !previewState.assetSystemFormat.empty())
+                    previewStatus += " (" + previewState.assetSystemFormat + ")";
+                if (previewState.assetSystemReady && !previewState.assetSystemMetadataFormat.empty())
+                    previewStatus += " [" + previewState.assetSystemMetadataFormat + ", " +
+                                     std::to_string(previewState.assetSystemMetadataBytes) + "B]";
+            }
+            if (descriptor.kind == AssetPreviewKind::Text && previewState.path == selectedAsset_) {
+                const auto code = ui::Rect{preview.x + 8.0f, preview.y + 34.0f,
+                                           std::max(0.0f, preview.width - 16.0f),
+                                           std::max(0.0f, preview.height - 62.0f)};
+                renderList_.rect(code, color(layout.theme == "light" ? "#FFFFFF" : "#17191D"), 3.0f);
+                renderList_.border(code, border, 1.0f, 3.0f);
+                if (previewState.loading) {
+                    renderList_.text({code.x + 8.0f, code.y + 8.0f, std::max(0.0f, code.width - 16.0f), 18.0f},
+                                     previewStatus, muted, 10.0f, {}, ui::TextAlign::Start,
+                                     ui::TextOverflow::Ellipsis);
+                } else {
+                    const std::size_t rows = std::min<std::size_t>(previewState.textLines.size(),
+                        static_cast<std::size_t>(std::max(0.0f, code.height - 8.0f) / 15.0f));
+                    for (std::size_t index = 0; index < rows; ++index) {
+                        std::string line = std::to_string(index + 1) + " | " + previewState.textLines[index];
+                        if (line.size() > 240) line.resize(240);
+                        renderList_.text({code.x + 8.0f, code.y + 4.0f + static_cast<float>(index) * 15.0f,
+                                          std::max(0.0f, code.width - 16.0f), 15.0f}, line,
+                                         color(layout.theme == "light" ? "#4E5865" : "#AAB4C2"), 9.0f,
+                                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+                    }
+                }
+                renderList_.text({preview.x + 10.0f, preview.bottom() - 22.0f,
+                                  std::max(0.0f, preview.width - 20.0f), 16.0f},
+                                 previewStatus, muted, 9.0f, {}, ui::TextAlign::End,
+                                 ui::TextOverflow::Ellipsis);
+            } else if (descriptor.kind == AssetPreviewKind::Image &&
+                       previewState.path == selectedAsset_) {
+                const auto imageArea = ui::Rect{preview.x + 8.0f, preview.y + 34.0f,
+                                                std::max(0.0f, preview.width - 16.0f),
+                                                std::max(0.0f, preview.height - 62.0f)};
+                if (previewState.loading) {
+                    renderList_.text(imageArea, previewStatus, muted, 10.0f,
+                                     {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+                } else if (previewState.imageSnapshot && previewState.imageSnapshot->valid()) {
+                    const float sourceWidth = static_cast<float>(previewState.imageSnapshot->width);
+                    const float sourceHeight = static_cast<float>(previewState.imageSnapshot->height);
+                    const float scale = std::min(imageArea.width / sourceWidth, imageArea.height / sourceHeight);
+                    const auto imageRect = ui::Rect{
+                        imageArea.x + (imageArea.width - sourceWidth * scale) * 0.5f,
+                        imageArea.y + (imageArea.height - sourceHeight * scale) * 0.5f,
+                        sourceWidth * scale, sourceHeight * scale};
+                    renderList_.image(imageRect, previewState.imageSnapshot);
+                } else {
+                    const auto previewIcon = ui::Rect{preview.x + preview.width * 0.5f - 24.0f,
+                                                      preview.y + 42.0f, 48.0f, 36.0f};
+                    if (!iconLibrary_.paint(renderList_, previewIcon, kind, accent, iconInk, iconPaper))
+                        renderList_.text(previewIcon, asset_icon_code(kind), text, 9.0f, {}, ui::TextAlign::Center);
+                }
+                renderList_.text({preview.x + 10.0f, preview.bottom() - 22.0f,
+                                  std::max(0.0f, preview.width - 20.0f), 16.0f},
+                                 previewStatus, muted, 9.0f, {}, ui::TextAlign::End,
+                                 ui::TextOverflow::Ellipsis);
+            } else if (descriptor.kind == AssetPreviewKind::Model &&
+                       previewState.path == selectedAsset_) {
+                const auto modelArea = ui::Rect{preview.x + 8.0f, preview.y + 34.0f,
+                                                std::max(0.0f, preview.width - 16.0f),
+                                                std::max(0.0f, preview.height - 62.0f)};
+                set_region("asset-model-preview", modelArea, true);
+                renderList_.rect(modelArea, color(layout.theme == "light" ? "#ECEEF2" : "#17191D"), 3.0f);
+                if (previewState.loading) {
+                    renderList_.text(modelArea, previewStatus, muted, 10.0f,
+                                     {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+                } else if (previewState.modelPreview && previewState.modelPreview->valid()) {
+                    const float selectorWidth = std::max(0.0f, modelArea.width - 150.0f);
+                    draw_button({modelArea.x + 8.0f, modelArea.y + 6.0f, 24.0f, 21.0f},
+                                "asset-model-material-prev", "<", layout, false);
+                    draw_button({modelArea.x + 36.0f, modelArea.y + 6.0f, 24.0f, 21.0f},
+                                "asset-model-material-next", ">", layout, false);
+                    renderList_.text({modelArea.x + 66.0f, modelArea.y + 7.0f, selectorWidth, 18.0f},
+                                     previewState.modelMaterialLabel.empty()
+                                         ? "Material: none"
+                                         : previewState.modelMaterialLabel,
+                                     muted, 9.0f, {}, ui::TextAlign::Start,
+                                     ui::TextOverflow::Ellipsis);
+                    draw_button({modelArea.x + 8.0f, modelArea.y + 31.0f, 24.0f, 21.0f},
+                                "asset-model-texture-prev", "<", layout, false);
+                    draw_button({modelArea.x + 36.0f, modelArea.y + 31.0f, 24.0f, 21.0f},
+                                "asset-model-texture-next", ">", layout, false);
+                    const auto textureLabel = previewState.modelTextureRole.empty()
+                        ? (previewState.modelTextureLabel.empty() ? "Texture: none" : previewState.modelTextureLabel)
+                        : previewState.modelTextureRole + ": " + previewState.modelTextureLabel;
+                    renderList_.text({modelArea.x + 66.0f, modelArea.y + 32.0f, selectorWidth, 18.0f},
+                                     textureLabel, muted, 9.0f, {}, ui::TextAlign::Start,
+                                     ui::TextOverflow::Ellipsis);
+                    if (previewState.modelTextureSnapshot && previewState.modelTextureSnapshot->valid()) {
+                        const float textureWidth = static_cast<float>(previewState.modelTextureSnapshot->width);
+                        const float textureHeight = static_cast<float>(previewState.modelTextureSnapshot->height);
+                        const float textureScale = std::min(96.0f / textureWidth, 72.0f / textureHeight);
+                        const auto textureRect = ui::Rect{
+                            modelArea.right() - textureWidth * textureScale - 10.0f,
+                            modelArea.y + 30.0f,
+                            textureWidth * textureScale,
+                            textureHeight * textureScale};
+                        renderList_.rect(textureRect, color(layout.theme == "light" ? "#FFFFFF" : "#20242B"), 2.0f);
+                        renderList_.image(textureRect, previewState.modelTextureSnapshot);
+                        renderList_.border(textureRect, color(layout.theme == "light" ? "#C9D1DC" : "#465161"), 1.0f, 2.0f);
+                    }
+                    const auto wire = previewState.modelPreviewScene &&
+                        previewState.modelPreviewScene->valid()
+                        ? previewState.modelPreviewScene->wireSegments
+                        : previewState.modelPreview->wireSegments;
+                    const auto ink = color(layout.theme == "light" ? "#3B78B8" : "#82B7F2");
+                    const auto inner = ui::Rect{modelArea.x + 8.0f, modelArea.y + 6.0f,
+                                               std::max(0.0f, modelArea.width - 16.0f),
+                                               std::max(0.0f, modelArea.height - 12.0f)};
+                    for (std::size_t index = 0; wire && index + 1 < wire->size(); index += 2) {
+                        const auto map = [&](const ui::Vec2& point) {
+                            return ui::Vec2{inner.x + std::clamp(point.x, 0.0f, 1.0f) * inner.width,
+                                            inner.y + std::clamp(point.y, 0.0f, 1.0f) * inner.height};
+                        };
+                        renderList_.line(map((*wire)[index]), map((*wire)[index + 1]), ink, 1.0f);
+                    }
+                    const auto& modelPreview = *previewState.modelPreview;
+                    const auto stats = modelPreview.sourceFormat + "  " +
+                        std::to_string(modelPreview.vertexCount) + " verts  " +
+                        std::to_string(modelPreview.triangleCount) + " tris  " +
+                        std::to_string(modelPreview.meshCount) + " meshes  " +
+                        std::to_string(modelPreview.materialCount) + " mats  " +
+                        std::to_string(modelPreview.textureCount) + " tex";
+                    renderList_.text({modelArea.x + 8.0f, modelArea.bottom() - 18.0f,
+                                      std::max(0.0f, modelArea.width - 16.0f), 16.0f},
+                                     stats, muted, 9.0f, {}, ui::TextAlign::End,
+                                     ui::TextOverflow::Ellipsis);
+                    if (!previewState.modelTextureStatus.empty()) {
+                        renderList_.text({modelArea.x + 8.0f, modelArea.bottom() - 34.0f,
+                                          std::max(0.0f, modelArea.width - 16.0f), 14.0f},
+                                         previewState.modelTextureStatus, muted, 8.0f, {},
+                                         ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+                    }
+                    if (!previewState.modelGpuPreviewStatus.empty()) {
+                        renderList_.text({modelArea.x + 8.0f, modelArea.bottom() - 50.0f,
+                                          std::max(0.0f, modelArea.width - 16.0f), 14.0f},
+                                         previewState.modelGpuPreviewStatus, muted, 8.0f, {},
+                                         ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+                    }
+                    const auto reset = ui::Rect{modelArea.right() - 58.0f, modelArea.y + 6.0f, 50.0f, 21.0f};
+                    draw_button(reset, "asset-model-preview-reset", "Reset", layout, false);
+                } else {
+                    const auto previewIcon = ui::Rect{preview.x + preview.width * 0.5f - 24.0f,
+                                                      preview.y + 42.0f, 48.0f, 36.0f};
+                    if (!iconLibrary_.paint(renderList_, previewIcon, kind, accent, iconInk, iconPaper))
+                        renderList_.text(previewIcon, asset_icon_code(kind), text, 9.0f, {}, ui::TextAlign::Center);
+                }
+                renderList_.text({preview.x + 10.0f, preview.bottom() - 22.0f,
+                                  std::max(0.0f, preview.width - 20.0f), 16.0f},
+                                 previewStatus, muted, 9.0f, {}, ui::TextAlign::End,
+                                 ui::TextOverflow::Ellipsis);
+            } else {
+                const auto previewIcon = ui::Rect{preview.x + preview.width * 0.5f - 24.0f,
+                                                  preview.y + 42.0f, 48.0f, 36.0f};
+                if (!iconLibrary_.paint(renderList_, previewIcon, kind, accent, iconInk, iconPaper))
+                    renderList_.text(previewIcon, asset_icon_code(kind), text, 9.0f, {}, ui::TextAlign::Center);
+                renderList_.text({preview.x + 10.0f, preview.y + 90.0f,
+                                  std::max(0.0f, preview.width - 20.0f), 32.0f}, descriptor.statusMessage, muted, 10.0f,
+                                 {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+            }
         }
         return;
     }
@@ -1539,6 +1786,17 @@ void EditorUi::draw_viewport(const DockRect& value, const EditorUiModel&, const 
     renderList_.text({bounds.x + 12.0f, bounds.y + 12.0f, titleWidth, 18.0f}, "Scene Viewport",
                      color(layout.theme == "light" ? "#DDE2E8" : "#A6AFBC"), 12.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    if (assetDragActive_ && !assetDragPath_.empty() &&
+        bounds.contains({viewportPointer_.x, viewportPointer_.y})) {
+        const auto dropColor = color(layout.theme == "light" ? "#2F73B7" : "#78A9E8");
+        renderList_.border({bounds.x + 4.0f, bounds.y + 4.0f,
+                            std::max(0.0f, bounds.width - 8.0f), std::max(0.0f, bounds.height - 8.0f)},
+                           dropColor, 2.0f, 5.0f);
+        renderList_.text({bounds.x + 18.0f, bounds.y + 38.0f,
+                          std::max(0.0f, bounds.width - 36.0f), 18.0f},
+                         "Drop " + std::filesystem::path(assetDragPath_).filename().string() + " to create an asset reference",
+                         dropColor, 11.0f, {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+    }
     renderList_.text({bounds.x + 12.0f, bottom - 26.0f, std::max(0.0f, bounds.width - 24.0f), 18.0f},
                      "MMB orbit · Shift+MMB pan · Wheel zoom · F frame", color("#9AA3AF"), 11.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
@@ -1898,6 +2156,365 @@ void EditorUi::draw_console(const DockRect& value, const render::Renderer& rende
     if (!renderer.last_error().empty() && cursor + 18.0f <= bounds.y + bounds.height)
         renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, renderer.last_error(), color("#F29B8F"), 11.0f,
                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+}
+
+void EditorUi::draw_build_panel(const DockRect& value, const EditorUiModel& model,
+                                const EditorLayoutState& layout) {
+    const auto bounds = inset(value, 10.0f);
+    const auto text = color(layout.theme == "light" ? "#3F464F" : "#CBD1DA");
+    const auto muted = color(layout.theme == "light" ? "#7A828D" : "#8F98A5");
+    const auto border = color(layout.theme == "light" ? "#D3D7DD" : "#393D45");
+    const auto surface = color(layout.theme == "light" ? "#F5F6F8" : "#202226");
+    const auto& build = model.build_state();
+    const auto statusColor = build.running ? color("#78A9E8") :
+        build.status.find("Succeeded") != std::string::npos ? color("#83C997") :
+        build.status.find("failed") != std::string::npos || build.status.find("unavailable") != std::string::npos ? color("#F29B8F") : muted;
+
+    renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, build.profileName, text, 13.0f,
+                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    renderList_.text({bounds.x, bounds.y + 21.0f, bounds.width, 18.0f}, build.status, statusColor, 11.0f,
+                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    const float profileMetaWidth = std::max(90.0f, bounds.width * 0.48f);
+    renderList_.text({bounds.x, bounds.y + 37.0f, profileMetaWidth, 16.0f}, build.profileStatus, muted, 10.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    renderList_.text({bounds.x, bounds.y + 52.0f, profileMetaWidth, 16.0f}, build.ideStatus, muted, 10.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+
+    const auto compactProfileField = [&](std::string_view fieldId, std::string_view label, float y) {
+        const auto found = std::find_if(build.profileFields.begin(), build.profileFields.end(),
+                                        [fieldId](const auto& field) { return field.id == fieldId; });
+        if (found == build.profileFields.end()) return;
+        const std::string region = "field:" + std::string(fieldId);
+        inspectorFields_[region] = *found;
+        const float x = bounds.x + profileMetaWidth + 8.0f;
+        renderList_.text({x, y + 3.0f, 52.0f, 18.0f}, label, muted, 10.0f,
+                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        draw_input({x + 56.0f, y, std::max(0.0f, bounds.x + bounds.width - x - 56.0f), 22.0f},
+                   region, found->value, layout);
+    };
+    compactProfileField("build-profile.name", "Name", bounds.y + 34.0f);
+    compactProfileField("build-profile.buildDirectory", "Build", bounds.y + 59.0f);
+
+    // Keep profile selection in the compact header so the normal build
+    // controls remain visible even in a short dock. Editing expands only on
+    // demand and therefore cannot silently hide Build/IDE actions.
+    const std::size_t profileCount = std::min<std::size_t>(build.profileIds.size(), 4);
+    const float profileSelectorWidth = profileCount == 0 ? 0.0f :
+        std::clamp((bounds.width - static_cast<float>(profileCount - 1) * 4.0f) /
+                   static_cast<float>(profileCount), 44.0f, 78.0f);
+    for (std::size_t index = 0; index < profileCount; ++index) {
+        const auto& profileId = build.profileIds[index];
+        const auto id = command_key("build-panel-profile", profileId);
+        commandActions_[id] = {EditorCommand::SelectBuildProfile, profileId};
+        draw_button({bounds.x + static_cast<float>(index) * (profileSelectorWidth + 4.0f), bounds.y,
+                     profileSelectorWidth, 22.0f}, id, profileId,
+                     layout, profileId == build.selectedProfileId);
+    }
+
+    const auto diagnosticFilterButton = [&](std::string_view filter, std::string label, std::size_t count) {
+        const auto id = command_key("build-diagnostic-filter", filter);
+        commandActions_[id] = {EditorCommand::SetDiagnosticFilter, std::string(filter)};
+        return std::pair{id, label + " " + std::to_string(count)};
+    };
+    const auto allFilter = diagnosticFilterButton("all", "All", build.diagnosticTotalCount);
+    const auto errorFilter = diagnosticFilterButton("errors", "Err", build.diagnosticErrorCount);
+    const auto warningFilter = diagnosticFilterButton("warnings", "Warn", build.diagnosticWarningCount);
+    const auto noteFilter = diagnosticFilterButton("notes", "Note", build.diagnosticNoteCount);
+    const float filterWidth = std::clamp((bounds.width - 9.0f) / 4.0f, 32.0f, 52.0f);
+    const float filterX = bounds.x + bounds.width - (filterWidth * 4.0f + 9.0f);
+    const float filterY = bounds.y + 24.0f;
+    draw_button({filterX, filterY, filterWidth, 18.0f}, allFilter.first, allFilter.second, layout,
+                build.diagnosticFilter == "all");
+    draw_button({filterX + filterWidth + 3.0f, filterY, filterWidth, 18.0f}, errorFilter.first, errorFilter.second, layout,
+                build.diagnosticFilter == "errors");
+    draw_button({filterX + (filterWidth + 3.0f) * 2.0f, filterY, filterWidth, 18.0f}, warningFilter.first, warningFilter.second, layout,
+                build.diagnosticFilter == "warnings");
+    draw_button({filterX + (filterWidth + 3.0f) * 3.0f, filterY, filterWidth, 18.0f}, noteFilter.first, noteFilter.second, layout,
+                build.diagnosticFilter == "notes");
+
+    const float buttonY = bounds.y + 72.0f;
+    const float buttonWidth = std::clamp((bounds.width - 16.0f) / 3.0f, 62.0f, 104.0f);
+    const auto buildCommand = command_key("build-panel-build");
+    const auto cancelCommand = command_key("build-panel-cancel");
+    const auto refreshCommand = command_key("build-panel-refresh");
+    const auto importCommands = command_key("build-panel-import-compile-commands");
+    const auto exportCommands = command_key("build-panel-export-compile-commands");
+    const auto visualStudioCommand = command_key("build-panel-open-visual-studio");
+    const auto riderCommand = command_key("build-panel-open-rider");
+    const auto vscodeCommand = command_key("build-panel-open-vscode");
+    const auto saveProfileCommand = command_key("build-panel-save-profile");
+    const auto reloadProfileCommand = command_key("build-panel-reload-profile");
+    commandActions_[buildCommand] = {EditorCommand::BuildProject, {}};
+    commandActions_[cancelCommand] = {EditorCommand::CancelBuild, {}};
+    commandActions_[refreshCommand] = {EditorCommand::RefreshBuildTools, {}};
+    commandActions_[importCommands] = {EditorCommand::ImportCompileCommands, {}};
+    commandActions_[exportCommands] = {EditorCommand::ExportCompileCommands, {}};
+    commandActions_[visualStudioCommand] = {EditorCommand::OpenProjectInIde, "visual-studio"};
+    commandActions_[riderCommand] = {EditorCommand::OpenProjectInIde, "rider"};
+    commandActions_[vscodeCommand] = {EditorCommand::OpenProjectInIde, "vscode"};
+    commandActions_[saveProfileCommand] = {EditorCommand::SaveBuildProfile, {}};
+    commandActions_[reloadProfileCommand] = {EditorCommand::ReloadBuildProfile, {}};
+    draw_button({bounds.x, buttonY, buttonWidth, 25.0f}, buildCommand, "Build", layout, !build.running);
+    draw_button({bounds.x + buttonWidth + 8.0f, buttonY, buttonWidth, 25.0f}, cancelCommand, "Cancel", layout, build.running);
+    draw_button({bounds.x + (buttonWidth + 8.0f) * 2.0f, buttonY, buttonWidth, 25.0f}, refreshCommand, "Refresh", layout);
+
+    const float toolButtonY = buttonY + 32.0f;
+    const float toolButtonWidth = std::clamp((bounds.width - 8.0f) / 2.0f, 96.0f, 150.0f);
+    draw_button({bounds.x, toolButtonY, toolButtonWidth, 25.0f}, importCommands, "Import Commands", layout);
+    draw_button({bounds.x + toolButtonWidth + 8.0f, toolButtonY, toolButtonWidth, 25.0f}, exportCommands, "Export Commands", layout,
+                 build.compileCommandCount != 0);
+
+    const float ideY = toolButtonY + 32.0f;
+    const float ideButtonWidth = std::clamp((bounds.width - 16.0f) / 3.0f, 72.0f, 116.0f);
+    draw_button({bounds.x, ideY, ideButtonWidth, 25.0f}, visualStudioCommand, "Visual Studio", layout);
+    draw_button({bounds.x + ideButtonWidth + 8.0f, ideY, ideButtonWidth, 25.0f}, riderCommand, "Rider", layout);
+    draw_button({bounds.x + (ideButtonWidth + 8.0f) * 2.0f, ideY, ideButtonWidth, 25.0f}, vscodeCommand, "VS Code", layout);
+    const float profileY = ideY + 32.0f;
+    const float profileButtonWidth = std::clamp((bounds.width - 32.0f) / 5.0f, 52.0f, 104.0f);
+    const auto refreshProjects = command_key("build-panel-refresh-project-files");
+    const auto associateProject = command_key("build-panel-associate-project-file");
+    const auto generateClangd = command_key("build-panel-generate-clangd");
+    commandActions_[refreshProjects] = {EditorCommand::RefreshProjectFiles, {}};
+    commandActions_[associateProject] = {EditorCommand::AssociateProjectFile, build.recommendedProjectFile};
+    commandActions_[generateClangd] = {EditorCommand::GenerateClangdConfig, {}};
+    draw_button({bounds.x, profileY, profileButtonWidth, 25.0f}, saveProfileCommand, "Save Profile", layout);
+    draw_button({bounds.x + profileButtonWidth + 8.0f, profileY, profileButtonWidth, 25.0f}, reloadProfileCommand, "Reload Profile", layout);
+    draw_button({bounds.x + (profileButtonWidth + 8.0f) * 2.0f, profileY, profileButtonWidth, 25.0f},
+                refreshProjects, "Projects", layout);
+    draw_button({bounds.x + (profileButtonWidth + 8.0f) * 3.0f, profileY, profileButtonWidth, 25.0f},
+                associateProject, "Associate", layout, !build.recommendedProjectFile.empty());
+    draw_button({bounds.x + (profileButtonWidth + 8.0f) * 4.0f, profileY, profileButtonWidth, 25.0f},
+                generateClangd, "Clangd", layout,
+                build.clangdStatus.find("No compile_commands") == std::string::npos);
+
+    float cursor = profileY + 42.0f;
+    const auto heading = [&](std::string_view label) {
+        renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, label, text, 11.0f,
+                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        cursor += 20.0f;
+    };
+    heading("Compile Commands");
+    renderList_.text({bounds.x, cursor, bounds.width, 18.0f},
+                     std::to_string(build.compileCommandCount) + " entries  ·  " + build.compileCommandsStatus,
+                     build.compileCommandCount == 0 ? muted : text, 10.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    cursor += 22.0f;
+
+    heading("Toolchains");
+    if (build.tools.empty()) {
+        renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, "No toolchains discovered", muted, 11.0f,
+                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        cursor += 18.0f;
+    } else {
+        const auto rows = std::min<std::size_t>(build.tools.size(), 6);
+        for (std::size_t index = 0; index < rows && cursor + 18.0f <= bounds.y + bounds.height; ++index) {
+            const auto& tool = build.tools[index];
+            const std::string label = std::string(tool.available ? "●  " : "○  ") + tool.name +
+                (tool.executable.empty() ? std::string{} : "  " + tool.executable);
+            renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, label,
+                              tool.available ? text : muted, 10.0f, {}, ui::TextAlign::Start,
+                              ui::TextOverflow::Ellipsis);
+            cursor += 18.0f;
+        }
+    }
+
+    cursor += 5.0f;
+    heading("External IDEs");
+    if (build.ides.empty()) {
+        renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, "No IDEs discovered", muted, 10.0f,
+                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        cursor += 18.0f;
+    } else {
+        std::string available;
+        for (const auto& ide : build.ides) {
+            if (!available.empty()) available += "  ·  ";
+            available += ide.available ? "● " : "○ ";
+            available += ide.name;
+        }
+        renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, available,
+                          text, 10.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        cursor += 18.0f;
+    }
+
+    cursor += 5.0f;
+    heading("Project Integration");
+    renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, build.projectStatus, muted, 10.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    cursor += 18.0f;
+    const std::string projectPath = build.recommendedProjectFile.empty() ?
+        std::string("No associated project file") : "Project: " + build.recommendedProjectFile;
+    renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, projectPath, muted, 10.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    cursor += 18.0f;
+    renderList_.text({bounds.x, cursor, bounds.width, 18.0f}, build.clangdStatus, muted, 10.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    cursor += 18.0f;
+
+    cursor += 5.0f;
+    heading("Diagnostics");
+
+    const auto matchesDiagnosticFilter = [&](const EditorBuildDiagnosticModel& diagnostic) {
+        if (build.diagnosticFilter == "all") return true;
+        if (build.diagnosticFilter == "errors") return diagnostic.severity == "error";
+        if (build.diagnosticFilter == "warnings") return diagnostic.severity == "warning";
+        return diagnostic.severity != "error" && diagnostic.severity != "warning";
+    };
+    std::size_t visibleDiagnostics = 0;
+    for (const auto& diagnostic : build.diagnostics) if (matchesDiagnosticFilter(diagnostic)) ++visibleDiagnostics;
+    if (visibleDiagnostics == 0) {
+        renderList_.text({bounds.x, cursor, bounds.width, 18.0f},
+                         build.diagnostics.empty() ? "No diagnostics" : "No diagnostics match filter", muted, 10.0f,
+                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        cursor += 18.0f;
+    } else {
+        const auto rows = std::min<std::size_t>(visibleDiagnostics, 4);
+        std::size_t drawn = 0;
+        for (std::size_t index = 0; index < build.diagnostics.size() && drawn < rows && cursor + 18.0f <= bounds.y + bounds.height; ++index) {
+            const auto& diagnostic = build.diagnostics[index];
+            if (!matchesDiagnosticFilter(diagnostic)) continue;
+            std::string location = diagnostic.file;
+            if (diagnostic.line != 0) {
+                location += ":" + std::to_string(diagnostic.line);
+                if (diagnostic.column != 0) location += ":" + std::to_string(diagnostic.column);
+            }
+            if (!location.empty()) location += " ";
+            const std::string label = diagnostic.severity + "  " + location + diagnostic.message;
+            const auto diagnosticColor = diagnostic.severity == "error" ? color("#F29B8F") :
+                diagnostic.severity == "warning" ? color("#E6C277") : muted;
+            const auto row = ui::Rect{bounds.x, cursor, bounds.width, 18.0f};
+            const auto id = command_key("build-diagnostic", std::to_string(index));
+            commandActions_[id] = {EditorCommand::SelectBuildDiagnostic, std::to_string(index)};
+            const float ideWidth = diagnostic.file.empty() ? 0.0f : 34.0f;
+            set_region(id, {row.x, row.y, std::max(0.0f, row.width - (ideWidth == 0.0f ? 0.0f : ideWidth + 4.0f)), row.height}, true);
+            const auto rowWidth = std::max(0.0f, row.width - (ideWidth == 0.0f ? 0.0f : ideWidth + 4.0f));
+            if (build.selectedDiagnostic == index || hotRegion_ == id || activeRegion_ == id)
+                renderList_.rect({row.x, row.y, rowWidth, row.height},
+                                 build.selectedDiagnostic == index ? color("#35557D") :
+                                 activeRegion_ == id ? color("#35557D") : color("#303B4A"), 3.0f);
+            if (!diagnostic.file.empty()) {
+                const auto ideId = command_key("build-diagnostic-ide",
+                                               diagnostic.file + ":" + std::to_string(diagnostic.line) + ":" +
+                                               std::to_string(diagnostic.column));
+                commandActions_[ideId] = {EditorCommand::OpenDiagnosticInIde,
+                                          diagnostic.file + ":" + std::to_string(diagnostic.line) + ":" +
+                                              std::to_string(diagnostic.column)};
+                draw_button({row.x + row.width - ideWidth, row.y, ideWidth, row.height}, ideId, "IDE", layout);
+            }
+            renderList_.text({row.x, row.y, std::max(0.0f, rowWidth - 6.0f), row.height}, label, diagnosticColor, 10.0f,
+                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+            cursor += 18.0f;
+            ++drawn;
+        }
+    }
+
+    cursor += 5.0f;
+    heading("Output");
+    const float outputTop = cursor;
+    const ui::Rect outputBounds{bounds.x, outputTop, bounds.width,
+                                std::max(0.0f, bounds.y + bounds.height - outputTop)};
+    renderList_.rect(outputBounds, surface, 3.0f);
+    renderList_.border(outputBounds, border, 1.0f, 3.0f);
+    const auto rows = static_cast<std::size_t>(std::max(0.0f, outputBounds.height - 8.0f) / 16.0f);
+    const auto first = build.outputLines.size() > rows ? build.outputLines.size() - rows : 0;
+    float outputCursor = outputBounds.y + 4.0f;
+    for (std::size_t index = first; index < build.outputLines.size() && outputCursor + 16.0f <= outputBounds.bottom(); ++index) {
+        renderList_.text(ui::Rect{outputBounds.x + 6.0f, outputCursor, std::max(0.0f, outputBounds.width - 12.0f), 16.0f},
+                          build.outputLines[index], muted, 10.0f, {}, ui::TextAlign::Start,
+                          ui::TextOverflow::Ellipsis);
+        outputCursor += 16.0f;
+    }
+}
+
+void EditorUi::draw_media_panel(const DockRect& value, const EditorUiModel& model,
+                                const ui::MediaPanel& mediaPanel, const EditorLayoutState& layout) {
+    const auto bounds = inset(value, 10.0f);
+    const auto text = color(layout.theme == "light" ? "#3F464F" : "#CBD1DA");
+    const auto muted = color(layout.theme == "light" ? "#7A828D" : "#8F98A5");
+    const auto accent = color(layout.theme == "light" ? "#2E6FBE" : "#78A9E8");
+    const auto border = color(layout.theme == "light" ? "#D3D7DD" : "#393D45");
+    const auto surface = color(layout.theme == "light" ? "#F5F6F8" : "#202226");
+    const auto& media = model.media_state();
+    const auto& description = mediaPanel.description();
+    renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, description.title, text, 13.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    const auto status = media.path.empty() ? media.status : media.path + "  ·  " + media.status;
+    renderList_.text({bounds.x, bounds.y + 22.0f, bounds.width, 18.0f}, status,
+                     media.available ? accent : muted, 10.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    const auto surfaceRect = ui::Rect{bounds.x, bounds.y + 48.0f, bounds.width,
+                                      std::max(0.0f, std::min(94.0f, bounds.y + bounds.height - (bounds.y + 48.0f)))};
+    if (surfaceRect.height > 0.0f) {
+        renderList_.rect(surfaceRect, surface, 4.0f);
+        renderList_.border(surfaceRect, border, 1.0f, 4.0f);
+        renderList_.text({surfaceRect.x + 10.0f, surfaceRect.y + 12.0f,
+                          std::max(0.0f, surfaceRect.width - 20.0f), 18.0f},
+                         media.kind.empty() ? "Media Preview" : media.kind + " Preview", text, 12.0f,
+                         {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+        if (media.kind == "Audio" && media.audioPreview && media.audioPreview->valid()) {
+            const auto waveform = ui::Rect{surfaceRect.x + 10.0f, surfaceRect.y + 38.0f,
+                                           std::max(0.0f, surfaceRect.width - 20.0f), 42.0f};
+            set_region("media-timeline", waveform, true);
+            const auto columns = std::min<std::size_t>(media.audioPreview->peaks.size(),
+                static_cast<std::size_t>(std::max(1.0f, waveform.width * 0.5f)));
+            const float center = waveform.y + waveform.height * 0.5f;
+            const float halfHeight = std::max(1.0f, waveform.height * 0.5f - 2.0f);
+            for (std::size_t index = 0; index < columns; ++index) {
+                const auto source = (index * media.audioPreview->peaks.size()) / columns;
+                const float amplitude = std::clamp(media.audioPreview->peaks[source], 0.0f, 1.0f) * halfHeight;
+                const float x = waveform.x + (static_cast<float>(index) + 0.5f) * waveform.width /
+                    static_cast<float>(columns);
+                renderList_.line({x, center - amplitude}, {x, center + amplitude}, accent, 1.0f);
+            }
+        } else if (media.kind == "Video" && media.videoPreview && media.videoPreview->valid() &&
+                   media.videoPreview->firstFrame && media.videoPreview->firstFrame->valid()) {
+            const auto frameBounds = ui::Rect{surfaceRect.x + 10.0f, surfaceRect.y + 34.0f,
+                                              std::max(0.0f, surfaceRect.width - 20.0f), 52.0f};
+            const auto sourceWidth = static_cast<float>(media.videoPreview->firstFrame->width);
+            const auto sourceHeight = static_cast<float>(media.videoPreview->firstFrame->height);
+            const auto scale = std::min(frameBounds.width / std::max(1.0f, sourceWidth),
+                                        frameBounds.height / std::max(1.0f, sourceHeight));
+            const auto imageBounds = ui::Rect{
+                frameBounds.x + (frameBounds.width - sourceWidth * scale) * 0.5f,
+                frameBounds.y + (frameBounds.height - sourceHeight * scale) * 0.5f,
+                sourceWidth * scale, sourceHeight * scale};
+            renderList_.rect(frameBounds, color(layout.theme == "light" ? "#E2E4E8" : "#17191D"), 2.0f);
+            renderList_.image(imageBounds, media.videoPreview->firstFrame);
+            set_region("media-timeline", frameBounds, true);
+        } else {
+            set_region("media-timeline", {surfaceRect.x + 10.0f, surfaceRect.y + 38.0f,
+                                            std::max(0.0f, surfaceRect.width - 20.0f), 42.0f}, true);
+            const auto surfaceStatus = media.kind == "Audio" && media.previewLoading
+                ? "Loading waveform..." : (media.kind == "Audio" || media.kind == "Video") && !media.previewStatus.empty()
+                ? media.previewStatus : media.available ? "Transport is connected to the engine"
+                : "Select a supported media asset";
+            renderList_.text({surfaceRect.x + 10.0f, surfaceRect.y + 38.0f,
+                              std::max(0.0f, surfaceRect.width - 20.0f), 18.0f},
+                             surfaceStatus, muted, 10.0f, {}, ui::TextAlign::Center,
+                             ui::TextOverflow::Ellipsis);
+        }
+    }
+    if (media.kind != "Audio") return;
+    const float controlsY = bounds.y + 152.0f;
+    const float buttonWidth = std::clamp((bounds.width - 16.0f) / 3.0f, 54.0f, 92.0f);
+    const auto play = command_key("media-play");
+    const auto pause = command_key("media-pause");
+    const auto stop = command_key("media-stop");
+    commandActions_[play] = {EditorCommand::MediaPlay, {}};
+    commandActions_[pause] = {EditorCommand::MediaPause, {}};
+    commandActions_[stop] = {EditorCommand::MediaStop, {}};
+    draw_button({bounds.x, controlsY, buttonWidth, 25.0f}, play, "Play", layout, media.available);
+    draw_button({bounds.x + buttonWidth + 8.0f, controlsY, buttonWidth, 25.0f}, pause, "Pause", layout,
+                media.available && media.playbackState == "Playing");
+    draw_button({bounds.x + (buttonWidth + 8.0f) * 2.0f, controlsY, buttonWidth, 25.0f}, stop, "Stop", layout,
+                media.available);
+    const auto loop = command_key("media-loop");
+    commandActions_[loop] = {EditorCommand::MediaToggleLoop, {}};
+    draw_button({bounds.x, controlsY + 32.0f, buttonWidth * 1.5f, 25.0f}, loop,
+                media.loop ? "Loop: On" : "Loop: Off", layout, media.loop);
+    const auto volume = std::to_string(static_cast<int>(std::round(std::clamp(media.volume, 0.0, 1.0) * 100.0))) + "%";
+    renderList_.text({bounds.x + buttonWidth * 1.5f + 16.0f, controlsY + 35.0f,
+                      std::max(0.0f, bounds.width - buttonWidth * 1.5f - 16.0f), 18.0f},
+                     "Volume " + volume, muted, 10.0f, {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
 }
 
 void EditorUi::draw_generic_panel(const DockRect& value, std::string_view id,

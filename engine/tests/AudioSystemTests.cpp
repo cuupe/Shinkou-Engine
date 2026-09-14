@@ -12,6 +12,7 @@ class TestBackend final : public shinkou::audio::IAudioBackend {
         shinkou::audio::AudioVoiceState state{shinkou::audio::AudioVoiceState::Invalid};
         std::uint32_t generation{1};
         bool active{false};
+        double cursorSeconds{0.0};
     };
     struct TrackSlot {
         shinkou::audio::AudioTrackDesc desc{};
@@ -44,7 +45,12 @@ public:
         return true;
     }
     void shutdown() override { voices_.clear(); freeVoices_.clear(); tracks_.clear(); freeTracks_.clear(); }
-    void update(shinkou::Seconds) override {}
+    void update(shinkou::Seconds dt) override {
+        for (auto& slot : voices_) {
+            if (slot.active && slot.state == shinkou::audio::AudioVoiceState::Playing)
+                slot.cursorSeconds += std::max(0.0, static_cast<double>(dt));
+        }
+    }
     shinkou::audio::AudioVoiceId play(const shinkou::audio::AudioAssetDesc&, const shinkou::audio::AudioPlayParams& params) override {
         if (freeVoices_.empty()) return 0;
         const auto index = freeVoices_.back();
@@ -52,11 +58,19 @@ public:
         auto& slot = voices_[index];
         slot.active = true;
         slot.state = params.startPaused ? shinkou::audio::AudioVoiceState::Paused : shinkou::audio::AudioVoiceState::Playing;
+        slot.cursorSeconds = 0.0;
         return shinkou::audio::make_audio_handle(index, slot.generation);
     }
     void stop(shinkou::audio::AudioVoiceId voice, shinkou::Seconds) override { if (valid_voice(voice)) voices_[shinkou::audio::audio_handle_index(voice)].state = shinkou::audio::AudioVoiceState::Stopped; }
     void pause(shinkou::audio::AudioVoiceId voice) override { if (valid_voice(voice)) voices_[shinkou::audio::audio_handle_index(voice)].state = shinkou::audio::AudioVoiceState::Paused; }
     void resume(shinkou::audio::AudioVoiceId voice) override { if (valid_voice(voice)) voices_[shinkou::audio::audio_handle_index(voice)].state = shinkou::audio::AudioVoiceState::Playing; }
+    void seek(shinkou::audio::AudioVoiceId voice, double seconds) override {
+        if (valid_voice(voice)) voices_[shinkou::audio::audio_handle_index(voice)].cursorSeconds = std::max(0.0, seconds);
+    }
+    double cursor_seconds(shinkou::audio::AudioVoiceId voice) const override {
+        return valid_voice(voice) ? voices_[shinkou::audio::audio_handle_index(voice)].cursorSeconds : 0.0;
+    }
+    bool supports_cursor() const noexcept override { return true; }
     void set_volume(shinkou::audio::AudioVoiceId, float) override {}
     void set_pitch(shinkou::audio::AudioVoiceId, float) override {}
     void set_pan(shinkou::audio::AudioVoiceId, float) override {}
@@ -159,6 +173,11 @@ int main() {
     params.bus = shinkou::audio::AudioBus::UI;
     const auto voice = audio.play(asset, params);
     assert(voice != 0 && audio.is_playing(voice));
+    audio.update(0.25f);
+    assert(std::abs(audio.cursor_seconds(voice) - 0.25) < 0.00001);
+    audio.seek(voice, 0.75);
+    assert(std::abs(audio.cursor_seconds(voice) - 0.75) < 0.00001);
+    assert(audio.supports_cursor());
     const auto secondVoice = audio.play(asset, params);
     assert(secondVoice != 0 && secondVoice != voice);
     assert(audio.play(asset, params) == 0);

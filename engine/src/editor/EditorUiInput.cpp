@@ -65,7 +65,7 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
         assetDeletePath_.clear(); assetContextOpen_ = false; assetContextActions_.clear();
         assetEditActive_ = false; assetEditText_.clear(); openMenuId_.clear();
         editFieldId_.clear(); editText_.clear(); editError_.clear();
-        viewportDragging_ = false;
+        viewportDragging_ = false; modelPreviewDragging_ = false;
         activeRegion_.clear(); runtime_.release_pointer(); runtime_.clear_focus(); repaint(); return true;
     }
     // Deletion confirmation consumes keyboard events until cancelled/confirmed.
@@ -121,6 +121,7 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
     }
     if (controlDown_) {
         if (key == "s") command(shiftDown_ ? EditorCommand::SaveSceneAs : EditorCommand::SaveScene);
+        else if (key == "b") command(EditorCommand::BuildProject);
         else if (key == "z") command(EditorCommand::Undo);
         else if (key == "y") command(EditorCommand::Redo);
         else if (key == "n") command(shiftDown_ ? EditorCommand::CreateEmpty : EditorCommand::NewScene);

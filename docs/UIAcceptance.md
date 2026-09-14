@@ -8,8 +8,8 @@
 在仓库根目录执行：
 
 ```powershell
-cmake --build out/build/ui-current -j 2
-ctest --test-dir out/build/ui-current --output-on-failure -j 2
+cmake --build out/build/mingw-debug -j 2
+ctest --test-dir out/build/mingw-debug --output-on-failure -j 2
 ```
 
 必须满足：构建成功，CTest 全部通过；至少包含 `shinkou_ui_runtime_tests`、
@@ -22,9 +22,9 @@ ctest --test-dir out/build/ui-current --output-on-failure -j 2
 构建 `shinkou_ui_capture` 后，使用捕获工具启动编辑器：
 
 ```powershell
-out/build/ui-current/shinkou_ui_capture.exe `
-  out/build/ui-current/shinkou_engine_sample.exe `
-  out/build/ui-current/editor-acceptance.bmp 2500 `
+out/build/mingw-debug/shinkou_ui_capture.exe `
+  out/build/mingw-debug/shinkou_engine_sample.exe `
+  out/build/mingw-debug/editor-acceptance.bmp 2500 `
   --editor --project "C:/Users/Lenovo/Desktop/Shinkou/Shinkou Engine"
 ```
 

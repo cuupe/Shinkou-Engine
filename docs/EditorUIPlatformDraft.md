@@ -299,11 +299,10 @@ UI adapter 必须保证：命令计数、文本计数、后端、DPI、客户区
 ## 9. 初始验收命令
 
 ```powershell
-cmake --build out/build/engine-uikit --target shinkou_engine_sample shinkou_ui_capture
-ctest --test-dir out/build/engine-uikit --output-on-failure
-ctest --test-dir out/build/shinkou-ui --output-on-failure
-out/build/engine-uikit/Tools/UiCapture/shinkou_ui_capture.exe `
-  out/build/engine-uikit/engine/shinkou_engine_sample.exe `
+cmake --build out/build/mingw-debug --target shinkou_engine_sample shinkou_ui_capture
+ctest --test-dir out/build/mingw-debug --output-on-failure
+out/build/mingw-debug/shinkou_ui_capture.exe `
+  out/build/mingw-debug/shinkou_engine_sample.exe `
   $env:USERPROFILE\Desktop\shinkou-editor-ui.bmp 5000 dx11
 ```
 

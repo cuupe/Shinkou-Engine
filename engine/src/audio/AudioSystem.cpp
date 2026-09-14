@@ -103,6 +103,9 @@ public:
     void resume(AudioVoiceId voice) override {
         if (valid_voice(voice) && voices_[audio_handle_index(voice)].state == AudioVoiceState::Paused) voices_[audio_handle_index(voice)].state = AudioVoiceState::Playing;
     }
+    void seek(AudioVoiceId, double) override {}
+    double cursor_seconds(AudioVoiceId) const override { return 0.0; }
+    bool supports_cursor() const noexcept override { return false; }
     void set_volume(AudioVoiceId, float) override {}
     void set_pitch(AudioVoiceId, float) override {}
     void set_pan(AudioVoiceId, float) override {}
@@ -308,6 +311,23 @@ public:
     void stop(AudioVoiceId voice, Seconds fadeOutSeconds) override { if (valid_voice(voice)) { auto& sound = voices_[audio_handle_index(voice)].sound; if (fadeOutSeconds > 0.0f) ma_sound_stop_with_fade_in_milliseconds(&sound, static_cast<ma_uint64>(fadeOutSeconds * 1000.0f)); else ma_sound_stop(&sound); } }
     void pause(AudioVoiceId voice) override { if (valid_voice(voice)) ma_sound_stop(&voices_[audio_handle_index(voice)].sound); }
     void resume(AudioVoiceId voice) override { if (valid_voice(voice)) ma_sound_start(&voices_[audio_handle_index(voice)].sound); }
+    void seek(AudioVoiceId voice, double seconds) override {
+        if (!valid_voice(voice) || !std::isfinite(seconds)) return;
+        ma_uint32 channels = 0;
+        ma_uint32 sampleRate = 0;
+        if (ma_sound_get_data_format(&voices_[audio_handle_index(voice)].sound, nullptr, &channels,
+                                     &sampleRate, nullptr, 0) != MA_SUCCESS || sampleRate == 0) return;
+        const auto frame = static_cast<ma_uint64>(std::max(0.0, seconds) * static_cast<double>(sampleRate));
+        ma_sound_seek_to_pcm_frame(&voices_[audio_handle_index(voice)].sound, frame);
+    }
+    double cursor_seconds(AudioVoiceId voice) const override {
+        if (!valid_voice(voice)) return 0.0;
+        float cursor = 0.0f;
+        if (ma_sound_get_cursor_in_seconds(const_cast<ma_sound*>(&voices_[audio_handle_index(voice)].sound), &cursor) != MA_SUCCESS ||
+            !std::isfinite(cursor)) return 0.0;
+        return std::max(0.0, static_cast<double>(cursor));
+    }
+    bool supports_cursor() const noexcept override { return true; }
     void set_volume(AudioVoiceId voice, float volume) override { if (valid_voice(voice)) ma_sound_set_volume(&voices_[audio_handle_index(voice)].sound, clamp_volume(volume)); }
     void set_pitch(AudioVoiceId voice, float pitch) override { if (valid_voice(voice)) ma_sound_set_pitch(&voices_[audio_handle_index(voice)].sound, clamp_pitch(pitch)); }
     void set_pan(AudioVoiceId voice, float pan) override { if (valid_voice(voice)) ma_sound_set_pan(&voices_[audio_handle_index(voice)].sound, clamp_pan(pan)); }
@@ -407,6 +427,18 @@ AudioVoiceId AudioSystem::play(std::filesystem::path path, const AudioPlayParams
 void AudioSystem::stop(AudioVoiceId voice, Seconds fadeOutSeconds) { if (backend_) backend_->stop(voice, std::max(fadeOutSeconds, 0.0f)); }
 void AudioSystem::pause(AudioVoiceId voice) { if (backend_) backend_->pause(voice); }
 void AudioSystem::resume(AudioVoiceId voice) { if (backend_) backend_->resume(voice); }
+void AudioSystem::seek(AudioVoiceId voice, double seconds) {
+    if (!backend_ || !std::isfinite(seconds)) return;
+    backend_->seek(voice, std::max(0.0, seconds));
+}
+double AudioSystem::cursor_seconds(AudioVoiceId voice) const {
+    if (!backend_) return 0.0;
+    const auto cursor = backend_->cursor_seconds(voice);
+    return std::isfinite(cursor) ? std::max(0.0, cursor) : 0.0;
+}
+bool AudioSystem::supports_cursor() const noexcept {
+    return backend_ && backend_->supports_cursor();
+}
 void AudioSystem::stop_all(AudioBus bus, Seconds fadeOutSeconds) { if (backend_) backend_->stop_all(bus, std::max(fadeOutSeconds, 0.0f)); }
 AudioVoiceState AudioSystem::state(AudioVoiceId voice) const { return backend_ ? backend_->state(voice) : AudioVoiceState::Invalid; }
 bool AudioSystem::is_playing(AudioVoiceId voice) const { return state(voice) == AudioVoiceState::Playing; }

@@ -64,12 +64,18 @@ struct AssetLoadOptions {
 struct AssetArtifact {
     std::vector<std::uint8_t> payload;
     std::string format;
+    // Optional bounded, processor-defined descriptor. The schema identifies
+    // the byte contract; it is not a decoded renderer resource.
+    std::string metadataFormat;
+    std::string metadata;
     std::vector<AssetDependency> dependencies;
 };
 
 struct AssetData {
     std::shared_ptr<const std::vector<std::uint8_t>> bytes;
     std::string format;
+    std::string metadataFormat;
+    std::shared_ptr<const std::string> metadata;
     std::vector<AssetDependency> dependencies;
     std::filesystem::path sourcePath;
     std::uint64_t sourceHash{0};
@@ -164,11 +170,25 @@ struct AssetStats {
 };
 
 struct AssetManifestEntry {
+    AssetId id{0};
     AssetKey key;
     std::filesystem::path sourcePath;
     std::uint64_t sourceHash{0};
     std::uint64_t sourceTimestamp{0};
     std::uintmax_t sourceSize{0};
+};
+
+struct AssetManifestScanStats {
+    std::size_t entries{0};
+    std::size_t cacheHits{0};
+    std::size_t cacheMisses{0};
+};
+
+struct AssetManifestReadResult {
+    bool valid{false};
+    std::vector<AssetManifestEntry> entries;
+    std::string error;
+    explicit operator bool() const noexcept { return valid; }
 };
 
 class AssetSystem {
@@ -213,6 +233,9 @@ class AssetSystem {
     std::uint64_t jobSerial_{0};
     std::uint64_t traversalEpoch_{0};
     std::size_t watcherCursor_{0};
+    mutable std::mutex manifestScanMutex_;
+    mutable std::unordered_map<AssetKey, AssetManifestEntry, AssetKeyHash> manifestCache_;
+    mutable AssetManifestScanStats manifestScanStats_{};
     AssetEventId nextListenerId_{1};
     std::size_t lruHead_{static_cast<std::size_t>(-1)};
     std::size_t lruTail_{static_cast<std::size_t>(-1)};
@@ -281,6 +304,9 @@ public:
     std::vector<AssetSnapshot> snapshot() const;
     AssetStats stats() const;
     std::vector<AssetManifestEntry> scan_sources() const;
+    AssetManifestScanStats last_manifest_scan_stats() const;
+    static AssetManifestReadResult read_manifest(const std::filesystem::path& path);
+    bool seed_manifest_cache(const std::vector<AssetManifestEntry>& entries, std::string* error = nullptr);
     bool write_manifest(const std::filesystem::path& path) const;
 
     AssetEventId subscribe(std::function<void(const AssetSnapshot&, AssetEventType)> callback);

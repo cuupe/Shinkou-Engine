@@ -9,6 +9,12 @@ public enum LifecycleState
     Destroyed,
 }
 
+public enum ObjectStorage
+{
+    Regular,
+    Ecs,
+}
+
 public readonly record struct ObjectId(ulong Value)
 {
     public override string ToString() => Value.ToString();

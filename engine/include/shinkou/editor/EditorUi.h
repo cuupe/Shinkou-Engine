@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shinkou/editor/AssetIconLibrary.h"
+#include "shinkou/editor/AssetPreview.h"
 #include "shinkou/editor/DockLayout.h"
 #include "shinkou/editor/EditorUiModel.h"
 #include "shinkou/input/InputSystem.h"
@@ -56,6 +57,11 @@ struct EditorUiCallbacks {
     std::function<void(std::string_view)> closePanel;
     std::function<bool(std::string_view, std::string_view)> editField;
     std::function<void(ViewportNavigation, math::Vec2)> navigateViewport;
+    std::function<void(ViewportNavigation, math::Vec2)> navigateModelPreview;
+    std::function<void()> resetModelPreview;
+    std::function<void(std::int32_t)> selectModelMaterial;
+    std::function<void(std::int32_t)> selectModelTexture;
+    std::function<void(std::string, math::Vec2)> dropAssetToViewport;
 };
 
 // UE/Slate-inspired editor UI host. The native Windows window is only the
@@ -159,6 +165,7 @@ private:
     std::uint64_t assetIndexKey_{0};
     bool assetIndexValid_{false};
     AssetIconLibrary iconLibrary_{};
+    AssetPreviewCatalog previewCatalog_{};
     std::unordered_set<std::string> collapsedAssetDirectories_;
     std::string selectedAsset_;
     std::string assetFilter_;
@@ -213,6 +220,9 @@ private:
     bool revealAsset_{false}, assetKeyboardFocus_{false};
     bool controlDown_{false}, shiftDown_{false};
     bool viewportDragging_{false};
+    bool modelPreviewDragging_{false};
+    bool assetDragActive_{false};
+    std::string assetDragPath_{};
     ui::Vec2 viewportPointer_{};
     std::unordered_map<std::string, DockRect> toolRects_;
     std::unordered_map<std::string, float> toolScroll_;
@@ -263,6 +273,10 @@ private:
     void draw_asset_context_menu(const DockRect& rect, const EditorLayoutState& layout);
     void draw_console(const DockRect& rect, const render::Renderer& renderer,
                       const std::vector<std::string>& consoleEntries, const EditorLayoutState& layout);
+    void draw_build_panel(const DockRect& rect, const EditorUiModel& model,
+                          const EditorLayoutState& layout);
+    void draw_media_panel(const DockRect& rect, const EditorUiModel& model,
+                          const ui::MediaPanel& mediaPanel, const EditorLayoutState& layout);
     void draw_generic_panel(const DockRect& rect, std::string_view id,
                             std::string_view title, const EditorLayoutState& layout);
     void draw_button(ui::Rect rect, std::string id, std::string_view label,
