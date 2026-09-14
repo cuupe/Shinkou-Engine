@@ -22,6 +22,10 @@ int main() {
     bool directory = false;
     assert(files.exists("assets/materials", &directory) && directory);
     assert(files.exists("assets/materials/test.mat", &directory) && !directory);
+    assert(files.project_relative_existing(root / "assets/materials/test.mat") ==
+           std::filesystem::path("assets/materials/test.mat"));
+    assert(files.project_relative_existing(root.parent_path() / "outside.mat").empty());
+    assert(files.project_relative_existing(std::filesystem::path("assets/materials/test.mat")).empty());
     const auto resolved = files.resolve_existing("assets/materials/test.mat");
     assert(!resolved.empty() && resolved.filename() == "test.mat");
     assert(files.resolve_existing("../outside.mat").empty());

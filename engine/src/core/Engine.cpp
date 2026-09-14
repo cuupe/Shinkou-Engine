@@ -51,6 +51,10 @@ bool Engine::initialize() {
     windowHeight_ = window_.height();
     if (config_.editor) {
         editor_.set_native_window(window_.native_handle());
+        window_.set_file_drop_handler([this](std::string path, std::int32_t clientX, std::int32_t clientY) {
+            editor_.create_asset_reference_from_window_drop(
+                world_, std::move(path), editor::WindowClientPx{static_cast<float>(clientX), static_cast<float>(clientY)});
+        });
         window_.set_close_handler([this] {
             editor_.execute_command(editor::EditorCommand::Quit,{},world_);
             return editor_.quit_requested();
@@ -194,6 +198,7 @@ void Engine::shutdown() {
     assets_.shutdown();
     input_.shutdown();
     audio_.shutdown();
+    window_.set_file_drop_handler({});
     window_.destroy();
     initialized_ = false;
     windowWidth_ = 0;

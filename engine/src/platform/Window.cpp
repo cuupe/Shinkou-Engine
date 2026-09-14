@@ -2,11 +2,25 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <string>
 
 #if defined(SHINKOU_PLATFORM_WINDOWS)
 #include <windows.h>
+#include <shellapi.h>
 
 namespace {
+std::string utf8_from_wide(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return {};
+    std::string result(static_cast<std::size_t>(size), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+            static_cast<int>(value.size()), result.data(), size, nullptr, nullptr) != size) return {};
+    return result;
+}
+
 LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<const CREATESTRUCTA*>(lParam);
@@ -20,6 +34,28 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
     if (message == WM_SIZE) {
         auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window, GWLP_USERDATA));
         if (owner) owner->set_client_size(static_cast<std::uint32_t>(LOWORD(lParam)), static_cast<std::uint32_t>(HIWORD(lParam)));
+    }
+    if (message == WM_DROPFILES) {
+        auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window, GWLP_USERDATA));
+        const auto drop = reinterpret_cast<HDROP>(wParam);
+        POINT point{};
+        const bool hasPoint = drop != nullptr && DragQueryPoint(drop, &point) != FALSE;
+        constexpr UINT kMaxDroppedFiles = 64;
+        constexpr UINT kMaxPathCharacters = 32768;
+        if (owner && drop && hasPoint) {
+            const auto count = std::min(DragQueryFileW(drop, 0xFFFFFFFFu, nullptr, 0), kMaxDroppedFiles);
+            for (UINT index = 0; index < count; ++index) {
+                const auto length = DragQueryFileW(drop, index, nullptr, 0);
+                if (length == 0 || length >= kMaxPathCharacters) continue;
+                std::wstring widePath(static_cast<std::size_t>(length) + 1, L'\0');
+                if (DragQueryFileW(drop, index, widePath.data(), length + 1) != length) continue;
+                widePath.resize(length);
+                const auto path = utf8_from_wide(widePath);
+                if (!path.empty()) owner->dispatch_file_drop(path, point.x, point.y);
+            }
+        }
+        if (drop) DragFinish(drop);
+        return 0;
     }
     if (message == WM_ERASEBKGND) return 1;
     if (message == WM_DPICHANGED) {
@@ -85,6 +121,10 @@ bool Window::create(const WindowConfig& config) {
         ShowWindow(window, SW_SHOW);
         UpdateWindow(window);
     }
+    // WM_DROPFILES is intentionally used as a small native adapter. It
+    // carries paths and client pixels only; validation, DPI conversion and
+    // scene mutation remain in the editor layer.
+    DragAcceptFiles(window, TRUE);
     RECT client{};
     if (GetClientRect(window, &client) && client.right > 0 && client.bottom > 0) {
         // The renderer consumes framebuffer pixels, not the logical outer
@@ -119,12 +159,18 @@ void Window::process_events() {
 
 void Window::destroy() {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
-    if (nativeHandle_) DestroyWindow(static_cast<HWND>(nativeHandle_));
+    if (nativeHandle_) {
+        DragAcceptFiles(static_cast<HWND>(nativeHandle_), FALSE);
+        DestroyWindow(static_cast<HWND>(nativeHandle_));
+    }
 #endif
     nativeHandle_ = nullptr;
     width_ = 0;
     height_ = 0;
     open_ = false;
+    fileDropHandler_ = {};
+    menuCommandHandler_ = {};
+    closeHandler_ = {};
 }
 
 float Window::dpi_scale() const noexcept {

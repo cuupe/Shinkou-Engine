@@ -13,6 +13,7 @@
 #include "shinkou/editor/EditorModelPreviewScene.h"
 #include "shinkou/editor/EditorModelPreviewRenderer.h"
 #include "shinkou/editor/EditorModelSceneRenderer.h"
+#include "shinkou/editor/CoordinateSpaces.h"
 #include "shinkou/editor/EditorAssetIndex.h"
 #include "shinkou/editor/EditorAssetReference.h"
 #include "shinkou/editor/EditorAudioPreview.h"
@@ -399,6 +400,11 @@ public:
         activeWorld_ = &world;
         return drop_asset_to_viewport(std::move(path), point);
     }
+    // Native Window adapters supply an absolute UTF-8 path and client-area
+    // physical pixels. Normalize and convert them here, then reuse the same
+    // validated viewport ingress and undo transaction as retained UI drops.
+    bool create_asset_reference_from_window_drop(World& world, std::string nativePath,
+                                                 WindowClientPx clientPoint);
     bool consume_simulation_step() noexcept;
     bool quit_requested() const noexcept { return quitRequested_; }
     const EditorUi& editor_ui() const noexcept { return editorUi_; }

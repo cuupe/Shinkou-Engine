@@ -49,6 +49,10 @@ public:
     // inside the project root. Callers may pass the result to a subsystem
     // that requires an absolute path, but must not use it for writes.
     std::filesystem::path resolve_existing(const std::filesystem::path& relative) const;
+    // Convert an existing native absolute path into a project-relative path
+    // only when its canonical target remains inside root_. Symlinks and
+    // junctions are resolved before the boundary check.
+    std::filesystem::path project_relative_existing(const std::filesystem::path& absolute) const;
 
     std::vector<FileEntry> list(std::filesystem::path relative = {}, bool recursive = false,
                                 std::size_t maxEntries = 4096) const;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "shinkou/Math.h"
+#include "shinkou/editor/CoordinateSpaces.h"
 
 #include <array>
 #include <cstdint>
@@ -8,18 +8,6 @@
 #include <vector>
 
 namespace shinkou::editor {
-
-// Strongly named coordinate spaces prevent a physical window pixel from being
-// accidentally passed to UIKit or to a viewport-local picking operation.
-struct WindowClientPx {
-    float x{0.0f};
-    float y{0.0f};
-};
-
-struct UiLogicalPx {
-    float x{0.0f};
-    float y{0.0f};
-};
 
 struct ViewportLocalPx {
     float x{0.0f};
@@ -71,8 +59,6 @@ struct ViewportRectPx {
 
 using ScissorRectPx = ViewportRectPx;
 
-std::optional<WindowClientPx> ui_logical_to_window_client_px(UiLogicalPx point, float dpiScale) noexcept;
-std::optional<UiLogicalPx> window_client_to_ui_logical_px(WindowClientPx point, float dpiScale) noexcept;
 std::optional<WindowClientRectPx> ui_logical_to_window_client_rect_px(UiLogicalRect rect, float dpiScale) noexcept;
 std::optional<UiLogicalRect> window_client_to_ui_logical_rect_px(WindowClientRectPx rect, float dpiScale) noexcept;
 std::optional<ViewportRectPx> ui_logical_to_viewport_rect_px(UiLogicalRect rect, float dpiScale) noexcept;

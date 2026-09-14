@@ -1376,16 +1376,6 @@
 - 目前只绑定编辑器预览 clip，不创建场景 AudioSource，不做运行时自动播放、3D spatial source、streaming prefetch 或 AssetSystem 依赖失效通知。
 - 下一轮为 AudioSource 设计可序列化 path/AssetId/voice policy 并接入 world lifecycle；模型并行补 depth target、glTF material/texture 和多后端 shader 能力。
 
-### 失败状态与回滚路径
-
-- 未连接/未 ready 的 AssetSystem、manifest 不含当前资源、目录、越界路径、未知类型和非法坐标均在 checkpoint 之前失败，不写场景。
-- 组件或 Transform 创建失败会弹出 checkpoint 并销毁临时对象；正常路径可由现有文档 Undo/Redo 完整恢复。
-
-### 未解决风险与下一轮
-
-- 目前 manifest ID 由 AssetSystem 的 canonical key 派生，尚未做重命名历史迁移、跨项目引用或依赖图持久化；manifest 本身仍由显式扫描维护。
-- 下一轮进入 model scene instance：以 AssetId 解析模型，创建 renderer-owned preview/scene handle，并保持 World 文档只保存引用描述；音频 clip 绑定继续单独审计生命周期和取消。
-
 ## 第 4.24 子阶段：编辑器场景 color target 到 backbuffer 的宿主呈现
 
 ### 实现与范围
@@ -1417,6 +1407,42 @@
 - 当前仍是 sample-level present seam，不是所有宿主都自动获得的通用 renderer contract；模型 scene pass 仍只在 D3D11 使用 POSITION-only 固定材质、无 depth/material/texture/animation。
 - light 大尺寸 BMP 尚未通过人工像素查看器检查；下一轮应将 GPU capture 结果标准化为稳定的 PNG/readback artifact，并加入清屏/非零像素和 viewport 内容 oracle。
 - 下一轮入口：提炼通用 editor scene presentation API，并为模型补 depth target、材质/纹理以及至少一个跨后端实现；音频继续进入可序列化 AudioSource 和运行时生命周期。
+
+## 第 4.25 子阶段：Windows 原生文件拖放接入统一资源引用入口
+
+### 实现与范围
+
+- `platform::Window` 在 Windows 创建窗口后调用 `DragAcceptFiles`，在 `WM_DROPFILES` 中最多处理 64 个文件，每个路径最多 32768 个 UTF-16 字符；路径通过 `WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, ...)` 转换，消息完成后始终 `DragFinish`。
+- native adapter 只把 UTF-8 absolute path 与 client-area physical pixel 交给 Engine；`EditorLayer::create_asset_reference_from_window_drop` 通过 `FileSystemService::project_relative_existing` canonicalize 并验证项目根，再按当前 DPI × 用户 UI scale 转成 logical point，最后调用原有 `create_asset_reference_at_viewport`。
+- `CoordinateSpaces.h` 抽出 `WindowClientPx`/`UiLogicalPx` 和转换函数，避免为了复用坐标 API 引入 `RenderView.h` 的 `editor::World` 别名，从而修复实际编译时对 `shinkou::World` 的遮蔽风险。
+- Engine 在 editor window 生命周期内安装回调，shutdown 在销毁 HWND 前清空回调；目录、项目外文件、不可用文件、未知类型和 manifest 不匹配仍由已有 editor ingress 拒绝。
+
+### 契约与证据
+
+- `shinkou_window_file_drop_tests` 验证 adapter 回调保留 path 与 client 坐标，并验证 `Window::destroy()` 后晚到 dispatch 不再触发回调。
+- `shinkou_file_system_tests` 新增项目内绝对路径转相对路径、项目外路径拒绝、相对路径拒绝；canonical boundary 逻辑在文件存在性检查前完成，不允许通过 symlink/junction 绕出 root。
+- `EditorInteractionTests` 用绝对项目内 `preview.obj` 验证 native ingress 创建对象、保留 manifest AssetId，并用 Undo 回滚；项目外 absolute path 验证对象数不变。
+- 最终构建：`cmake --build out/build/mingw-debug --config Debug --parallel 4` 通过。
+- 最终全量 CTest：`53/53` passed、0 failures、总计 `10.75 sec`；focused editor interaction `1/1` passed、`6.81 sec`；文件系统与 Window adapter focused `2/2` passed、`1.05 sec`。
+
+### 安全、性能与视觉审计
+
+- native 消息处理有文件数、路径长度和 UTF-8 有效性上限；不读取文件内容、不启动外部进程、不创建 decoder/GPU handle，均由编辑器后续异步/类型链路处理。
+- canonical absolute path 与 canonical project root 比较后才生成 project-relative path；路径包含外部 junction/symlink 目标时拒绝，场景只通过既有 checkpoint 保存 path + AssetId。
+- 每个 drop 只做一次坐标转换和一次统一 ingress；窗口过程不直接触碰 World，UI paint 不新增 IO。实际 Explorer → HWND 的手工拖放尚未在自动化环境执行，这一点保持为未验证项。
+- `WM_DROPFILES` 接入不改变 4.24 的 GPU scene presentation；既有 dark/light capture 继续提供 `GpuClientSurface`/DPI 144 证据，但不冒充本轮 OS 手工拖放视觉通过。
+
+### 失败状态与回滚路径
+
+- 绝对路径不存在、canonicalization 失败、超出项目根、目录、未知扩展、manifest 未 ready 或 viewport 坐标非法时，返回明确状态且不创建对象、不写场景；`DragFinish` 仍执行。
+- Window 关闭/销毁时取消 native drop acceptance、清除 callback；如果消息在编辑器已 teardown 后到达，dispatch 不再调用已释放宿主。
+- 若回退本轮，可移除 Window 的 `WM_DROPFILES` 分支与 Engine wiring，保留 `CoordinateSpaces` 和 FileSystem API；4.21 retained drag/drop、AssetId、模型/音频链路不受影响。
+
+### 未解决风险与下一轮
+
+- 当前只接受“已位于项目根内”的外部文件，尚未提供 Unity 式“拖入即复制/导入”事务、导入队列、重名策略、进度和依赖刷新；这需要单独的可恢复文件复制设计。
+- 自动化测试覆盖了 native adapter 的 dispatch seam，但没有真实 Explorer OLE/WM_DROPFILES 手工 capture；下一轮补 Windows UI QA，并把拖放后的 status/scene count 纳入 capture trace。
+- 下一轮入口：将 4.24 sample-level scene present 提炼为通用 renderer contract，同时设计可序列化 AudioSource 的 clip/voice policy；模型继续补 depth/material/texture 与跨后端能力。
 
 ## 后续轮次模板
 

@@ -3066,8 +3066,8 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
         push_console(lastStatus_);
         return false;
     }
-    const auto normalized = std::filesystem::path(path).lexically_normal();
-    const auto normalizedText = normalized.generic_string();
+    const auto normalized = std::filesystem::u8path(path).lexically_normal();
+    const auto normalizedText = normalized.generic_u8string();
     bool directory = false;
     if (normalized.empty() || normalized.is_absolute() || normalized == ".." ||
         normalizedText.rfind("../", 0) == 0 || !fileSystem_.exists(normalized, &directory)) {
@@ -3166,6 +3166,27 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
         (assetId == 0 ? std::string{} : ", id=" + std::to_string(assetId)) + ")";
     push_console(lastStatus_);
     return true;
+}
+
+bool EditorLayer::create_asset_reference_from_window_drop(World& world, std::string nativePath,
+                                                           WindowClientPx clientPoint) {
+    activeWorld_ = &world;
+    const auto native = std::filesystem::u8path(nativePath);
+    const auto relative = fileSystem_.project_relative_existing(native);
+    if (relative.empty()) {
+        lastStatus_ = "Drop rejected: native path is outside the project or unavailable";
+        push_console(lastStatus_);
+        return false;
+    }
+    const auto logical = window_client_to_ui_logical_px(
+        clientPoint, effective_editor_ui_scale(displayDpiScale_, layout_.uiScale));
+    if (!logical) {
+        lastStatus_ = "Drop rejected: native drop coordinates are invalid";
+        push_console(lastStatus_);
+        return false;
+    }
+    return create_asset_reference_at_viewport(world, relative.generic_u8string(),
+                                              {logical->x, logical->y});
 }
 
 void EditorLayer::consume_file_scan() {

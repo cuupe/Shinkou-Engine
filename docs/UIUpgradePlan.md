@@ -805,3 +805,22 @@
 - 安全/性能：present 只读已存在的 renderer-owned target，不访问文件系统、不启动进程；identity uniform 为有界小 buffer，pass 不复制场景数据或创建每帧持久资源。
 - 本轮实际证据：完整构建通过；CTest `52/52` 通过、0 失败、总计 `21.11 sec`；direct sample 输出 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=1 passes=4 draws=3`，其中包含 `editor_scene_present draws=1`；dark capture `1280×720` 与 light capture `1600×900` 均退出 `0`，分别报告 GPU readback、DPI `144`，dark retained trace 为 `commands=184 text=41 assets=11 viewport=225,67,383.333,184`，light 为 `commands=195 text=41 assets=11 viewport=225,67,596.667,304`。
 - 下一入口：把 present seam 提炼成 renderer-owned 的通用 editor scene presentation contract，再补 D3D11 depth/clear policy、模型材质/纹理和跨后端 shader；并继续处理 OS drag/drop adapter 与 AudioSource runtime binding。
+
+### 第 4.25 子阶段：Windows 原生文件拖放接入统一资源引用入口
+
+目标：让用户可以像 Unity Project 窗口一样把 Windows 资源文件拖到编辑器视口，同时保证原生消息不绕过现有项目根、资源类型、manifest、坐标和 Undo/Redo 校验。
+
+实现范围：
+
+- `platform::Window` 启用 `WM_DROPFILES`，只读取最多 64 个文件、每个最多 32768 个 UTF-16 字符，转换为 UTF-8 client-area path/pixel 后交给宿主；窗口销毁前停用接收并清除回调，避免生命周期悬挂。
+- 新增无 `editor::World` 命名污染的 `CoordinateSpaces.h`，把 Window client pixel → editor logical pixel 转换作为公共坐标契约；Engine 按当前 DPI 与用户 UI scale 把原生事件送入 `EditorLayer::create_asset_reference_from_window_drop()`。
+- `FileSystemService::project_relative_existing()` 对绝对路径先 canonicalize，再进行项目根边界检查；只有项目内已存在文件才转为相对路径，随后完全复用 4.21 的 manifest AssetId、类型过滤、viewport 落点与可撤销场景引用事务。
+- 本轮明确不复制外部文件、不接受项目外路径/目录、不导入远程资源，也不在窗口过程、paint 或 input 循环中解码媒体或创建 GPU/Audio 句柄。
+
+审计与验证安排：
+
+- 单元：文件系统绝对路径/项目外/相对路径边界，Window adapter 回调与 destroy 后回调清理。
+- 集成：EditorInteraction 用绝对项目内模型路径验证 native ingress、AssetId、对象创建与 Undo；用项目外路径验证对象数保持不变；全量构建与 CTest。
+- 视觉/平台：保留 4.24 的 GPU surface capture 作为窗口宿主证据；下一次 Windows 手工 QA 需要真实 Explorer 拖放到 1280×720 与 DPI 144 视口，记录 native message → logical point → scene transaction trace。
+- 本轮实际证据：完整构建通过；focused `shinkou_editor_interaction_tests` `1/1` passed、`6.81 sec`；全量 CTest `53/53` passed、0 失败、总计 `10.75 sec`；`shinkou_window_file_drop_tests` 与 `shinkou_file_system_tests` `2/2` passed、`1.05 sec`。
+- 下一入口：补充通用 renderer editor scene presentation contract 和真实 OS drag/drop 手工证据；并行进入可序列化 AudioSource runtime binding、模型 depth/material/texture。

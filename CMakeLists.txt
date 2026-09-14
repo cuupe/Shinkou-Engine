@@ -48,7 +48,7 @@ set_target_properties(shinkou_engine PROPERTIES OUTPUT_NAME shinkou_engine EXPOR
 add_library(ShinkouEngine::Engine ALIAS shinkou_engine)
 target_link_libraries(shinkou_engine PUBLIC shinkou_assets)
 if(WIN32)
-    target_link_libraries(shinkou_engine PRIVATE comdlg32)
+    target_link_libraries(shinkou_engine PRIVATE comdlg32 shell32)
 endif()
 target_include_directories(shinkou_engine PUBLIC
     "${SHINKOU_ENGINE_ROOT}/include"
@@ -417,6 +417,10 @@ if(SHINKOU_BUILD_TESTS)
         add_executable(shinkou_file_system_tests "${SHINKOU_TEST_ROOT}/FileSystemTests.cpp")
         target_link_libraries(shinkou_file_system_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_file_system_tests COMMAND shinkou_file_system_tests)
+
+        add_executable(shinkou_window_file_drop_tests "${SHINKOU_TEST_ROOT}/WindowFileDropTests.cpp")
+        target_link_libraries(shinkou_window_file_drop_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_window_file_drop_tests COMMAND shinkou_window_file_drop_tests)
 
         add_executable(shinkou_asset_preview_tests "${SHINKOU_TEST_ROOT}/AssetPreviewTests.cpp")
         target_link_libraries(shinkou_asset_preview_tests PRIVATE shinkou_engine)

@@ -488,7 +488,23 @@ int main() {
                 editor.last_status().find("position is invalid") != std::string::npos &&
                 world.object_count() == objectCountBeforeBoundaryDrops,
                 "invalid viewport coordinate changed the scene");
-        click("object:" + std::to_string(editor.layout().selectedObject));
+        const auto objectCountBeforeNativeDrop = world.object_count();
+        require(editor.create_asset_reference_from_window_drop(
+                    world, (project / "assets/preview.obj").generic_string(),
+                    {viewportDropTarget.x + 20.0f, viewportDropTarget.y + 20.0f}) &&
+                world.object_count() == objectCountBeforeNativeDrop + 1 &&
+                editor.last_status().find("Created asset reference") != std::string::npos,
+                "native absolute file drop did not route through the validated editor ingress");
+        const auto objectCountAfterNativeDrop = world.object_count();
+        require(!editor.create_asset_reference_from_window_drop(
+                    world, (project.parent_path() / "outside-native.obj").generic_string(),
+                    {viewportDropTarget.x + 20.0f, viewportDropTarget.y + 20.0f}) &&
+                world.object_count() == objectCountAfterNativeDrop &&
+                editor.last_status().find("native path") != std::string::npos,
+                "native file drop boundary accepted an outside-project path");
+        editor.execute_command(EditorCommand::Undo, {}, world);
+        require(world.object_count() == objectCountBeforeNativeDrop,
+                "native file drop did not remain undoable through the shared editor transaction");
         tick();
         require(!editor.consume_simulation_step(),"edit mode advances simulation");
         key("Left Ctrl");

@@ -39,6 +39,21 @@ std::filesystem::path FileSystemService::resolve_existing(const std::filesystem:
     return resolve(relative, false);
 }
 
+std::filesystem::path FileSystemService::project_relative_existing(const std::filesystem::path& absolute) const {
+    if (absolute.empty() || !absolute.is_absolute() || root_.empty()) return {};
+    std::error_code error;
+    const auto canonicalFile = std::filesystem::canonical(absolute, error);
+    if (error) return {};
+    const auto canonicalRoot = std::filesystem::weakly_canonical(root_, error);
+    if (error) return {};
+    const auto relative = std::filesystem::relative(canonicalFile, canonicalRoot, error);
+    if (error || relative.empty()) return {};
+    const auto normalized = relative.lexically_normal();
+    const auto text = normalized.generic_string();
+    if (normalized.is_absolute() || normalized == ".." || text.rfind("../", 0) == 0) return {};
+    return normalized;
+}
+
 std::filesystem::path FileSystemService::resolve(std::filesystem::path relative, bool allowMissing) const {
     if (relative.empty()) return root_;
     if (relative.is_absolute()) return {};
