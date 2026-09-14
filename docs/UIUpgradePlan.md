@@ -824,3 +824,23 @@
 - 视觉/平台：保留 4.24 的 GPU surface capture 作为窗口宿主证据；下一次 Windows 手工 QA 需要真实 Explorer 拖放到 1280×720 与 DPI 144 视口，记录 native message → logical point → scene transaction trace。
 - 本轮实际证据：完整构建通过；focused `shinkou_editor_interaction_tests` `1/1` passed、`6.81 sec`；全量 CTest `53/53` passed、0 失败、总计 `10.75 sec`；`shinkou_window_file_drop_tests` 与 `shinkou_file_system_tests` `2/2` passed、`1.05 sec`。
 - 下一入口：补充通用 renderer editor scene presentation contract 和真实 OS drag/drop 手工证据；并行进入可序列化 AudioSource runtime binding、模型 depth/material/texture。
+
+### 第 4.26 子阶段：可序列化 AudioSource 与场景音频生命周期桥接
+
+目标：把音频从“编辑器预览可播放”推进到场景级组件，让 World 只保存可迁移的音频意图，`AudioSceneSystem` 负责把它连接到 `AudioSystem` 的 clip/voice 生命周期。
+
+实现范围：
+
+- 新增 `AudioSourceComponent`，序列化 `clipPath`、稳定 `assetId`、bus、`playOnStart`、loop、volume、pitch、spatialized 和 streaming；组件不保存 `AudioAssetId`、`AudioVoiceId` 或 backend/decoder 指针。
+- `World` 注册 `AudioSource` 类型，继续复用通用反射/`EditorDocument` capture，因此场景 JSON 可以保存和恢复音频源配置，旧场景不需要额外迁移步骤。
+- 新增 `AudioSceneSystem`：按规范化项目相对路径共享 clip 引用，按对象生命周期创建/停止 voice，支持 play-on-start、bus、循环、音量、音高、空间位置更新；对象禁用、删除、路径/策略改变、播放结束和引擎关闭时释放引用。
+- `Engine` 在每帧 `AudioSystem::update` 后同步 World，在音频系统关闭前先清理场景句柄；当 `AudioConfig.assetRoot` 未显式设置时使用 editor/assets project root，保证运行时相对路径解析一致。
+- 非目标：本轮不做 AssetSystem manifest 的 `assetId` 反向校验、不做 listener/3D 衰减模型、不做 streaming 预取/解码进度、不把 AudioSource 做成专用 Inspector 面板，也不宣称音频文件已经在 tick 内解码。
+
+审计与验证安排：
+
+- 单元：fake backend 覆盖场景创建、同路径 clip 共享、禁用/切换路径、voice 结束后的 clip 回收、手动 play/stop、对象删除、shutdown 和 JSON 序列化。
+- 集成：完整构建、`shinkou_audio_scene_system_tests` 专项测试、全量 CTest；sample 走真实 Engine→World→AudioSceneSystem→AudioSystem 初始化/关闭路径。
+- 安全/性能：只接受非空项目相对路径，bus/volume/pitch 有界钳制；scene bridge 只保存有界句柄和小型配置，不在每帧读取文件内容、不启动进程、不访问网络；相同路径在会话内复用一个 AudioSystem clip。
+- 本轮实际证据：完整构建通过；专项 CTest `1/1` passed、`1.20 sec`；全量 CTest `54/54` passed、0 失败、总计 `40.10 sec`；direct sample `--frames 1 --editor dx11` 退出 `0`，报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=1 passes=4 draws=3`，包含 `editor_scene_present`。
+- 下一入口：接入 `AssetSystem` manifest 的 `assetId → audio clip` 校验与失效通知，补 AudioSource 专用 Inspector/总线选择；随后推进 listener/3D spatial、streaming policy，以及模型 depth/material/texture。

@@ -21,6 +21,7 @@ World::World() {
     register_component_type<components::TransformComponent>("Transform");
     register_component_type<components::TagComponent>("Tag");
     register_component_type<components::LifetimeComponent>("Lifetime");
+    register_component_type<components::AudioSourceComponent>("AudioSource");
 }
 
 void EcsSystem::attach(World& world) noexcept {

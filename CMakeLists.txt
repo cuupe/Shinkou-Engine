@@ -390,6 +390,10 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_audio_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_audio_tests COMMAND shinkou_audio_tests)
 
+        add_executable(shinkou_audio_scene_system_tests "${SHINKOU_TEST_ROOT}/AudioSceneSystemTests.cpp")
+        target_link_libraries(shinkou_audio_scene_system_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_audio_scene_system_tests COMMAND shinkou_audio_scene_system_tests)
+
         add_executable(shinkou_input_tests "${SHINKOU_TEST_ROOT}/InputSystemTests.cpp")
         target_link_libraries(shinkou_input_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_input_tests COMMAND shinkou_input_tests)

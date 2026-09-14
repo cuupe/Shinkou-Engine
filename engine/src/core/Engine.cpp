@@ -18,11 +18,20 @@ assets::AssetSystemConfig asset_config_for(const EngineConfig& config) {
     return result;
 }
 
+audio::AudioConfig audio_config_for(const EngineConfig& config) {
+    auto result = config.audio;
+    if (result.assetRoot.empty()) {
+        if (!config.editorProjectRoot.empty()) result.assetRoot = config.editorProjectRoot;
+        else if (!config.assets.projectRoot.empty()) result.assetRoot = config.assets.projectRoot;
+    }
+    return result;
+}
+
 } // namespace
 
 Engine::Engine(const EngineConfig& config)
     : config_(config), assets_(asset_config_for(config)), renderer_(config.renderBackend), physics_(std::make_unique<physics::SimplePhysicsWorld>()),
-      audio_(audio::create_audio_backend(), config.audio), network_(config.network), input_(input::create_sdl3_input_backend()),
+      audio_(audio::create_audio_backend(), audio_config_for(config)), network_(config.network), input_(input::create_sdl3_input_backend()),
       scripts_(scripting::create_runtime(scripting::Language::CSharp)) {
     if (!log::initialize(config_.logging)) return;
     SHINKOU_LOG_DEBUG("Engine object created");
@@ -145,6 +154,7 @@ void Engine::tick(Seconds dt) {
         world_.update(lastDeltaSeconds_);
     }
     audio_.update(lastDeltaSeconds_);
+    audioScene_.sync(world_, audio_);
     renderer_.begin_graph();
     if (config_.editor) {
         renderer_.begin_editor_frame();
@@ -197,6 +207,7 @@ void Engine::shutdown() {
     }
     assets_.shutdown();
     input_.shutdown();
+    audioScene_.shutdown(audio_);
     audio_.shutdown();
     window_.set_file_drop_handler({});
     window_.destroy();

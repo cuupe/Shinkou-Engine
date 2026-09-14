@@ -323,6 +323,37 @@ protected:
     }
     void on_update(Seconds dt) override;
 };
+
+// Scene-owned audio intent. Runtime AudioAssetId/AudioVoiceId handles are
+// deliberately kept out of the component; AudioSceneSystem owns that session
+// state and releases it when the object, clip or audio device disappears.
+class AudioSourceComponent final : public Component {
+public:
+    std::string clipPath{};
+    std::uint64_t assetId{0};
+    std::uint32_t bus{2}; // AudioBus::Sfx without coupling GameObject.h to the audio backend.
+    bool playOnStart{false};
+    bool loop{false};
+    float volume{1.0f};
+    float pitch{1.0f};
+    bool spatialized{false};
+    bool streaming{false};
+
+    std::string_view type_name() const noexcept override { return "AudioSource"; }
+
+protected:
+    void define_properties(PropertyBuilder& builder) override {
+        builder.add("clipPath", &clipPath);
+        builder.add("assetId", &assetId, PropertyFlags::Serialized, 0.0, 0.0, 0.0, "Asset Id");
+        builder.add("bus", &bus, PropertyFlags::Serialized, 0.0, 5.0, 1.0);
+        builder.add("playOnStart", &playOnStart, PropertyFlags::Serialized, 0.0, 0.0, 0.0, "Play On Start");
+        builder.add("loop", &loop, PropertyFlags::Serialized);
+        builder.add("volume", &volume, PropertyFlags::Serialized, 0.0, 1.0, 0.01);
+        builder.add("pitch", &pitch, PropertyFlags::Serialized, 0.01, 8.0, 0.01);
+        builder.add("spatialized", &spatialized, PropertyFlags::Serialized);
+        builder.add("streaming", &streaming, PropertyFlags::Serialized);
+    }
+};
 }
 
 class GameObject {

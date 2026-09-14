@@ -2,6 +2,7 @@
 
 #include "shinkou/assets/AssetSystem.h"
 #include "shinkou/World.h"
+#include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/audio/AudioSystem.h"
 #include "shinkou/editor/EditorLayer.h"
 #include "shinkou/input/InputSystem.h"
@@ -43,6 +44,7 @@ private:
     render::Renderer renderer_;
     std::unique_ptr<physics::IPhysicsWorld> physics_;
     audio::AudioSystem audio_;
+    audio::AudioSceneSystem audioScene_;
     network::NetworkSystem network_;
     input::InputSystem input_;
     scripting::ScriptHost scripts_;
@@ -75,6 +77,8 @@ public:
     input::InputSystem& input() noexcept { return input_; }
     audio::AudioSystem& audio() noexcept { return audio_; }
     const audio::AudioSystem& audio() const noexcept { return audio_; }
+    audio::AudioSceneSystem& audio_scene() noexcept { return audioScene_; }
+    const audio::AudioSceneSystem& audio_scene() const noexcept { return audioScene_; }
     network::NetworkSystem& network() noexcept { return network_; }
     const network::NetworkSystem& network() const noexcept { return network_; }
     physics::IPhysicsWorld& physics() noexcept { return *physics_; }

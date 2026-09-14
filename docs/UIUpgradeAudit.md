@@ -1444,6 +1444,40 @@
 - 自动化测试覆盖了 native adapter 的 dispatch seam，但没有真实 Explorer OLE/WM_DROPFILES 手工 capture；下一轮补 Windows UI QA，并把拖放后的 status/scene count 纳入 capture trace。
 - 下一轮入口：将 4.24 sample-level scene present 提炼为通用 renderer contract，同时设计可序列化 AudioSource 的 clip/voice policy；模型继续补 depth/material/texture 与跨后端能力。
 
+## 第 4.26 子阶段：可序列化 AudioSource 与场景音频生命周期桥接
+
+### 实现与范围
+
+- `AudioSourceComponent` 只保存 `clipPath`、`assetId` 和播放策略字段；World 注册该类型后，通用反射和 `EditorDocument` 自动覆盖 scene JSON capture/restore。运行时句柄集中由 `AudioSceneSystem` 持有，不进入 World。
+- `AudioSceneSystem` 将规范化项目相对路径映射到共享 clip binding，并为每个 GameObject 管理独立 voice binding；它处理 play-on-start、禁用/激活、路径或播放策略变化、手动 play/stop、对象删除、播放结束和 shutdown 的 stop/unload 顺序。
+- Engine 在 `AudioSystem::update` 后同步场景，在 `AudioSystem::shutdown` 前销毁场景绑定；未提供 audio asset root 时回退到 editor/assets project root，避免相对路径在 Engine 配置下失配。
+- 明确非目标：`assetId` 尚未向 AssetSystem manifest 做反向确认；listener/3D 衰减、streaming 预取、专用 Inspector UX 和真实音频解码/播放设备能力继续单独立项。
+
+### 契约与证据
+
+- `shinkou_audio_scene_system_tests` 使用 fake backend 验证一个场景源自动播放、同路径双对象只注册一个 clip、禁用与路径变更的 refcount、结束 voice 后 clip 回收、手动播放/停止、对象删除、shutdown 和 `AudioSource` JSON 字段。
+- 构建：`cmake --build out/build/mingw-debug --config Debug --parallel 4` 通过。
+- 专项：`ctest --test-dir out/build/mingw-debug -R shinkou_audio_scene_system_tests --output-on-failure` 为 `1/1` passed、总计 `1.20 sec`。
+- 全量：`ctest --test-dir out/build/mingw-debug --output-on-failure` 为 `54/54` passed、0 failures、总计 `40.10 sec`。
+- Engine smoke：`shinkou_engine_sample.exe --frames 1 --editor dx11` 退出 `0`，`device-ready=1`、`native-ui=1`、`viewport-scissor=1`、`passes=4`、`draws=3`，trace 包含 `editor_scene_present`；该证据验证 Engine 生命周期接线，但不代表真实音频文件已在 sample 中播放。
+
+### 安全、性能与视觉审计
+
+- path 输入为空、绝对路径或含项目外上跳段时不创建 source；bus、volume、pitch 在进入 AudioSystem 前有界化。此轮没有新增文件复制、文件内容读取、shell、网络或第三方依赖。
+- clip table 以规范化路径去重并以引用计数回收；voice 和 clip 是会话态，World 不会持有悬空后端对象。播放结束后同步检查 Invalid/Stopped/Finished，释放已失效 voice 的 clip。
+- 同步只遍历 World 的 AudioSource 组件并更新小型参数；空间 voice 只提交变换/播放参数，不在 UI paint 或 render pass 中做 IO。没有改变 retained UI 像素呈现，因此继续沿用 4.24 GPU capture 证据和限制。
+
+### 失败状态与回滚路径
+
+- audio backend 未初始化、clip 无法注册、voice 创建失败或路径非法时，`AudioSceneDiagnostics` 记录失败/错误并保持 World 不变；失败分支会释放已经取得的 clip binding。
+- 禁用、删除、路径切换、外部停止、自然结束和 Engine shutdown 都有明确的 stop/unload 清理路径；回退时可移除 AudioSceneSystem 的 Engine 接线与 AudioSource 注册，不影响既有编辑器媒体预览、模型预览和 AssetId 场景引用格式。
+
+### 未解决风险与下一轮
+
+- `assetId` 当前是可序列化身份字段，但 AudioSceneSystem 仍按安全 path 载入，尚未阻止 path 与 manifest 身份不一致；下一轮接入 AssetSystem manifest 校验、重命名/失效通知和导入错误状态。
+- AudioSource 目前可由通用属性反射编辑，尚无专用的 clip picker、bus 下拉、preview transport、listener/3D 可视化和 streaming 进度；这些需要先定义 editor/runtime 双向事务。
+- 本轮没有新增视觉像素变化；继续把 4.24 的 GPU readback/scene presentation 作为 UI 宿主证据，同时规划模型 depth/material/texture 与跨后端渲染审计。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

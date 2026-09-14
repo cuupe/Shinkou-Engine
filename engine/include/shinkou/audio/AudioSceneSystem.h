@@ -1,0 +1,75 @@
+#pragma once
+
+#include "shinkou/Types.h"
+#include "shinkou/audio/AudioSystem.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+
+namespace shinkou {
+class World;
+class GameObject;
+namespace components { class AudioSourceComponent; }
+
+namespace audio {
+
+struct AudioSceneDiagnostics {
+    std::size_t activeSources{0};
+    std::size_t playingSources{0};
+    std::size_t loadedClips{0};
+    std::size_t failedSources{0};
+    std::string lastError{};
+};
+
+// Bridges serialized AudioSourceComponent intent to session-owned audio
+// handles. World data never owns AudioAssetId/AudioVoiceId or backend state.
+class AudioSceneSystem final {
+    struct ClipBinding {
+        AudioAssetId asset{0};
+        std::size_t references{0};
+    };
+
+    struct SourceBinding {
+        std::string path{};
+        std::uint32_t bus{2};
+        bool streaming{false};
+        bool loop{false};
+        bool spatialized{false};
+        float volume{1.0f};
+        float pitch{1.0f};
+        AudioAssetId asset{0};
+        AudioVoiceId voice{0};
+        bool started{false};
+        std::uint64_t lastSeenRevision{0};
+    };
+
+    std::unordered_map<std::string, ClipBinding> clips_;
+    std::unordered_map<ObjectId, SourceBinding> sources_;
+    std::uint64_t revision_{0};
+    AudioSceneDiagnostics diagnostics_{};
+
+    AudioAssetId acquire_clip(AudioSystem& audio, const std::string& path, bool streaming);
+    void release_clip(AudioSystem& audio, const std::string& path, AudioAssetId asset);
+    void stop_source(AudioSystem& audio, SourceBinding& binding);
+    bool start_source(GameObject& object, components::AudioSourceComponent& source,
+                      SourceBinding& binding, AudioSystem& audio);
+
+public:
+    AudioSceneSystem() = default;
+    AudioSceneSystem(const AudioSceneSystem&) = delete;
+    AudioSceneSystem& operator=(const AudioSceneSystem&) = delete;
+
+    void sync(World& world, AudioSystem& audio);
+    bool play(World& world, ObjectId object, AudioSystem& audio);
+    void stop(ObjectId object, AudioSystem& audio);
+    void shutdown(AudioSystem& audio);
+
+    const AudioSceneDiagnostics& diagnostics() const noexcept { return diagnostics_; }
+    std::size_t source_count() const noexcept { return sources_.size(); }
+    std::size_t clip_count() const noexcept { return clips_.size(); }
+};
+
+} // namespace audio
+} // namespace shinkou
