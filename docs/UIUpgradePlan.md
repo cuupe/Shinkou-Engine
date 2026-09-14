@@ -770,3 +770,20 @@
 - 集成：完整构建和 52 项 CTest；EditorLayer→RenderScene→EditorModelSceneRenderer→RenderGraph→backend 的调用顺序作为 integration trace；D3D11 仅使用受限的 2M vertices/6M indices 和有限矩阵/索引校验。
 - 视觉：1280×720、DPI 144、dark/tree capture 保留 retained command、text、viewport 和窗口证据；本机此次 capture 仍返回 `GdiWindowSurface`，因此只记录宿主布局证据，不把它当作 GPU scene pixel proof。
 - 下一入口：为 Audio AssetId 建立 AudioSystem clip/source 绑定、取消和卸载契约，然后再回到模型深度/材质和跨后端 shader 能力。
+
+### 第 4.23 子阶段：音频资源引用与 AudioSystem 生命周期绑定
+
+目标：让编辑器媒体预览使用 manifest-backed 音频身份时复用 `AudioSystem` 的 `AudioAssetId`，同时保持场景文档不保存 voice、decoder 或后端对象。
+
+实现范围：
+
+- `EditorLayer` 为 manifest audio AssetId 维护受控的 `AssetId → AudioAssetId` clip cache；播放前通过当前安全解析路径加载 clip，再通过 `AudioSystem::play(AudioAssetId, AudioPlayParams)` 创建 UI bus voice。
+- path-only 兼容预览使用 editor-owned 临时 clip，停止、切换资源、项目根变化、音频系统替换和编辑器关闭时释放；manifest-backed clip 在当前编辑器会话复用，并在重连/关闭时统一卸载。
+- 原有播放/暂停/停止/循环/音量/seek 控件不变，继续使用 `AudioSystem` 的 voice transport；当系统不可用或 backend 不支持时保留诚实的 unavailable 状态。
+- 非目标：场景 AudioSource 组件、运行时自动播放、流式 decoder 的后台预取、3D 空间混音和跨项目音频引用；这些需要独立的文档/运行时生命周期。
+
+审计与验证安排：
+
+- 单元/集成：保留 WAV provider、fake backend、seek/暂停/停止状态回归，新增播放后 AudioSystem asset pool 增长、停止后 path-only clip 回收断言。
+- 安全/性能：clip cache 只保存整数句柄，不把文件句柄或 decoder 写入 UI/World；加载入口仍受项目根校验，重复播放不重复注册同一路径，所有 unload 发生在系统切换/停止/关闭边界。
+- 下一入口：manifest audio binding 稳定后，再设计可序列化的 AudioSource component 与场景运行时同步；模型方向并行推进 depth/material/texture。

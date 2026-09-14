@@ -1346,6 +1346,36 @@
 - scene cache 目前按当前活动引用 prune，跨场景共享资源、重命名历史、依赖失效传播和磁盘导入数据库仍属于 AssetSystem 后续工作。
 - 下一轮建立 `AssetId → AudioSystem clip/source` 绑定，明确 voice 生命周期、取消、unload、播放头同步和文档只存引用；随后回到模型深度/材质和 OS drag/drop adapter。
 
+## 第 4.23 子阶段：音频资源引用与 AudioSystem 生命周期绑定
+
+### 实现与范围
+
+- `EditorLayer` 新增 manifest audio `AssetId → AudioAssetId` clip cache。播放前先通过 `FileSystemService::resolve_existing` 完成项目边界校验，再以 `AudioSystem::load` 获取可复用的 clip handle，并调用 `play(AudioAssetId, AudioPlayParams)`，不再让每次预览播放隐式创建未跟踪的 path asset。
+- `stop_audio_preview` 会停止 voice；path-only 临时 clip 立即 unload；manifest-backed clip 由 `clear_audio_asset_bindings` 在 AssetSystem/AudioSystem 替换、项目根切换和 editor shutdown 时批量 unload。现有 cursor/seek、pause/resume、volume 和 UI bus 语义保持不变。
+- 场景仍只保存 `AssetReferenceComponent` 的 path + manifest AssetId；`AudioAssetId`、voice 和 backend decoder 都是 EditorLayer 的会话态，不进入 scene JSON。
+
+### 契约与证据
+
+- `EditorAudioPreviewTests` 使用可观测 fake audio backend，保留 WAV provider、异步 media preview、seek、play/pause/stop 回归，并新增断言：播放创建一个 AudioSystem clip，停止后 path-only clip pool 回收到 `asset_count()==0`。
+- 目标构建与 focused `shinkou_editor_audio_preview_tests` 已通过：`1/1` passed、`2.57 sec`；4.22 的最终全量构建/CTest 证据仍为 `52/52` passed、0 failures、`30.56 sec`。
+- 不可用 AudioSystem 的既有 interaction 路径继续报告 `AudioSystem is not connected`，不会把音频文件存在误报成可播放；本轮没有引入新的外部依赖或 shell/网络操作。
+
+### 安全、性能与视觉审计
+
+- path-only 临时句柄的所有权明确归 EditorLayer；manifest cache 的所有权也集中在同一个 binding table，系统切换前先 stop/unload，避免悬空 voice 或旧系统句柄。
+- `AudioSystem::load` 的路径去重和池上限继续生效；编辑器重复播放同一 manifest AssetId 复用 handle，停止释放 path-only clip，不增加每帧扫描、文件读取或解码器创建。
+- 音频控制仍通过 retained media panel 的已有命中区域与 `AudioSystem` transport seam；没有改变 D3D11 UI presentation，因此 4.22 的 GDI capture 限定仍适用。
+
+### 失败状态与回滚路径
+
+- 音频系统未连接、资源越过项目根、clip load 或 voice creation 失败时，状态变为 stopped/unavailable，不修改 World；临时句柄在失败分支立即释放。
+- 若回退本轮，可恢复 `start_audio_preview` 的 path overload，同时保留场景与 UI 数据格式；不会影响模型 scene renderer 或 Inspector media provider。
+
+### 未解决风险与下一轮
+
+- 目前只绑定编辑器预览 clip，不创建场景 AudioSource，不做运行时自动播放、3D spatial source、streaming prefetch 或 AssetSystem 依赖失效通知。
+- 下一轮为 AudioSource 设计可序列化 path/AssetId/voice policy 并接入 world lifecycle；模型并行补 depth target、glTF material/texture 和多后端 shader 能力。
+
 ### 失败状态与回滚路径
 
 - 未连接/未 ready 的 AssetSystem、manifest 不含当前资源、目录、越界路径、未知类型和非法坐标均在 checkpoint 之前失败，不写场景。

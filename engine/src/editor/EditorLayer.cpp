@@ -745,6 +745,7 @@ bool EditorLayer::panel_visible(std::string_view id) const noexcept {
 
 void EditorLayer::set_project_root(std::string path) {
     clear_media_preview();
+    clear_audio_asset_bindings();
     reset_model_scene_assets();
     if (initialized_ && assetSystem_) assetSystemRootNeedsRestart_ = true;
     reset_asset_system_preview("AssetSystem root changed; waiting for resource index...");
@@ -835,12 +836,19 @@ void EditorLayer::set_asset_system(assets::AssetSystem* assetSystem) {
         modelPreviewFuture_.wait();
         try { modelPreviewFuture_.get(); } catch (...) { }
     }
+    clear_audio_asset_bindings();
     reset_model_scene_assets();
     assetSystem_ = assetSystem;
     if (!initialized_) assetSystemRootNeedsRestart_ = false;
     reset_asset_manifest(assetSystem_ ? "Waiting for AssetSystem manifest..." :
         "AssetSystem manifest not connected");
     if (initialized_) request_asset_manifest_scan();
+}
+
+void EditorLayer::set_audio_system(audio::AudioSystem* audioSystem) noexcept {
+    if (audioSystem_ == audioSystem) return;
+    clear_audio_asset_bindings();
+    audioSystem_ = audioSystem;
 }
 
 void EditorLayer::set_layout_path(std::string path) {
@@ -2070,11 +2078,33 @@ void EditorLayer::request_image_preview(const EditorAssetIndexEntry& indexed) {
 
 void EditorLayer::stop_audio_preview() {
     if (audioPreviewVoice_ != 0 && audioSystem_) audioSystem_->stop(audioPreviewVoice_);
+    // Path-only preview loads are editor-owned temporary clips. Manifest
+    // backed clips stay cached for the current editor session and are
+    // released by clear_audio_asset_bindings or an AssetSystem reconnect.
+    if (audioPreviewAsset_ != 0 && audioPreviewAssetId_ == 0 && audioSystem_ &&
+        audioSystem_->is_loaded(audioPreviewAsset_)) {
+        audioSystem_->unload(audioPreviewAsset_);
+    }
     audioPreviewVoice_ = 0;
+    audioPreviewAsset_ = 0;
+    audioPreviewAssetId_ = 0;
     audioPreviewPath_.clear();
     auto& playback = mediaPanel_.playback();
     playback.state = ui::MediaPlaybackState::Stopped;
     playback.currentTime = 0.0;
+}
+
+void EditorLayer::clear_audio_asset_bindings() {
+    stop_audio_preview();
+    if (audioSystem_) {
+        for (const auto& [assetId, audioAsset] : audioAssetBindings_) {
+            (void)assetId;
+            if (audioAsset != 0 && audioSystem_->is_loaded(audioAsset)) audioSystem_->unload(audioAsset);
+        }
+    }
+    audioAssetBindings_.clear();
+    audioPreviewAsset_ = 0;
+    audioPreviewAssetId_ = 0;
 }
 
 void EditorLayer::clear_media_preview() {
@@ -2115,18 +2145,48 @@ void EditorLayer::start_audio_preview() {
         if (state == audio::AudioVoiceState::Playing) return;
         stop_audio_preview();
     }
-    audio::AudioPlayParams params;
-    params.bus = audio::AudioBus::UI;
-    params.loop = mediaPanel_.playback().loop;
-    params.streaming = true;
-    params.volume = static_cast<float>(std::clamp(mediaPanel_.playback().volume, 0.0, 1.0));
-    audioPreviewVoice_ = audioSystem_->play(path, params);
-    if (audioPreviewVoice_ == 0) {
+    assets::AssetId manifestAssetId = 0;
+    if (assetManifest_) {
+        for (const auto& entry : *assetManifest_) {
+            if (entry.id != 0 && entry.key.type == "audio" && entry.key.uri == selectedAsset_) {
+                manifestAssetId = entry.id;
+                break;
+            }
+        }
+    }
+    audio::AudioAssetId audioAsset = 0;
+    if (manifestAssetId != 0) {
+        const auto cached = audioAssetBindings_.find(manifestAssetId);
+        if (cached != audioAssetBindings_.end() && audioSystem_->is_loaded(cached->second)) {
+            audioAsset = cached->second;
+        } else {
+            audioAsset = audioSystem_->load(path, true);
+            if (audioAsset != 0) audioAssetBindings_[manifestAssetId] = audioAsset;
+        }
+    } else {
+        audioAsset = audioSystem_->load(path, true);
+    }
+    if (audioAsset == 0) {
         mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
         lastStatus_ = "Audio preview failed: " + audioSystem_->last_error();
         sync_media_preview_state();
         return;
     }
+    audio::AudioPlayParams params;
+    params.bus = audio::AudioBus::UI;
+    params.loop = mediaPanel_.playback().loop;
+    params.streaming = true;
+    params.volume = static_cast<float>(std::clamp(mediaPanel_.playback().volume, 0.0, 1.0));
+    audioPreviewVoice_ = audioSystem_->play(audioAsset, params);
+    if (audioPreviewVoice_ == 0) {
+        if (manifestAssetId == 0 && audioSystem_->is_loaded(audioAsset)) audioSystem_->unload(audioAsset);
+        mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
+        lastStatus_ = "Audio preview failed: " + audioSystem_->last_error();
+        sync_media_preview_state();
+        return;
+    }
+    audioPreviewAsset_ = audioAsset;
+    audioPreviewAssetId_ = manifestAssetId;
     audioPreviewPath_ = selectedAsset_;
     mediaPanel_.playback().state = ui::MediaPlaybackState::Playing;
     lastStatus_ = "Playing " + selectedAsset_;
@@ -4530,7 +4590,7 @@ void EditorLayer::shutdown(render::Renderer* renderer) {
     }
     liveBuildOutput_.reset();
     buildCancel_.reset();
-    stop_audio_preview();
+    clear_audio_asset_bindings();
     if (renderer) modelSceneRenderer_.clear(*renderer);
     save_layout();
     uninstall_native_menu();

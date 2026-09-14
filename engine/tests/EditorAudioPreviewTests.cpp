@@ -191,6 +191,7 @@ int main() {
     editor.execute_command(shinkou::editor::EditorCommand::MediaStop, {}, world);
     editor.draw(renderer, world, 1.0f / 60.0f, 243);
     assert(editor.media_preview().playbackState == "stopped");
+    assert(audio.asset_count() == 0);
 
     editor.shutdown();
     audio.shutdown();

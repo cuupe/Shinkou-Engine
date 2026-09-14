@@ -265,6 +265,9 @@ class EditorLayer {
     assets::AssetSystem* assetSystem_{nullptr};
     bool assetSystemRootNeedsRestart_{false};
     audio::AudioVoiceId audioPreviewVoice_{0};
+    audio::AudioAssetId audioPreviewAsset_{0};
+    assets::AssetId audioPreviewAssetId_{0};
+    std::unordered_map<assets::AssetId, audio::AudioAssetId> audioAssetBindings_{};
     std::string audioPreviewPath_{};
     EditorBuildProcessResult lastBuildResult_{};
     std::string buildStatus_{"Ready"};
@@ -331,6 +334,7 @@ class EditorLayer {
     void reset_model_preview();
     void sync_media_preview_state();
     void stop_audio_preview();
+    void clear_audio_asset_bindings();
     void clear_media_preview();
     void start_audio_preview();
     void poll_build();
@@ -429,7 +433,7 @@ public:
     bool panel_visible(std::string_view id) const noexcept;
 
     void set_project_root(std::string path);
-    void set_audio_system(audio::AudioSystem* audioSystem) noexcept { audioSystem_ = audioSystem; }
+    void set_audio_system(audio::AudioSystem* audioSystem) noexcept;
     void set_asset_system(assets::AssetSystem* assetSystem);
     void set_layout_path(std::string path);
     void set_display_size(float width, float height, float dpiScale = 1.0f) noexcept;
