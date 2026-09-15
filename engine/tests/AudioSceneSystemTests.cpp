@@ -1,9 +1,14 @@
 #include "shinkou/World.h"
+#include "shinkou/assets/AssetSystem.h"
 #include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/editor/EditorDocument.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -85,12 +90,39 @@ int main() {
     using namespace shinkou;
     using namespace shinkou::audio;
 
+    const auto project = std::filesystem::temp_directory_path() /
+        ("shinkou-audio-scene-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(project / "audio");
+    std::ofstream(project / "audio/loop.wav", std::ios::binary) << "loop";
+    std::ofstream(project / "audio/other.wav", std::ios::binary) << "other";
+    assets::AssetSystemConfig assetConfig;
+    assetConfig.projectRoot = project;
+    assetConfig.cacheRoot = project / ".shinkou" / "cache";
+    assetConfig.workerCount = 1;
+    assetConfig.enableFileWatching = false;
+    assetConfig.enableBackgroundWatcher = false;
+    assetConfig.enableDiskCache = false;
+    assets::AssetSystem assetSystem(assetConfig);
+    assert(assetSystem.initialize());
+    const auto manifest = assetSystem.scan_sources();
+    assert(assetSystem.manifest_ready());
+    const auto manifest_id_for = [&](const char* name) {
+        const auto found = std::find_if(manifest.begin(), manifest.end(), [&](const auto& entry) {
+            return entry.key.type == "audio" && entry.sourcePath.filename() == name;
+        });
+        return found == manifest.end() ? assets::AssetId{0} : found->id;
+    };
+    const auto loopAssetId = manifest_id_for("loop.wav");
+    const auto otherAssetId = manifest_id_for("other.wav");
+    assert(loopAssetId != 0 && otherAssetId != 0 && loopAssetId != otherAssetId);
+
     World world;
     auto& first = world.create_object("Music");
     auto* firstSource = first.add_component<components::AudioSourceComponent>();
     assert(firstSource);
     firstSource->clipPath = "audio/loop.wav";
-    firstSource->assetId = 42;
+    firstSource->assetId = loopAssetId;
     firstSource->playOnStart = true;
     firstSource->loop = true;
     firstSource->spatialized = true;
@@ -98,22 +130,42 @@ int main() {
     first.get_component<components::TransformComponent>()->set_position({3.0f, 2.0f, 1.0f});
 
     audio::AudioConfig config;
-    config.assetRoot = "C:/shinkou-test-project";
+    config.assetRoot = project;
     config.maxAssets = 8;
     config.maxVoices = 8;
     auto backend = std::make_unique<RecordingBackend>();
     auto* backendSpy = backend.get();
     AudioSystem audio(std::move(backend), config);
     assert(audio.initialize());
+
+    assets::AssetSystem pendingAssetSystem(assetConfig);
+    assert(pendingAssetSystem.initialize());
+    World pendingWorld;
+    auto& pendingObject = pendingWorld.create_object("PendingMusic");
+    auto* pendingSource = pendingObject.add_component<components::AudioSourceComponent>();
+    assert(pendingSource);
+    pendingSource->clipPath = "audio/loop.wav";
+    pendingSource->assetId = loopAssetId;
+    pendingSource->playOnStart = true;
+    AudioSceneSystem pendingScene;
+    pendingScene.sync(pendingWorld, audio, &pendingAssetSystem);
+    assert(pendingScene.clip_count() == 0 && pendingScene.diagnostics().playingSources == 0 &&
+           pendingScene.diagnostics().pendingSources == 1);
+    pendingAssetSystem.scan_sources();
+    pendingScene.sync(pendingWorld, audio, &pendingAssetSystem);
+    assert(pendingScene.clip_count() == 1 && pendingScene.diagnostics().playingSources == 1);
+    pendingScene.shutdown(audio);
+    pendingAssetSystem.shutdown();
+
     AudioSceneSystem scene;
 
     world.update(0.0f);
-    scene.sync(world, audio);
+    scene.sync(world, audio, &assetSystem);
     assert(scene.source_count() == 1 && scene.clip_count() == 1);
     assert(scene.diagnostics().activeSources == 1 && scene.diagnostics().playingSources == 1);
     assert(audio.asset_count() == 1);
 
-    scene.sync(world, audio);
+    scene.sync(world, audio, &assetSystem);
     assert(scene.source_count() == 1 && scene.clip_count() == 1 && audio.asset_count() == 1);
 
     auto& second = world.create_object("MusicCopy");
@@ -122,16 +174,19 @@ int main() {
     secondSource->clipPath = firstSource->clipPath;
     secondSource->playOnStart = true;
     world.update(0.0f);
-    scene.sync(world, audio);
+    scene.sync(world, audio, &assetSystem);
     assert(scene.source_count() == 2 && scene.clip_count() == 1 && audio.asset_count() == 1);
     assert(scene.diagnostics().playingSources == 2);
 
     firstSource->set_enabled(false);
-    scene.sync(world, audio);
+    scene.sync(world, audio, &assetSystem);
     assert(scene.source_count() == 2 && scene.clip_count() == 1 && audio.asset_count() == 1);
     firstSource->set_enabled(true);
+    scene.sync(world, audio, &assetSystem);
+    assert(scene.clip_count() == 1 && audio.asset_count() == 1 && scene.diagnostics().playingSources == 2);
     firstSource->clipPath = "audio/other.wav";
-    scene.sync(world, audio);
+    firstSource->assetId = otherAssetId;
+    scene.sync(world, audio, &assetSystem);
     assert(scene.clip_count() == 2 && audio.asset_count() == 2);
 
     editor::EditorDocument document;
@@ -144,22 +199,31 @@ int main() {
 
     backendSpy->finish_all();
     audio.update(0.0f);
-    scene.sync(world, audio);
+    scene.sync(world, audio, &assetSystem);
     assert(scene.source_count() == 2 && scene.clip_count() == 0 && audio.asset_count() == 0);
 
-    assert(scene.play(world, first.id(), audio));
+    assert(scene.play(world, first.id(), audio, &assetSystem));
     assert(scene.clip_count() == 1 && audio.asset_count() == 1);
     scene.stop(first.id(), audio);
     assert(scene.clip_count() == 0 && audio.asset_count() == 0);
+    firstSource->assetId = loopAssetId;
+    assert(!scene.play(world, first.id(), audio, &assetSystem));
+    assert(scene.clip_count() == 0 && scene.diagnostics().lastError.find("does not match") != std::string::npos);
+    firstSource->assetId = otherAssetId;
+    assert(scene.play(world, first.id(), audio, &assetSystem));
+    scene.stop(first.id(), audio);
     world.destroy_object(second);
     world.update(0.0f);
-    scene.sync(world, audio);
+    scene.sync(world, audio, &assetSystem);
     assert(scene.source_count() == 1 && scene.clip_count() == 0 && audio.asset_count() == 0);
 
-    assert(scene.play(world, first.id(), audio));
+    assert(scene.play(world, first.id(), audio, &assetSystem));
     assert(scene.clip_count() == 1 && audio.asset_count() == 1);
     scene.shutdown(audio);
     assert(scene.source_count() == 0 && scene.clip_count() == 0 && audio.asset_count() == 0);
     audio.shutdown();
+    assetSystem.shutdown();
+    std::error_code cleanupError;
+    std::filesystem::remove_all(project, cleanupError);
     return 0;
 }

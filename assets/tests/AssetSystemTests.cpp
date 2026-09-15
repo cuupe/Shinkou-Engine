@@ -174,6 +174,10 @@ int main() {
     const auto baselineManifestEntries = system.scan_sources();
     const auto baselineManifestStats = system.last_manifest_scan_stats();
     assert(baselineManifestEntries.size() == 6 && baselineManifestStats.cacheMisses >= 6);
+    assert(system.manifest_ready());
+    shinkou::assets::AssetManifestEntry manifestById;
+    assert(system.find_manifest(baselineManifestEntries.front().id, manifestById) &&
+           manifestById.key == baselineManifestEntries.front().key);
 
     std::ofstream(root / "assets" / "shared.bin", std::ios::binary | std::ios::trunc) << "changed";
     for (int index = 0; index < 4; ++index) system.poll();
@@ -225,6 +229,7 @@ int main() {
     assert(restoredEntry != restoredManifest.entries.end() && restoredEntry->id == reloaded.id);
     std::string seedError;
     assert(system.seed_manifest_cache(restoredManifest.entries, &seedError));
+    assert(system.manifest_ready() && system.find_manifest(reloaded.id, manifestById));
     const auto seededManifestEntries = system.scan_sources();
     const auto seededManifestStats = system.last_manifest_scan_stats();
     assert(seededManifestEntries.size() == restoredManifest.entries.size() &&
@@ -237,6 +242,7 @@ int main() {
     const auto invalidResult = shinkou::assets::AssetSystem::read_manifest(invalidManifest);
     assert(!invalidResult && invalidResult.error.find("ID") != std::string::npos);
     system.shutdown();
+    assert(!system.manifest_ready());
 
     // A shutdown system can be initialized again without retaining stale slots,
     // handles, queue entries, LRU links, or counters from its previous lifetime.

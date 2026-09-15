@@ -2,6 +2,7 @@
 
 #include "shinkou/GameObject.h"
 #include "shinkou/World.h"
+#include "shinkou/assets/AssetSystem.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,8 +11,14 @@
 namespace shinkou::audio {
 namespace {
 
-constexpr std::uint32_t kDefaultSfxBus = 2;
 constexpr std::uint32_t kLastBus = static_cast<std::uint32_t>(AudioBus::Count) - 1u;
+
+enum class AssetIdentityState : std::uint8_t { Valid, Pending, Invalid };
+
+struct AssetIdentityCheck {
+    AssetIdentityState state{AssetIdentityState::Valid};
+    std::string error{};
+};
 
 bool valid_project_path(std::string_view value, std::filesystem::path& normalized) {
     if (value.empty()) return false;
@@ -32,6 +39,48 @@ AudioPlayParams play_params(const components::AudioSourceComponent& source, cons
     if (const auto* transform = object.get_component<components::TransformComponent>())
         params.position = math::TransformPoint(transform->world_matrix(), {});
     return params;
+}
+
+AssetIdentityCheck validate_asset_identity(const components::AudioSourceComponent& source,
+                                           const std::string& normalizedPath,
+                                           const assets::AssetSystem* assetSystem) {
+    if (source.assetId == 0) return {};
+    if (!assetSystem || !assetSystem->initialized())
+        return {AssetIdentityState::Pending, "AudioSource AssetSystem manifest is unavailable"};
+    if (!assetSystem->manifest_ready())
+        return {AssetIdentityState::Pending, "AudioSource AssetSystem manifest is still scanning"};
+
+    assets::AssetManifestEntry entry;
+    if (!assetSystem->find_manifest(source.assetId, entry)) {
+        return {assetSystem->manifest_ready() ? AssetIdentityState::Invalid : AssetIdentityState::Pending,
+                "AudioSource AssetId is not present in the current manifest"};
+    }
+    if (entry.key.type != "audio")
+        return {AssetIdentityState::Invalid, "AudioSource AssetId does not identify an audio resource"};
+
+    const auto sourcePath = assetSystem->resolve_source(normalizedPath);
+    if (sourcePath.empty())
+        return {AssetIdentityState::Invalid, "AudioSource clip path cannot be resolved by AssetSystem"};
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(sourcePath, error) || error)
+        return {AssetIdentityState::Invalid, "AudioSource clip file is missing"};
+
+    auto manifestPath = entry.sourcePath;
+    if (manifestPath.is_relative()) manifestPath = assetSystem->resolve_source(entry.key.uri);
+    if (manifestPath.empty())
+        return {AssetIdentityState::Invalid, "AudioSource manifest source path cannot be resolved"};
+    error.clear();
+    if (!std::filesystem::is_regular_file(manifestPath, error) || error)
+        return {AssetIdentityState::Invalid, "AudioSource manifest entry points to a missing file"};
+
+    const auto canonical = [](const std::filesystem::path& path) {
+        std::error_code canonicalError;
+        const auto result = std::filesystem::weakly_canonical(path, canonicalError);
+        return canonicalError ? path.lexically_normal() : result;
+    };
+    if (canonical(sourcePath) != canonical(manifestPath))
+        return {AssetIdentityState::Invalid, "AudioSource path does not match its AssetId"};
+    return {};
 }
 
 } // namespace
@@ -65,10 +114,12 @@ void AudioSceneSystem::stop_source(AudioSystem& audio, SourceBinding& binding) {
     binding.voice = 0;
     if (binding.asset != 0) release_clip(audio, binding.path, binding.asset);
     binding.asset = 0;
+    binding.pending = false;
 }
 
 bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceComponent& source,
-                                    SourceBinding& binding, AudioSystem& audio) {
+                                    SourceBinding& binding, AudioSystem& audio,
+                                    const assets::AssetSystem* assetSystem) {
     std::filesystem::path normalized;
     if (!valid_project_path(source.clipPath, normalized)) {
         diagnostics_.lastError = "AudioSource clip path must be a project-relative file";
@@ -77,12 +128,25 @@ bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceC
         return false;
     }
     binding.path = normalized.generic_u8string();
+    binding.assetId = source.assetId;
     binding.bus = std::min(source.bus, kLastBus);
     binding.streaming = source.streaming;
     binding.loop = source.loop;
     binding.spatialized = source.spatialized;
     binding.volume = source.volume;
     binding.pitch = source.pitch;
+    binding.pending = false;
+    const auto identity = validate_asset_identity(source, binding.path, assetSystem);
+    if (identity.state != AssetIdentityState::Valid) {
+        diagnostics_.lastError = identity.error;
+        if (identity.state == AssetIdentityState::Pending) {
+            binding.pending = true;
+            return false;
+        }
+        ++diagnostics_.failedSources;
+        binding.started = true;
+        return false;
+    }
     binding.asset = acquire_clip(audio, binding.path, source.streaming);
     if (binding.asset == 0) {
         diagnostics_.lastError = audio.last_error().empty() ? "AudioSource clip could not be loaded" : audio.last_error();
@@ -104,7 +168,8 @@ bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceC
     return true;
 }
 
-void AudioSceneSystem::sync(World& world, AudioSystem& audio) {
+void AudioSceneSystem::sync(World& world, AudioSystem& audio,
+                            const assets::AssetSystem* assetSystem) {
     diagnostics_ = {};
     ++revision_;
     if (!audio.initialized()) {
@@ -126,19 +191,23 @@ void AudioSceneSystem::sync(World& world, AudioSystem& audio) {
             return valid_project_path(source->clipPath, normalized) ? normalized.generic_u8string() : std::string{};
         }();
         const bool pathChanged = binding.path != desiredPath || binding.streaming != source->streaming;
+        const bool identityChanged = binding.assetId != source->assetId;
         const bool configChanged = binding.bus != std::min(source->bus, kLastBus) ||
             binding.streaming != source->streaming || binding.loop != source->loop ||
             binding.spatialized != source->spatialized || binding.volume != source->volume ||
-            binding.pitch != source->pitch;
-        if (pathChanged || (configChanged && binding.voice != 0)) {
+            binding.pitch != source->pitch || binding.assetId != source->assetId;
+        if (pathChanged || identityChanged || (configChanged && binding.voice != 0)) {
             stop_source(audio, binding);
             binding.path = desiredPath;
             binding.streaming = source->streaming;
+            binding.assetId = source->assetId;
             binding.started = false;
+            binding.pending = false;
         }
         if (!object.active_in_hierarchy() || !source->enabled() || source->clipPath.empty()) {
             if (binding.voice != 0 || binding.asset != 0) stop_source(audio, binding);
             binding.started = false;
+            binding.pending = false;
             return;
         }
         if (binding.voice != 0) {
@@ -152,8 +221,10 @@ void AudioSceneSystem::sync(World& world, AudioSystem& audio) {
                 binding.started = true;
             }
         }
-        if (source->playOnStart && !binding.started)
-            start_source(object, *source, binding, audio);
+        if (source->playOnStart && !binding.started) {
+            start_source(object, *source, binding, audio, assetSystem);
+            if (binding.pending) ++diagnostics_.pendingSources;
+        }
         if (binding.voice != 0 && source->spatialized)
             audio.set_spatial(binding.voice, play_params(*source, object));
         if (binding.voice != 0 && audio.state(binding.voice) == AudioVoiceState::Playing) ++diagnostics_.playingSources;
@@ -170,7 +241,8 @@ void AudioSceneSystem::sync(World& world, AudioSystem& audio) {
     diagnostics_.loadedClips = clips_.size();
 }
 
-bool AudioSceneSystem::play(World& world, ObjectId objectId, AudioSystem& audio) {
+bool AudioSceneSystem::play(World& world, ObjectId objectId, AudioSystem& audio,
+                            const assets::AssetSystem* assetSystem) {
     auto* object = world.find_object(objectId);
     if (!object) return false;
     auto* source = object->get_component<components::AudioSourceComponent>();
@@ -179,7 +251,8 @@ bool AudioSceneSystem::play(World& world, ObjectId objectId, AudioSystem& audio)
     if (binding.voice != 0 || binding.asset != 0) stop_source(audio, binding);
     binding.path.clear();
     binding.started = false;
-    return start_source(*object, *source, binding, audio);
+    binding.pending = false;
+    return start_source(*object, *source, binding, audio, assetSystem);
 }
 
 void AudioSceneSystem::stop(ObjectId objectId, AudioSystem& audio) {

@@ -466,7 +466,10 @@ bool AssetSystem::initialize() {
 void AssetSystem::shutdown() {
     {
         std::lock_guard lock(mutex_);
-        if (!initialized_ && workers_.empty() && !watcher_.joinable()) return;
+        if (!initialized_ && workers_.empty() && !watcher_.joinable()) {
+            manifestReady_.store(false, std::memory_order_release);
+            return;
+        }
         stopping_ = true;
         for (std::uint32_t slot = 0; slot < records_.size(); ++slot) {
             auto& record = records_[slot];
@@ -495,14 +498,24 @@ void AssetSystem::shutdown() {
     watcherWakeup_.notify_all();
     for (auto& worker : workers_) if (worker.joinable()) worker.join();
     if (watcher_.joinable()) watcher_.join();
-    std::lock_guard lock(mutex_);
-    workers_.clear();
-    events_.clear();
-    index_.clear();
-    records_.clear();
-    lruHead_ = lruTail_ = InvalidSlot;
-    stats_ = {};
-    initialized_ = false;
+    {
+        std::lock_guard lock(mutex_);
+        workers_.clear();
+        events_.clear();
+        index_.clear();
+        records_.clear();
+        lruHead_ = lruTail_ = InvalidSlot;
+        stats_ = {};
+        initialized_ = false;
+    }
+    {
+        std::lock_guard scanLock(manifestScanMutex_);
+        manifestCache_.clear();
+        manifestScanStats_ = {};
+        std::atomic_store_explicit(&manifestSnapshot_,
+            std::shared_ptr<const std::vector<AssetManifestEntry>>{}, std::memory_order_release);
+        manifestReady_.store(false, std::memory_order_release);
+    }
 }
 
 bool AssetSystem::initialized() const noexcept { return initialized_.load(std::memory_order_acquire); }
@@ -513,13 +526,29 @@ void AssetSystem::add_mount(std::string virtualRoot, std::filesystem::path physi
     std::transform(virtualRoot.begin(), virtualRoot.end(), virtualRoot.begin(),
                    [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     while (!virtualRoot.empty() && virtualRoot.back() == '/') virtualRoot.pop_back();
-    std::lock_guard lock(mutex_);
-    mounts_.push_back({std::move(virtualRoot), std::move(physicalRoot), readOnly});
+    {
+        std::lock_guard lock(mutex_);
+        mounts_.push_back({std::move(virtualRoot), std::move(physicalRoot), readOnly});
+    }
+    std::lock_guard scanLock(manifestScanMutex_);
+    manifestCache_.clear();
+    manifestScanStats_ = {};
+    std::atomic_store_explicit(&manifestSnapshot_,
+        std::shared_ptr<const std::vector<AssetManifestEntry>>{}, std::memory_order_release);
+    manifestReady_.store(false, std::memory_order_release);
 }
 
 void AssetSystem::clear_mounts() {
-    std::lock_guard lock(mutex_);
-    mounts_.clear();
+    {
+        std::lock_guard lock(mutex_);
+        mounts_.clear();
+    }
+    std::lock_guard scanLock(manifestScanMutex_);
+    manifestCache_.clear();
+    manifestScanStats_ = {};
+    std::atomic_store_explicit(&manifestSnapshot_,
+        std::shared_ptr<const std::vector<AssetManifestEntry>>{}, std::memory_order_release);
+    manifestReady_.store(false, std::memory_order_release);
 }
 
 std::vector<AssetMount> AssetSystem::mounts() const {
@@ -1363,6 +1392,7 @@ AssetStats AssetSystem::stats() const {
 }
 
 std::vector<AssetManifestEntry> AssetSystem::scan_sources() const {
+    manifestReady_.store(false, std::memory_order_release);
     std::lock_guard scanLock(manifestScanMutex_);
     manifestScanStats_ = {};
     std::vector<AssetMount> mounts;
@@ -1415,6 +1445,10 @@ std::vector<AssetManifestEntry> AssetSystem::scan_sources() const {
         else ++cached;
     }
     manifestScanStats_.entries = result.size();
+    std::shared_ptr<const std::vector<AssetManifestEntry>> published =
+        std::make_shared<const std::vector<AssetManifestEntry>>(result);
+    std::atomic_store_explicit(&manifestSnapshot_, std::move(published), std::memory_order_release);
+    manifestReady_.store(true, std::memory_order_release);
     return result;
 }
 
@@ -1653,6 +1687,22 @@ AssetManifestScanStats AssetSystem::last_manifest_scan_stats() const {
     return manifestScanStats_;
 }
 
+bool AssetSystem::manifest_ready() const noexcept {
+    return manifestReady_.load(std::memory_order_acquire);
+}
+
+bool AssetSystem::find_manifest(AssetId id, AssetManifestEntry& output) const {
+    if (id == 0 || !manifest_ready()) return false;
+    const auto snapshot = std::atomic_load_explicit(&manifestSnapshot_, std::memory_order_acquire);
+    if (!snapshot || !manifest_ready()) return false;
+    for (const auto& entry : *snapshot) {
+        if (entry.id != id) continue;
+        output = entry;
+        return true;
+    }
+    return false;
+}
+
 AssetManifestReadResult AssetSystem::read_manifest(const std::filesystem::path& path) {
     constexpr std::uintmax_t maxManifestBytes = 64u * 1024u * 1024u;
     constexpr std::size_t maxEntries = 65536;
@@ -1750,8 +1800,14 @@ bool AssetSystem::seed_manifest_cache(const std::vector<AssetManifestEntry>& ent
             return false;
         }
     }
-    std::lock_guard scanLock(manifestScanMutex_);
-    manifestCache_ = std::move(seeded);
+    {
+        std::lock_guard scanLock(manifestScanMutex_);
+        manifestCache_ = std::move(seeded);
+    }
+    std::shared_ptr<const std::vector<AssetManifestEntry>> published =
+        std::make_shared<const std::vector<AssetManifestEntry>>(entries);
+    std::atomic_store_explicit(&manifestSnapshot_, std::move(published), std::memory_order_release);
+    manifestReady_.store(true, std::memory_order_release);
     return true;
 }
 

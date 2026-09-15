@@ -154,7 +154,7 @@ void Engine::tick(Seconds dt) {
         world_.update(lastDeltaSeconds_);
     }
     audio_.update(lastDeltaSeconds_);
-    audioScene_.sync(world_, audio_);
+    audioScene_.sync(world_, audio_, &assets_);
     renderer_.begin_graph();
     if (config_.editor) {
         renderer_.begin_editor_frame();

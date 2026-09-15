@@ -844,3 +844,23 @@
 - 安全/性能：只接受非空项目相对路径，bus/volume/pitch 有界钳制；scene bridge 只保存有界句柄和小型配置，不在每帧读取文件内容、不启动进程、不访问网络；相同路径在会话内复用一个 AudioSystem clip。
 - 本轮实际证据：完整构建通过；专项 CTest `1/1` passed、`1.20 sec`；全量 CTest `54/54` passed、0 失败、总计 `40.10 sec`；direct sample `--frames 1 --editor dx11` 退出 `0`，报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=1 passes=4 draws=3`，包含 `editor_scene_present`。
 - 下一入口：接入 `AssetSystem` manifest 的 `assetId → audio clip` 校验与失效通知，补 AudioSource 专用 Inspector/总线选择；随后推进 listener/3D spatial、streaming policy，以及模型 depth/material/texture。
+
+### 第 4.27 子阶段：AudioSource manifest 身份校验与失效诊断
+
+目标：让带有稳定 `assetId` 的场景音频源真正绑定到当前 AssetSystem manifest，禁止 path 与身份错配时创建 voice，同时允许 manifest 异步扫描完成后安全重试。
+
+实现范围：
+
+- `AssetSystem` 增加 `manifest_ready()` 与 `find_manifest()` 只读查询；扫描开始时暂时撤销 ready，完成后以 immutable snapshot 发布 ready，挂载变化和 shutdown 清理旧缓存，查询不接触扫描锁而不阻塞主循环。
+- `AudioSceneSystem` 接收可选 AssetSystem 解析器；当 `AudioSource.assetId != 0` 时要求 manifest 条目存在、类型为 `audio`、源文件仍是项目内普通文件，并将 manifest source 与 `clipPath` canonicalize 后比较；不满足条件不加载 clip、不创建 voice。
+- manifest 尚未就绪使用 pending 状态，下一次同步会重试；未知 ID、错误类型、缺失文件和 path/ID 不一致进入明确失败诊断。`assetId == 0` 继续保留 path-only 兼容行为。
+- AssetId 变化纳入 source binding 配置变更；Engine 每帧把 `assets_` 传入 AudioSceneSystem，保持 World 只存路径、身份和播放策略，不保存运行时句柄。
+- 非目标：本轮不修改 retained UI 像素，不增加导入/复制事务，不做 manifest 自动重写、重命名迁移、音频 decoder 预取、3D listener 或专用 Inspector 控件。
+
+审计与验证安排：
+
+- 单元：AssetSystem manifest ready/id 查询、mount/shutdown 失效；AudioScene 覆盖 pending→ready 重试、同路径共享、错误类型/未知 ID/path mismatch 拒绝、缺失文件、结束 voice 回收和 JSON 契约。
+- 集成：完整构建、AudioScene 与 AssetSystem focused tests、全量 CTest；sample 重新 clean-first 链接后走真实 Engine 初始化、AudioSystem/AssetSystem/Editor 生命周期和 DX11 UI host 冒烟。
+- 安全/性能：AssetId 校验只在 source 启动或显式 play 边界读取有限 manifest/file metadata；不在 paint/input 中扫描文件、不启动进程、不访问网络；manifest 查询不会在扫描锁竞争时阻塞引擎帧。
+- 本轮实际证据：完整构建通过；`shinkou_audio_scene_system_tests` 与 `shinkou_assets_tests` focused `2/2` passed、`2.29 sec`；全量 CTest `54/54` passed、0 失败、总计 `19.45 sec`；sample clean-first 重链通过，exe 非空，单帧 `--frames 1 --editor dx11` 退出 `0` 并报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 passes=4 draws=3`，短多帧 `--frames 10 --editor dx11` 退出 `0` 并报告 `frames=10 passes=40 draws=30`、`editor-ui-commands=184 text=41 assets=11 visible-assets=11`，包含 `editor_scene_present`。
+- 下一入口：把 AssetSystem manifest 身份变化转换为可观察的 editor/runtime invalidation 事件，补 AudioSource clip picker、bus 下拉和错误态 Inspector；之后实现 listener/3D spatial 与 streaming policy，再回到模型 depth/material/texture。

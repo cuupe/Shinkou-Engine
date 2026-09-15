@@ -11,6 +11,7 @@
 namespace shinkou {
 class World;
 class GameObject;
+namespace assets { class AssetSystem; }
 namespace components { class AudioSourceComponent; }
 
 namespace audio {
@@ -18,6 +19,7 @@ namespace audio {
 struct AudioSceneDiagnostics {
     std::size_t activeSources{0};
     std::size_t playingSources{0};
+    std::size_t pendingSources{0};
     std::size_t loadedClips{0};
     std::size_t failedSources{0};
     std::string lastError{};
@@ -39,9 +41,11 @@ class AudioSceneSystem final {
         bool spatialized{false};
         float volume{1.0f};
         float pitch{1.0f};
+        std::uint64_t assetId{0};
         AudioAssetId asset{0};
         AudioVoiceId voice{0};
         bool started{false};
+        bool pending{false};
         std::uint64_t lastSeenRevision{0};
     };
 
@@ -54,15 +58,17 @@ class AudioSceneSystem final {
     void release_clip(AudioSystem& audio, const std::string& path, AudioAssetId asset);
     void stop_source(AudioSystem& audio, SourceBinding& binding);
     bool start_source(GameObject& object, components::AudioSourceComponent& source,
-                      SourceBinding& binding, AudioSystem& audio);
+                      SourceBinding& binding, AudioSystem& audio,
+                      const assets::AssetSystem* assetSystem);
 
 public:
     AudioSceneSystem() = default;
     AudioSceneSystem(const AudioSceneSystem&) = delete;
     AudioSceneSystem& operator=(const AudioSceneSystem&) = delete;
 
-    void sync(World& world, AudioSystem& audio);
-    bool play(World& world, ObjectId object, AudioSystem& audio);
+    void sync(World& world, AudioSystem& audio, const assets::AssetSystem* assetSystem = nullptr);
+    bool play(World& world, ObjectId object, AudioSystem& audio,
+              const assets::AssetSystem* assetSystem = nullptr);
     void stop(ObjectId object, AudioSystem& audio);
     void shutdown(AudioSystem& audio);
 
