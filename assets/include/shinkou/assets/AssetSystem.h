@@ -238,6 +238,7 @@ class AssetSystem {
     mutable AssetManifestScanStats manifestScanStats_{};
     mutable std::shared_ptr<const std::vector<AssetManifestEntry>> manifestSnapshot_{};
     mutable std::atomic_bool manifestReady_{false};
+    mutable std::atomic<std::uint64_t> manifestRevision_{0};
     AssetEventId nextListenerId_{1};
     std::size_t lruHead_{static_cast<std::size_t>(-1)};
     std::size_t lruTail_{static_cast<std::size_t>(-1)};
@@ -264,6 +265,7 @@ class AssetSystem {
     static std::string normalize_uri(std::string_view uri);
     static std::string extension_of(std::string_view uri);
     static AssetId make_id(const AssetKey& key) noexcept;
+    void advance_manifest_revision() const noexcept;
 
 public:
     explicit AssetSystem(AssetSystemConfig config = {});
@@ -308,6 +310,7 @@ public:
     std::vector<AssetManifestEntry> scan_sources() const;
     AssetManifestScanStats last_manifest_scan_stats() const;
     bool manifest_ready() const noexcept;
+    std::uint64_t manifest_revision() const noexcept;
     bool find_manifest(AssetId id, AssetManifestEntry& output) const;
     static AssetManifestReadResult read_manifest(const std::filesystem::path& path);
     bool seed_manifest_cache(const std::vector<AssetManifestEntry>& entries, std::string* error = nullptr);

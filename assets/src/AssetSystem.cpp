@@ -468,6 +468,7 @@ void AssetSystem::shutdown() {
         std::lock_guard lock(mutex_);
         if (!initialized_ && workers_.empty() && !watcher_.joinable()) {
             manifestReady_.store(false, std::memory_order_release);
+            advance_manifest_revision();
             return;
         }
         stopping_ = true;
@@ -515,6 +516,7 @@ void AssetSystem::shutdown() {
         std::atomic_store_explicit(&manifestSnapshot_,
             std::shared_ptr<const std::vector<AssetManifestEntry>>{}, std::memory_order_release);
         manifestReady_.store(false, std::memory_order_release);
+        advance_manifest_revision();
     }
 }
 
@@ -536,6 +538,7 @@ void AssetSystem::add_mount(std::string virtualRoot, std::filesystem::path physi
     std::atomic_store_explicit(&manifestSnapshot_,
         std::shared_ptr<const std::vector<AssetManifestEntry>>{}, std::memory_order_release);
     manifestReady_.store(false, std::memory_order_release);
+    advance_manifest_revision();
 }
 
 void AssetSystem::clear_mounts() {
@@ -549,6 +552,7 @@ void AssetSystem::clear_mounts() {
     std::atomic_store_explicit(&manifestSnapshot_,
         std::shared_ptr<const std::vector<AssetManifestEntry>>{}, std::memory_order_release);
     manifestReady_.store(false, std::memory_order_release);
+    advance_manifest_revision();
 }
 
 std::vector<AssetMount> AssetSystem::mounts() const {
@@ -614,6 +618,15 @@ AssetId AssetSystem::make_id(const AssetKey& key) noexcept {
         hash *= 1099511628211ull;
     }
     return hash == 0 ? 1 : hash;
+}
+
+void AssetSystem::advance_manifest_revision() const noexcept {
+    auto current = manifestRevision_.load(std::memory_order_relaxed);
+    for (;;) {
+        const auto next = current == std::numeric_limits<std::uint64_t>::max() ? 1u : current + 1u;
+        if (manifestRevision_.compare_exchange_weak(current, next, std::memory_order_release,
+                                                     std::memory_order_relaxed)) return;
+    }
 }
 
 AssetKey AssetSystem::canonicalize_key_locked(AssetKey key) const {
@@ -1393,6 +1406,7 @@ AssetStats AssetSystem::stats() const {
 
 std::vector<AssetManifestEntry> AssetSystem::scan_sources() const {
     manifestReady_.store(false, std::memory_order_release);
+    advance_manifest_revision();
     std::lock_guard scanLock(manifestScanMutex_);
     manifestScanStats_ = {};
     std::vector<AssetMount> mounts;
@@ -1691,6 +1705,10 @@ bool AssetSystem::manifest_ready() const noexcept {
     return manifestReady_.load(std::memory_order_acquire);
 }
 
+std::uint64_t AssetSystem::manifest_revision() const noexcept {
+    return manifestRevision_.load(std::memory_order_acquire);
+}
+
 bool AssetSystem::find_manifest(AssetId id, AssetManifestEntry& output) const {
     if (id == 0 || !manifest_ready()) return false;
     const auto snapshot = std::atomic_load_explicit(&manifestSnapshot_, std::memory_order_acquire);
@@ -1800,6 +1818,8 @@ bool AssetSystem::seed_manifest_cache(const std::vector<AssetManifestEntry>& ent
             return false;
         }
     }
+    manifestReady_.store(false, std::memory_order_release);
+    advance_manifest_revision();
     {
         std::lock_guard scanLock(manifestScanMutex_);
         manifestCache_ = std::move(seeded);

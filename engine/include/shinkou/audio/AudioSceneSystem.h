@@ -20,6 +20,7 @@ struct AudioSceneDiagnostics {
     std::size_t activeSources{0};
     std::size_t playingSources{0};
     std::size_t pendingSources{0};
+    std::size_t invalidatedSources{0};
     std::size_t loadedClips{0};
     std::size_t failedSources{0};
     std::string lastError{};
@@ -46,6 +47,7 @@ class AudioSceneSystem final {
         AudioVoiceId voice{0};
         bool started{false};
         bool pending{false};
+        std::uint64_t manifestRevision{0};
         std::uint64_t lastSeenRevision{0};
     };
 

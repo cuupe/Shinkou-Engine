@@ -120,6 +120,8 @@ void AudioSceneSystem::stop_source(AudioSystem& audio, SourceBinding& binding) {
 bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceComponent& source,
                                     SourceBinding& binding, AudioSystem& audio,
                                     const assets::AssetSystem* assetSystem) {
+    binding.assetId = source.assetId;
+    binding.manifestRevision = assetSystem ? assetSystem->manifest_revision() : 0;
     std::filesystem::path normalized;
     if (!valid_project_path(source.clipPath, normalized)) {
         diagnostics_.lastError = "AudioSource clip path must be a project-relative file";
@@ -128,7 +130,6 @@ bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceC
         return false;
     }
     binding.path = normalized.generic_u8string();
-    binding.assetId = source.assetId;
     binding.bus = std::min(source.bus, kLastBus);
     binding.streaming = source.streaming;
     binding.loop = source.loop;
@@ -192,15 +193,23 @@ void AudioSceneSystem::sync(World& world, AudioSystem& audio,
         }();
         const bool pathChanged = binding.path != desiredPath || binding.streaming != source->streaming;
         const bool identityChanged = binding.assetId != source->assetId;
+        const auto manifestRevision = assetSystem ? assetSystem->manifest_revision() : 0;
+        const bool manifestChanged = source->assetId != 0 && !binding.pending &&
+            binding.manifestRevision != manifestRevision;
         const bool configChanged = binding.bus != std::min(source->bus, kLastBus) ||
             binding.streaming != source->streaming || binding.loop != source->loop ||
             binding.spatialized != source->spatialized || binding.volume != source->volume ||
             binding.pitch != source->pitch || binding.assetId != source->assetId;
-        if (pathChanged || identityChanged || (configChanged && binding.voice != 0)) {
+        if (pathChanged || identityChanged || manifestChanged || (configChanged && binding.voice != 0)) {
+            if (manifestChanged) {
+                ++diagnostics_.invalidatedSources;
+                diagnostics_.lastError = "AudioSource binding invalidated by AssetSystem manifest revision";
+            }
             stop_source(audio, binding);
             binding.path = desiredPath;
             binding.streaming = source->streaming;
             binding.assetId = source->assetId;
+            binding.manifestRevision = manifestRevision;
             binding.started = false;
             binding.pending = false;
         }

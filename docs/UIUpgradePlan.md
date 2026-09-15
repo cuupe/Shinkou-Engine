@@ -864,3 +864,21 @@
 - 安全/性能：AssetId 校验只在 source 启动或显式 play 边界读取有限 manifest/file metadata；不在 paint/input 中扫描文件、不启动进程、不访问网络；manifest 查询不会在扫描锁竞争时阻塞引擎帧。
 - 本轮实际证据：完整构建通过；`shinkou_audio_scene_system_tests` 与 `shinkou_assets_tests` focused `2/2` passed、`2.29 sec`；全量 CTest `54/54` passed、0 失败、总计 `19.45 sec`；sample clean-first 重链通过，exe 非空，单帧 `--frames 1 --editor dx11` 退出 `0` 并报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 passes=4 draws=3`，短多帧 `--frames 10 --editor dx11` 退出 `0` 并报告 `frames=10 passes=40 draws=30`、`editor-ui-commands=184 text=41 assets=11 visible-assets=11`，包含 `editor_scene_present`。
 - 下一入口：把 AssetSystem manifest 身份变化转换为可观察的 editor/runtime invalidation 事件，补 AudioSource clip picker、bus 下拉和错误态 Inspector；之后实现 listener/3D spatial 与 streaming policy，再回到模型 depth/material/texture。
+
+### 第 4.28 子阶段：manifest revision 驱动的 AudioSource 主动失效
+
+目标：让 manifest 重建、挂载变化、seed 和 shutdown 能以轻量 revision 传播到运行时，使已经绑定的 AudioSource 在下一次 Engine tick 中释放旧 voice，并按新快照安全重试。
+
+实现范围：
+
+- `AssetSystem` 增加单调 `manifest_revision()`；manifest 开始扫描或发生挂载/seed/shutdown 边界时推进版本，查询仍只读取 immutable snapshot，不暴露内部 map。
+- `AudioSceneSystem::SourceBinding` 保存绑定时的 manifest revision；revision 变化会主动停止并释放 voice/clip，`playOnStart` 源按新 manifest 重新校验，pending/invalid 状态继续可诊断。
+- `AudioSceneDiagnostics` 增加 `invalidatedSources`，区分 manifest 变化导致的重绑定与普通加载失败；World/JSON 仍只保存场景意图，不保存后端句柄。
+- 非目标：本轮不引入跨线程回调、不改 retained UI 像素、不做重命名迁移事务和专用 AudioSource Inspector；下一轮在 editor 事务层补 clip picker、bus 下拉、错误态和 Undo/Redo。
+
+审计与验证安排：
+
+- 单元：AssetSystem scan/seed/shutdown revision 单调性；AudioScene 覆盖播放中 revision 变化的停播重绑、manifest 删除失败、资源恢复重试，以及现有共享 clip、voice 回收、JSON 和 shutdown 契约。
+- 集成：完整构建、AudioScene/AssetSystem focused tests、全量 CTest、DX11 editor sample 多帧生命周期烟测。
+- 安全/性能：revision 是原子标量，不在 Engine tick 注册回调或取得 manifest 扫描锁；voice 失效先释放运行时资源，再从当前 immutable snapshot 校验 path/ID；不新增文件写入、网络、shell 或第三方依赖。
+- 实际证据将在实现完成后回填到 `docs/UIUpgradeAudit.md`，包含构建、focused/full CTest、样例帧数和 UI/render graph trace。

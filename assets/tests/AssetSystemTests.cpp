@@ -171,9 +171,11 @@ int main() {
     assert(preloaded.size() == 2);
     for (const auto& future : preloaded) assert(future.get());
 
+    const auto revisionBeforeScan = system.manifest_revision();
     const auto baselineManifestEntries = system.scan_sources();
     const auto baselineManifestStats = system.last_manifest_scan_stats();
-    assert(baselineManifestEntries.size() == 6 && baselineManifestStats.cacheMisses >= 6);
+    assert(baselineManifestEntries.size() == 6 && baselineManifestStats.cacheMisses >= 6 &&
+           system.manifest_revision() != revisionBeforeScan);
     assert(system.manifest_ready());
     shinkou::assets::AssetManifestEntry manifestById;
     assert(system.find_manifest(baselineManifestEntries.front().id, manifestById) &&
@@ -228,7 +230,9 @@ int main() {
         [&](const shinkou::assets::AssetManifestEntry& entry) { return entry.key == key; });
     assert(restoredEntry != restoredManifest.entries.end() && restoredEntry->id == reloaded.id);
     std::string seedError;
+    const auto revisionBeforeSeed = system.manifest_revision();
     assert(system.seed_manifest_cache(restoredManifest.entries, &seedError));
+    assert(system.manifest_revision() != revisionBeforeSeed);
     assert(system.manifest_ready() && system.find_manifest(reloaded.id, manifestById));
     const auto seededManifestEntries = system.scan_sources();
     const auto seededManifestStats = system.last_manifest_scan_stats();
@@ -241,8 +245,10 @@ int main() {
         "\"source\":\"hello.txt\",\"hash\":1,\"timestamp\":1,\"size\":5}]}";
     const auto invalidResult = shinkou::assets::AssetSystem::read_manifest(invalidManifest);
     assert(!invalidResult && invalidResult.error.find("ID") != std::string::npos);
+    const auto revisionBeforeShutdown = system.manifest_revision();
     system.shutdown();
     assert(!system.manifest_ready());
+    assert(system.manifest_revision() != revisionBeforeShutdown);
 
     // A shutdown system can be initialized again without retaining stale slots,
     // handles, queue entries, LRU links, or counters from its previous lifetime.

@@ -1514,6 +1514,41 @@
 - AudioSource 仍依赖通用属性编辑，没有 clip picker、总线下拉、播放预览按钮、错误行和 AssetId/path 联动清除；需要在 UI 事务层实现并覆盖 Undo/Redo。
 - `find_manifest` 是当前 cache 的按 ID 查询，不是持久化数据库或导入索引；重命名、复制/导入、依赖图和多 mount 身份策略继续列入后续资源系统阶段。
 
+## 第 4.28 子阶段：manifest revision 驱动的 AudioSource 主动失效
+
+### 实现与范围
+
+- AssetSystem 增加原子 `manifest_revision()`。扫描开始、挂载变化、seed 和 shutdown 都推进 revision；manifest ready 仍由 immutable snapshot 发布控制，AudioSceneSystem 不读取扫描锁保护的内部容器。
+- AudioSceneSystem 的 SourceBinding 保存绑定时 revision；当带 `assetId` 的源检测到 revision 变化时，先停止并释放旧 voice/clip，再按当前快照重试。删除或错配条目不会创建 voice，恢复资源并重新扫描后 `playOnStart` 可恢复。
+- 新增 `AudioSceneDiagnostics::invalidatedSources`，用于把 manifest 失效重绑定与普通 `failedSources` 区分；World、场景 JSON 和 retained UI 没有引入运行时句柄或 raw payload。
+- 非目标：没有新增跨线程 listener，没有做重命名迁移/依赖图事务，没有修改 UI 像素；AudioSource 专用 Inspector 控件和 Undo/Redo 属于下一轮。
+
+### 契约与证据
+
+- `shinkou_assets_tests` 验证 scan 后 revision 推进、seed 后再次推进、shutdown 后 ready 撤销且 revision 改变。
+- `shinkou_audio_scene_system_tests` 验证播放中的 manifest refresh 会主动停播并重绑；删除已绑定音频后进入 invalid、不创建 voice；恢复并重新 scan 后重新播放；同时保留共享 clip、pending→ready、播放结束回收、手动 play/stop、对象删除、shutdown 和 JSON 契约。
+- 构建：`cmake --build out/build/mingw-debug --config Debug --parallel 4` 通过。
+- focused：`ctest --test-dir out/build/mingw-debug -R "shinkou_(audio_scene_system|assets)_tests" --output-on-failure` 为 `2/2` passed、总计 `0.78 sec`。
+- 全量：`ctest --test-dir out/build/mingw-debug --output-on-failure` 为 `54/54` passed、0 failures、总计 `42.64 sec`。
+- Engine smoke：`out/build/mingw-debug/shinkou_engine_sample.exe --frames 10 --editor dx11` 退出 `0`，报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=10 passes=40 draws=30`，UI trace 为 `commands=184 text=41 assets=11 visible-assets=11`，render graph 含 `editor_scene_present`。
+
+### 安全、性能与视觉审计
+
+- revision 使用原子读写，source binding 只比较整数版本，不在 Engine tick 等待 manifest scan mutex；长时间扫描期间 ready=false，新的 ID 绑定保持 pending。
+- 失效顺序固定为 stop voice → release clip → 使用当前 snapshot 校验；path/ID 错配、删除文件、错误类型和未知 ID 均不会触碰 World 或创建后端 voice。
+- 本轮没有新增文件操作、进程启动、网络访问或第三方依赖；没有修改 retained draw list。DX11 sample 证明 editor lifecycle、UI host、scene presentation 和 render graph 正常，不宣称音频设备质量。
+
+### 失败状态与回滚路径
+
+- manifest revision 变化但新快照未就绪：源进入 pending，下次 sync 重试；新快照缺失或 path mismatch：源进入 invalid/failed diagnostics，不保留旧 voice。
+- 回滚可移除 revision 字段及 `manifestChanged` 分支，恢复 4.27 的 ID 校验与显式 sync 失效行为；公共 `AudioSource` JSON 契约不变。
+
+### 未解决风险与下一轮
+
+- revision 是 polling 观察点而非跨线程 AssetEvent callback；如果未来需要后台即时通知，应设计有界事件/队列和主线程消费边界，避免在 worker 回调触碰 AudioSystem。
+- AudioSource 仍缺少专用 clip picker、bus 下拉、错误态和播放预览按钮；下一轮实现 editor command/undo 事务，让 clipPath 与 assetId 联动并在 Inspector 呈现 pending/invalid。
+- manifest 仍是当前 scan cache，不是持久化导入数据库；重命名迁移、复制导入、依赖图和多 mount 身份策略继续后置。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

@@ -17,11 +17,13 @@ namespace {
 class RecordingBackend final : public shinkou::audio::IAudioBackend {
     std::unordered_map<shinkou::audio::AudioVoiceId, shinkou::audio::AudioVoiceState> voices_;
     shinkou::audio::AudioVoiceId nextVoice_{1};
+    std::size_t stopCalls_{0};
 
 public:
     void finish_all() {
         for (auto& [voice, state] : voices_) { (void)voice; state = shinkou::audio::AudioVoiceState::Finished; }
     }
+    std::size_t stop_calls() const noexcept { return stopCalls_; }
 
     bool initialize(const shinkou::audio::AudioConfig&) override { return true; }
     void shutdown() override { voices_.clear(); }
@@ -34,6 +36,7 @@ public:
         return voice;
     }
     void stop(shinkou::audio::AudioVoiceId voice, shinkou::Seconds) override {
+        ++stopCalls_;
         if (voices_.find(voice) != voices_.end()) voices_[voice] = shinkou::audio::AudioVoiceState::Stopped;
     }
     void pause(shinkou::audio::AudioVoiceId voice) override {
@@ -188,6 +191,28 @@ int main() {
     firstSource->assetId = otherAssetId;
     scene.sync(world, audio, &assetSystem);
     assert(scene.clip_count() == 2 && audio.asset_count() == 2);
+
+    const auto stopsBeforeManifestRefresh = backendSpy->stop_calls();
+    const auto revisionBeforeManifestRefresh = assetSystem.manifest_revision();
+    assetSystem.scan_sources();
+    assert(assetSystem.manifest_revision() != revisionBeforeManifestRefresh);
+    scene.sync(world, audio, &assetSystem);
+    assert(scene.diagnostics().invalidatedSources == 1 &&
+           backendSpy->stop_calls() >= stopsBeforeManifestRefresh + 1 &&
+           scene.diagnostics().playingSources == 2);
+
+    std::error_code removeError;
+    std::filesystem::remove(project / "audio/other.wav", removeError);
+    assert(!removeError);
+    assetSystem.scan_sources();
+    scene.sync(world, audio, &assetSystem);
+    assert(scene.diagnostics().invalidatedSources == 1 && scene.diagnostics().failedSources == 1 &&
+           scene.diagnostics().playingSources == 1 && scene.clip_count() == 1);
+    std::ofstream(project / "audio/other.wav", std::ios::binary | std::ios::trunc) << "other-restored";
+    assetSystem.scan_sources();
+    scene.sync(world, audio, &assetSystem);
+    assert(scene.diagnostics().invalidatedSources == 1 && scene.diagnostics().playingSources == 2 &&
+           scene.clip_count() == 2);
 
     editor::EditorDocument document;
     std::string error;
