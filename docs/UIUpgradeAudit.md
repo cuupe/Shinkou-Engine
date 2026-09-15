@@ -1549,6 +1549,40 @@
 - AudioSource 仍缺少专用 clip picker、bus 下拉、错误态和播放预览按钮；下一轮实现 editor command/undo 事务，让 clipPath 与 assetId 联动并在 Inspector 呈现 pending/invalid。
 - manifest 仍是当前 scan cache，不是持久化导入数据库；重命名迁移、复制导入、依赖图和多 mount 身份策略继续后置。
 
+## 第 4.29 子阶段：AudioSource 专用 Inspector 资源选择与总线控制
+
+### 实现与范围
+
+- `EditorUiModel` 为 AudioSource 生成专用资源状态字段，隐藏原始 `assetId`，并为 `clipPath`/`bus` 发布 immutable choice snapshot。音频 choice 最多 256 项，显示值统一为项目相对路径；总线选项为 Master、Music、SFX、Voice、Ambient、UI。
+- `EditorUi` 使用 retained button/popup 绘制选择器：popup 最大高度 220 logical px，长列表可滚动，支持 Escape 与外部点击关闭，选择项只为当前可见行注册交互区域。
+- `EditorLayer` 在 manifest 完成/失败/重置时同步刷新 choice snapshot；选择 clip 通过现有 checkpoint/undo 事务写回 UTF-8 规范化项目相对 `clipPath`，并自动绑定对应 manifest `AssetId`。媒体音频预览也按实际源文件路径反查 manifest identity。
+- `AudioSource` 资源状态置于组件字段顶部，默认 Inspector 视口即可看到 Ready、path-only、identity unavailable 和 mismatch 等状态；不在 World 中增加运行时句柄。
+
+### 契约与证据
+
+- `shinkou_editor_interaction_tests.exe` 通过：选择 `assets/preview.wav` 后 `clipPath` 与预期 AssetId 同步，`bus` 选择 Master 提交，原始 `assetId` 不再暴露，状态文本包含 `Ready · assets/preview.wav`，既有 name/transform 编辑和 Undo/Redo 仍通过。
+- 构建：`cmake --build out/build/mingw-debug -j 2` 通过，包含 sample、全部测试和 benchmark targets。
+- 全量：`ctest --test-dir out/build/mingw-debug --output-on-failure` 为 `55/55` passed、0 failures、总计 `44.99 sec`。
+- Engine smoke：`out/build/mingw-debug/shinkou_engine_sample.exe dx11 --frames 10` 退出 `0`，输出 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=10 passes=40 draws=30`；UI trace 为 `editor-ui-commands=184 editor-ui-text=41 editor-ui-assets=11 editor-ui-visible-assets=11`，render graph 含 `editor_scene_present`。
+
+### 安全、性能与视觉审计
+
+- choice 数据只由已完成扫描的 immutable manifest 转换而来，并限制为最多 256 项；popup 行和文字来自受控 URI/路径，不执行 shell、网络、进程或未授权文件读取。
+- `project_relative_existing()` 先进行 canonical boundary check；AudioSource 写回只使用项目相对 UTF-8 路径，`assetId` 通过同一 choice snapshot 绑定，避免虚拟 `project://` URI 与运行时 path contract 不一致。
+- 选择器不会在 paint 中重建 manifest；总线 choice 为静态共享快照，popup bounded/clipped，滚动状态纳入 paint key。现有 checkpoint 保证选择失败不会污染 World，且可撤销。
+- 视觉遵循 Shinkou UI design 的 Windows-first flat surface/border/accent 语言；按钮有文字下拉指示，popup 有边界、焦点/hover 状态和 DPI-safe logical coordinates。D3D11 smoke 证明宿主与渲染图链路正常，但不代替真实音频设备质量测试。
+
+### 失败状态与回滚路径
+
+- manifest 未连接、正在扫描、扫描失败、资源超出项目根或资源缺失时，choice 会清空或显示明确状态；已有 path-only AudioSource 不被破坏，带 ID 的 mismatch 仍可诊断。
+- 选择器回调失败、无效 field 或未知 choice 不修改 World；成功编辑沿用 EditorLayer 的 checkpoint/undo 栈。回滚可移除 choice metadata、popup 绘制和 AudioSource 特化分支，恢复通用文本输入。
+
+### 未解决风险与下一轮
+
+- 当前 picker 选择后只负责配置联动，不提供 Inspector 内播放/暂停 transport、listener 可视化、3D 衰减曲线或 streaming 进度；下一轮进入 AudioSource playback/空间音频控制。
+- 当前 manifest 转换以现有项目 root 为边界，多 mount 显示策略、重命名迁移、导入复制和依赖图仍需资源数据库阶段定义。
+- 当前样例 smoke 仍是 retained command/render graph 证据；真实 Windows Explorer 拖放、音频设备输出和模型材质 GPU 预览继续作为平台/媒体专项 QA。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

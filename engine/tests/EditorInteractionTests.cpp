@@ -142,13 +142,15 @@ int main() {
         require(resourceSystem.write_manifest(project / ".shinkou" / "manifest.json"),
                 "asset system could not write the editor manifest fixture");
         assets::AssetId previewModelAssetId = 0;
+        assets::AssetId previewAudioAssetId = 0;
         for (const auto& entry : resourceSystem.scan_sources()) {
             if (entry.key.type == "model" && entry.sourcePath.filename() == "preview.obj") {
                 previewModelAssetId = entry.id;
-                break;
             }
+            if (entry.key.type == "audio" && entry.sourcePath.filename() == "preview.wav") previewAudioAssetId = entry.id;
         }
-        require(previewModelAssetId != 0, "asset system manifest did not index the model fixture");
+        require(previewModelAssetId != 0 && previewAudioAssetId != 0,
+                "asset system manifest did not index the model/audio fixtures");
         EditorBuildProfile alternateProfile;
         alternateProfile.id = "release";
         alternateProfile.name = "CMake Release";
@@ -338,8 +340,50 @@ int main() {
         e.type=input::InputEventType::MouseButtonUp;fake->queue.push_back(e);tick();
         require(editor.editor_ui().asset_scroll_offset()<30,"scrollbar drag failed");
 
+        for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
+            tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        require(editor.asset_system_manifest_count() > 0 &&
+                editor.asset_system_manifest_status().find("AssetSystem manifest ready") != std::string::npos,
+                "asset manifest did not settle before the AudioSource inspector interaction");
+
         editor.execute_command(EditorCommand::CreateEmpty,{},world); tick();
         const auto created=editor.layout().selectedObject;
+        auto* audioSource = world.find_object(created)->add_component<components::AudioSourceComponent>();
+        require(audioSource != nullptr, "could not create AudioSource inspector fixture");
+        tick();
+        const auto audioClipField = "field:" + std::to_string(audioSource->id()) + ":clipPath";
+        const auto audioBusField = "field:" + std::to_string(audioSource->id()) + ":bus";
+        require(region(audioClipField).width > 0 && region(audioBusField).width > 0 &&
+                editor.editor_ui().interaction_regions().find("field:" + std::to_string(audioSource->id()) + ":assetId") ==
+                    editor.editor_ui().interaction_regions().end(),
+                "AudioSource inspector did not expose specialized clip/bus fields");
+        click(audioClipField);
+        require(region("inspector-choice-popup").width > 0, "AudioSource clip picker did not open");
+        std::string previewAudioChoice;
+        for (const auto& entry : editor.editor_ui().interaction_regions()) {
+            if (entry.first.rfind("inspector-choice:", 0) == 0) { previewAudioChoice = entry.first; break; }
+        }
+        require(!previewAudioChoice.empty(), "AudioSource clip picker did not expose manifest choices");
+        click(previewAudioChoice);
+        require(audioSource->clipPath == "assets/preview.wav" && audioSource->assetId == previewAudioAssetId,
+                "AudioSource clip picker did not link path and AssetId");
+        click(audioBusField);
+        require(region("inspector-choice-popup").width > 0 &&
+                editor.editor_ui().interaction_regions().find("inspector-choice:0") !=
+                    editor.editor_ui().interaction_regions().end(),
+                "AudioSource bus choice control did not open");
+        click("inspector-choice:0");
+        require(audioSource->bus == 0, "AudioSource bus choice did not commit");
+        bool audioStatusVisible = false;
+        for (const auto& command : editor.editor_ui().render_list().commands()) {
+            if (command.type == ui::DrawCommandType::Text && command.text.find("Ready · assets/preview.wav") != std::string::npos) {
+                audioStatusVisible = true;
+                break;
+            }
+        }
+        require(audioStatusVisible, "AudioSource inspector did not show linked resource status");
         click("field:name");text("Edited Object");key("Return");
         require(world.find_object(created)->name()=="Edited Object","inspector did not commit name");
         std::string positionField;

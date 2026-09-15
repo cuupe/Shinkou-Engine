@@ -204,6 +204,7 @@ class EditorLayer {
     bool assetSystemPreviewLoading_{false};
     bool assetSystemPreviewReady_{false};
     std::shared_ptr<const std::vector<assets::AssetManifestEntry>> assetManifest_{};
+    std::shared_ptr<const std::vector<EditorInspectorChoice>> audioInspectorChoices_{};
     std::string assetManifestStatus_{"AssetSystem manifest not connected"};
     EditorAssetPreviewUiState assetPreviewState_{};
     std::uint64_t imagePreviewGeneration_{0};

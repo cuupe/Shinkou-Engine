@@ -172,6 +172,7 @@ void EditorUi::shutdown() noexcept {
     floatingHeaderRects_.clear();
     assetActions_.clear();
     assetContextActions_.clear();
+    inspectorChoiceActions_.clear();
     activeRegions_.clear();
     commandActions_.clear();
     if (auto* root = runtime_.widget(runtime_.root())) root->children.clear();
@@ -192,6 +193,8 @@ void EditorUi::shutdown() noexcept {
     assetEditTarget_.clear();
     assetEditText_.clear();
     assetEditActive_ = false;
+    openInspectorChoiceId_.clear();
+    inspectorChoiceScroll_ = 0.0f;
     lastAssetClickPath_.clear();
     tabDragActive_ = false;
     floatingDragActive_ = false;
@@ -303,6 +306,7 @@ void EditorUi::begin_regions() {
     floatingHeaderRects_.clear();
     assetActions_.clear();
     assetContextActions_.clear();
+    inspectorChoiceActions_.clear();
     for (const auto& entry : regions_) {
         if (auto* widget = runtime_.widget(entry.second)) {
             widget->visible = false;
@@ -385,7 +389,8 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         mark_region_repaint(id); paintCacheValid_ = false;
         if (event.type == ui::UiEventType::FocusGained && id.rfind("field:", 0) == 0) {
             const auto f = inspectorFields_.find(std::string(id));
-            if (f != inspectorFields_.end() && f->second.editable && !f->second.boolean && editFieldId_ != id) {
+            if (f != inspectorFields_.end() && f->second.editable && !f->second.boolean &&
+                (!f->second.choices || f->second.choices->empty()) && editFieldId_ != id) {
                 editFieldId_ = id; editText_ = f->second.value; editSelectAll_ = true; editError_.clear();
             }
         }
@@ -561,6 +566,24 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         }
         return ui::EventResult::Handled;
     }
+    if (event.type == ui::UiEventType::Scroll &&
+        (id == "inspector-choice-popup" || id.rfind("inspector-choice:", 0) == 0)) {
+        const auto field = inspectorFields_.find(openInspectorChoiceId_);
+        if (field != inspectorFields_.end() && field->second.choices) {
+            const float contentHeight = static_cast<float>(field->second.choices->size()) * 26.0f + 8.0f;
+            inspectorChoiceScroll_ = std::clamp(inspectorChoiceScroll_ - event.delta.y * 78.0f,
+                                                0.0f, std::max(0.0f, contentHeight - 220.0f));
+            mark_full_repaint(); paintCacheValid_ = false;
+        }
+        return ui::EventResult::Handled;
+    }
+    if (event.type == ui::UiEventType::KeyDown && !openInspectorChoiceId_.empty() &&
+        lower(event.control).find("escape") != std::string::npos) {
+        openInspectorChoiceId_.clear();
+        inspectorChoiceScroll_ = 0.0f;
+        mark_full_repaint(); paintCacheValid_ = false;
+        return ui::EventResult::Handled;
+    }
     if (event.type == ui::UiEventType::Scroll && (id.rfind("field:", 0) == 0 || id == "inspector.background" || id.rfind("component-add:", 0) == 0)) {
         inspectorScroll_ = std::max(0.0f, inspectorScroll_ - event.delta.y * 72.0f);
         mark_full_repaint(); paintCacheValid_ = false; return ui::EventResult::Handled;
@@ -635,6 +658,12 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         }
         if (!openMenuId_.empty() && id.rfind("menu:", 0) != 0 && id.rfind("menu-item:", 0) != 0) {
             openMenuId_.clear();
+            paintCacheValid_ = false;
+        }
+        if (!openInspectorChoiceId_.empty() && id.rfind("inspector-choice:", 0) != 0 &&
+            id != "inspector-choice-popup") {
+            openInspectorChoiceId_.clear();
+            inspectorChoiceScroll_ = 0.0f;
             paintCacheValid_ = false;
         }
         draggedPanelId_.clear();
@@ -846,9 +875,27 @@ void EditorUi::activate_region(std::string_view id, ui::Vec2 position) {
         if (callbacks_.selectModelTexture) callbacks_.selectModelTexture(1);
         return;
     }
+    if (id.rfind("inspector-choice:", 0) == 0) {
+        const auto found = inspectorChoiceActions_.find(std::string(id));
+        if (found == inspectorChoiceActions_.end()) return;
+        if (callbacks_.editField) callbacks_.editField(found->second.first, found->second.second);
+        openInspectorChoiceId_.clear();
+        inspectorChoiceScroll_ = 0.0f;
+        runtime_.clear_focus();
+        paintCacheValid_ = false;
+        return;
+    }
     if (id.rfind("field:", 0) == 0) {
         const auto f = inspectorFields_.find(std::string(id));
         if (f == inspectorFields_.end() || !f->second.editable) return;
+        if (f->second.choices && !f->second.choices->empty()) {
+            openInspectorChoiceId_ = openInspectorChoiceId_ == id ? std::string{} : std::string(id);
+            inspectorChoiceScroll_ = 0.0f;
+            editFieldId_.clear();
+            runtime_.clear_focus();
+            paintCacheValid_ = false;
+            return;
+        }
         if (f->second.boolean) {
             if (callbacks_.editField) callbacks_.editField(id.substr(6), f->second.value == "true" ? "false" : "true");
         } else { editFieldId_ = id; editText_ = f->second.value; editSelectAll_ = true; editError_.clear(); }
@@ -1164,6 +1211,8 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showStatusBar));
     mix_key(paintKey, static_cast<std::uint64_t>(nativeMainMenuAvailable_));
     mix_key(paintKey, openMenuId_);
+    mix_key(paintKey, openInspectorChoiceId_);
+    mix_key(paintKey, static_cast<std::uint64_t>(std::round(inspectorChoiceScroll_)));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showHierarchy));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showInspector));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showViewport));
@@ -1746,6 +1795,9 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
     }
     set_region("inspector.background", rect(bounds), true);
     inspectorFields_.clear();
+    std::shared_ptr<const std::vector<EditorInspectorChoice>> openChoices;
+    ui::Rect openChoiceAnchor{};
+    std::string openChoiceValue;
     const float totalHeight = static_cast<float>(model.inspector_fields().size()) * 52.0f + 40 + static_cast<float>(model.component_types().size())*30;
     inspectorScroll_ = std::clamp(inspectorScroll_, 0.0f, std::max(0.0f,totalHeight-bounds.height));
     float y = bounds.y - inspectorScroll_;
@@ -1756,10 +1808,70 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
             renderList_.text({bounds.x,y,bounds.width,18}, field.label, color(layout.theme == "light" ? "#59616E" : "#AAB2BE"), 11);
             const ui::Rect input{bounds.x,y+20,bounds.width,26};
             if (field.boolean && field.editable) draw_button(input,id,field.value == "true" ? "On" : "Off",layout,field.value == "true");
-            else if (field.editable) draw_input(input,id,field.value,layout);
+            else if (field.editable && field.choices && !field.choices->empty()) {
+                std::string label = field.value.empty() ? "None" : field.value;
+                const auto selected = std::find_if(field.choices->begin(), field.choices->end(),
+                    [&](const auto& choice) { return choice.value == field.value; });
+                if (selected != field.choices->end()) label = selected->label;
+                draw_button(input, id, label + "  v", layout, false);
+                if (openInspectorChoiceId_ == id) {
+                    openChoices = field.choices;
+                    openChoiceAnchor = input;
+                    openChoiceValue = field.value;
+                }
+            } else if (field.editable) draw_input(input,id,field.value,layout);
             else renderList_.text(input,field.value,color("#98A1AD"),12);
         }
         y += 52;
+    }
+    if (openChoices && openChoiceAnchor.width > 0.0f) {
+        constexpr float rowHeight = 26.0f;
+        constexpr float maxPopupHeight = 220.0f;
+        const float contentHeight = static_cast<float>(openChoices->size()) * rowHeight + 8.0f;
+        const float popupHeight = std::min(maxPopupHeight, std::max(rowHeight + 8.0f, contentHeight));
+        const float widthLimit = std::max(180.0f, physicalWidth_ / std::max(0.25f, dpiScale_) - 8.0f);
+        const float popupWidth = std::min(std::max(openChoiceAnchor.width, 180.0f), widthLimit);
+        const float maxScroll = std::max(0.0f, contentHeight - maxPopupHeight);
+        inspectorChoiceScroll_ = std::clamp(inspectorChoiceScroll_, 0.0f, maxScroll);
+        const float boundsRight = bounds.x + bounds.width;
+        const float boundsBottom = bounds.y + bounds.height;
+        const float anchorBottom = openChoiceAnchor.y + openChoiceAnchor.height;
+        const float popupY = anchorBottom + popupHeight <= boundsBottom
+            ? anchorBottom : openChoiceAnchor.y - popupHeight;
+        const ui::Rect popup{
+            std::clamp(openChoiceAnchor.x, bounds.x, std::max(bounds.x, boundsRight - popupWidth)),
+            std::clamp(popupY, bounds.y, std::max(bounds.y, boundsBottom - popupHeight)),
+            popupWidth, popupHeight};
+        set_region("inspector-choice-popup", popup, true);
+        renderList_.rect({popup.x + 3.0f, popup.y + 3.0f, popup.width, popup.height},
+                         color("#00000044"), 4.0f);
+        renderList_.rect(popup, color(layout.theme == "light" ? "#FFFFFF" : "#292C31"), 4.0f);
+        renderList_.border(popup, color(layout.theme == "light" ? "#C9D1DC" : "#465161"), 1.0f, 4.0f);
+        const auto oldClip = regionClip_;
+        const bool oldClipActive = regionClipActive_;
+        regionClip_ = popup;
+        regionClipActive_ = true;
+        renderList_.begin_clip(popup);
+        for (std::size_t index = 0; index < openChoices->size(); ++index) {
+            const auto& choice = (*openChoices)[index];
+            const ui::Rect row{popup.x + 4.0f,
+                               popup.y + 4.0f + static_cast<float>(index) * rowHeight - inspectorChoiceScroll_,
+                               std::max(0.0f, popup.width - 8.0f), rowHeight};
+            if (row.bottom() <= popup.y + 4.0f || row.y >= popup.bottom() - 4.0f) continue;
+            const auto choiceId = "inspector-choice:" + std::to_string(index);
+            set_region(choiceId, row, true);
+            inspectorChoiceActions_[choiceId] = {openInspectorChoiceId_.substr(6), choice.value};
+            if (openChoiceValue == choice.value) renderList_.rect(row, color("#35557D"), 3.0f);
+            renderList_.text({row.x + 8.0f, row.y + 4.0f, std::max(0.0f, row.width - 16.0f), 18.0f},
+                             choice.label, color(layout.theme == "light" ? "#3F464F" : "#CBD1DA"), 10.0f,
+                             {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        }
+        renderList_.end_clip();
+        regionClip_ = oldClip;
+        regionClipActive_ = oldClipActive;
+    } else if (!openInspectorChoiceId_.empty()) {
+        openInspectorChoiceId_.clear();
+        inspectorChoiceScroll_ = 0.0f;
     }
     if (!editError_.empty()) renderList_.text({bounds.x,bounds.y+bounds.height-22,bounds.width,20},editError_,color("#F29B8F"),11);
     renderList_.text({bounds.x,y,bounds.width,20}, "Add component", color("#98A1AD"),12); y += 28;

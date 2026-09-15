@@ -110,12 +110,19 @@ struct EditorObjectTreeNode {
     std::vector<EditorObjectTreeNode> children;
 };
 
+struct EditorInspectorChoice {
+    std::string value;
+    std::string label;
+    std::uint64_t assetId{0};
+};
+
 struct EditorInspectorField {
     std::string id;
     std::string label;
     std::string value;
     bool editable{false};
     bool boolean{false};
+    std::shared_ptr<const std::vector<EditorInspectorChoice>> choices{};
 };
 
 struct EditorBuildToolModel {
@@ -252,6 +259,8 @@ class EditorUiModel {
     std::vector<EditorInspectorField> inspectorFields_;
     std::vector<std::string> componentTypes_;
     std::string inspectorSignature_;
+    std::shared_ptr<const std::vector<EditorInspectorChoice>> audioAssetChoices_{};
+    std::string audioAssetStatus_{"Audio manifest unavailable"};
     EditorBuildUiState buildState_{};
     EditorAssetPreviewUiState assetPreview_{};
     EditorMediaUiState mediaState_{};
@@ -282,6 +291,9 @@ public:
     void set_build_state(EditorBuildUiState state);
     void set_asset_preview(EditorAssetPreviewUiState state);
     void set_media_state(EditorMediaUiState state);
+    void set_audio_asset_choices(std::shared_ptr<const std::vector<EditorInspectorChoice>> choices);
+    void set_audio_asset_choices(std::vector<EditorInspectorChoice> choices);
+    void set_audio_asset_status(std::string status);
     void execute(EditorCommand command) noexcept;
     const std::vector<EditorInspectorField>& inspector_fields() const noexcept { return inspectorFields_; }
     const std::vector<std::string>& component_types() const noexcept { return componentTypes_; }

@@ -1244,10 +1244,27 @@ bool EditorLayer::edit_field(std::string_view id, std::string_view value) {
             apply = [&, component] { component->set_enabled(std::get<bool>(parsed)); return true; };
         } else {
             const auto name = id.substr(colon + 1);
+            auto* audioSource = name == "clipPath"
+                ? dynamic_cast<components::AudioSourceComponent*>(component) : nullptr;
             for (auto& p : component->properties()) {
                 if (p.name != name || !p.editable()) continue;
                 if (!parse_property_text(p.type, value, parsed)) return false;
-                apply = [setter = p.set, parsed] { return setter(parsed); }; break;
+                if (audioSource) {
+                    const auto normalizedPath = std::filesystem::u8path(std::string(value)).lexically_normal().generic_u8string();
+                    apply = [setter = p.set, parsed, audioSource, this, normalizedPath] {
+                        if (!setter(parsed)) return false;
+                        audioSource->assetId = 0;
+                        if (audioInspectorChoices_) {
+                            const auto found = std::find_if(audioInspectorChoices_->begin(), audioInspectorChoices_->end(),
+                                [&](const auto& choice) { return choice.value == normalizedPath; });
+                            if (found != audioInspectorChoices_->end()) audioSource->assetId = found->assetId;
+                        }
+                        return true;
+                    };
+                } else {
+                    apply = [setter = p.set, parsed] { return setter(parsed); };
+                }
+                break;
             }
         }
     }
@@ -1596,6 +1613,7 @@ void EditorLayer::reset_asset_manifest(std::string status) {
     ++assetManifestGeneration_;
     assetManifestDirty_ = true;
     assetManifest_.reset();
+    audioInspectorChoices_.reset();
     assetManifestStatus_ = std::move(status);
 }
 
@@ -1663,15 +1681,20 @@ void EditorLayer::poll_asset_manifest_scan() {
     try { result = assetManifestFuture_.get(); }
     catch (const std::exception& error) {
         assetManifestDirty_ = false;
+        assetManifest_.reset();
+        audioInspectorChoices_.reset();
         assetManifestStatus_ = "AssetSystem manifest failed: " + std::string(error.what());
         return;
     } catch (...) {
         assetManifestDirty_ = false;
+        assetManifest_.reset();
+        audioInspectorChoices_.reset();
         assetManifestStatus_ = "AssetSystem manifest failed";
         return;
     }
     if (assetSystemRootNeedsRestart_) {
         assetManifest_.reset();
+        audioInspectorChoices_.reset();
         assetManifestStatus_ = "AssetSystem root changed; restart editor to reconnect resources";
         return;
     }
@@ -1683,6 +1706,7 @@ void EditorLayer::poll_asset_manifest_scan() {
     if (!result.error.empty() || !result.entries) {
         assetManifestDirty_ = false;
         assetManifest_.reset();
+        audioInspectorChoices_.reset();
         assetManifestStatus_ = result.error.empty() ?
             "AssetSystem manifest failed" : "AssetSystem manifest failed: " + result.error;
         lastStatus_ = assetManifestStatus_;
@@ -1690,6 +1714,16 @@ void EditorLayer::poll_asset_manifest_scan() {
         return;
     }
     assetManifest_ = std::move(result.entries);
+    std::vector<EditorInspectorChoice> audioChoices;
+    audioChoices.reserve(std::min<std::size_t>(assetManifest_->size(), 256));
+    for (const auto& entry : *assetManifest_) {
+        if (entry.key.type != "audio" || audioChoices.size() >= 256) continue;
+        const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
+        if (relative.empty()) continue;
+        const auto value = relative.generic_u8string();
+        audioChoices.push_back({value, value + "  [" + std::to_string(entry.id) + "]", entry.id});
+    }
+    audioInspectorChoices_ = std::make_shared<const std::vector<EditorInspectorChoice>>(std::move(audioChoices));
     assetManifestDirty_ = false;
     assetManifestStatus_ = "AssetSystem manifest ready: " + std::to_string(assetManifest_->size()) + " resources";
     if (result.readbackValidated) assetManifestStatus_ += " (validated cache)";
@@ -2148,7 +2182,9 @@ void EditorLayer::start_audio_preview() {
     assets::AssetId manifestAssetId = 0;
     if (assetManifest_) {
         for (const auto& entry : *assetManifest_) {
-            if (entry.id != 0 && entry.key.type == "audio" && entry.key.uri == selectedAsset_) {
+            const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
+            if (entry.id != 0 && entry.key.type == "audio" &&
+                !relative.empty() && relative.generic_u8string() == selectedAsset_) {
                 manifestAssetId = entry.id;
                 break;
             }
@@ -3928,6 +3964,8 @@ void EditorLayer::cancel_build() {
 void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, FrameIndex frame) {
     if (!initialized_) return;
     if (uiModel_.selected_object() != layout_.selectedObject) uiModel_.select_object(layout_.selectedObject);
+    uiModel_.set_audio_asset_choices(audioInspectorChoices_);
+    uiModel_.set_audio_asset_status(assetManifestStatus_);
     { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
     mediaPanel_.update(dt);
     // Asset enumeration is asynchronous and on-demand. Never recursively

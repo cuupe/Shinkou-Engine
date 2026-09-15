@@ -882,3 +882,23 @@
 - 集成：完整构建、AudioScene/AssetSystem focused tests、全量 CTest、DX11 editor sample 多帧生命周期烟测。
 - 安全/性能：revision 是原子标量，不在 Engine tick 注册回调或取得 manifest 扫描锁；voice 失效先释放运行时资源，再从当前 immutable snapshot 校验 path/ID；不新增文件写入、网络、shell 或第三方依赖。
 - 实际证据将在实现完成后回填到 `docs/UIUpgradeAudit.md`，包含构建、focused/full CTest、样例帧数和 UI/render graph trace。
+
+### 第 4.29 子阶段：AudioSource 专用 Inspector 资源选择与总线控制
+
+目标：把 AudioSource 从通用字符串属性提升为可发现、可校验、可撤销的编辑器控制，同时保持项目相对路径、AssetId 和运行时 AudioSceneSystem 的单一契约。
+
+实现范围：
+
+- Inspector 隐藏原始 `assetId` 字段，`clipPath` 使用来自 immutable manifest 的有界音频资源选择器；选择资源时以项目相对路径写回 `clipPath`，并自动联动稳定 `assetId`。
+- `bus` 提供 Master、Music、SFX、Voice、Ambient、UI 选择；资源状态在组件顶部显示 Ready、path/AssetId mismatch、identity unavailable 或 path-only 等可诊断信息。
+- retained UI 增加语义选择按钮、受边界约束的 popup、滚动、Escape/外部点击关闭和 DPI-safe 布局；选择仍通过现有 EditorLayer checkpoint/Undo 事务提交。
+- 非目标：本轮不解码音频、不增加播放 transport、listener/3D 衰减、streaming 进度、manifest 自动重写或外部导入复制。
+
+审计与验证安排：
+
+- 单元/交互：EditorInteraction 覆盖 picker 打开、manifest 音频选择、项目相对路径与 AssetId 联动、bus 提交、状态文案、原始 assetId 隐藏以及既有属性 Undo/Redo。
+- 集成：完整构建、全量 CTest、D3D11 editor sample 多帧 smoke；验证 UI retained command、native-ui、viewport-scissor 与 `editor_scene_present` trace。
+- 安全：选择项只来自 immutable、最多 256 项的 manifest 快照；paint 不做文件 IO、进程启动、网络访问；写回路径经过 UTF-8 lexical normalization，并保持项目边界。
+- 性能/视觉：静态 choice snapshot 在帧间复用；popup 高度最多 220 logical px，长列表滚动而不是无限绘制；沿用 flat native Windows surface/border/accent token 和现有 DPI scale。
+- 失败状态与回滚：manifest 未就绪时保留明确状态并允许之后刷新；选择失败不改变 World；回滚可移除 choice metadata 与 specialized renderer，恢复通用属性编辑。
+- 下一入口：AudioSource playback transport、listener/3D spatial 参数与 streaming policy；并行完善 manifest rename/import migration 和模型材质/纹理预览。

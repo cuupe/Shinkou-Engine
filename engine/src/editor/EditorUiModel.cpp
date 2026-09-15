@@ -35,6 +35,34 @@ EditorMenuItemModel separator() {
     return result;
 }
 
+std::shared_ptr<const std::vector<EditorInspectorChoice>> audio_bus_choices() {
+    static const auto choices = std::make_shared<const std::vector<EditorInspectorChoice>>(
+        std::vector<EditorInspectorChoice>{
+            {"0", "Master", 0},
+            {"1", "Music", 0},
+            {"2", "SFX", 0},
+            {"3", "Voice", 0},
+            {"4", "Ambient", 0},
+            {"5", "UI", 0},
+        });
+    return choices;
+}
+
+std::string audio_source_status(const components::AudioSourceComponent& source,
+                                const std::shared_ptr<const std::vector<EditorInspectorChoice>>& choices,
+                                std::string_view fallback) {
+    if (source.assetId == 0) {
+        return source.clipPath.empty() ? "No audio clip selected" : "Path-only audio · identity not assigned";
+    }
+    if (!choices || choices->empty()) return std::string(fallback);
+    const auto found = std::find_if(choices->begin(), choices->end(), [&](const auto& choice) {
+        return choice.assetId == source.assetId;
+    });
+    if (found == choices->end()) return "AssetId unavailable in current manifest";
+    if (found->value != source.clipPath) return "Path/AssetId mismatch · " + found->value;
+    return "Ready · " + found->value;
+}
+
 bool same_build_state(const EditorBuildUiState& left, const EditorBuildUiState& right) {
     if (left.profileName != right.profileName || left.selectedProfileId != right.selectedProfileId ||
         left.profileStatus != right.profileStatus ||
@@ -268,9 +296,19 @@ void EditorUiModel::sync(World& world) {
         fields.push_back({"active", "Active", object->active_self() ? "true" : "false", true, true});
         object->each_component([&](Component& component) {
             fields.push_back({"enabled:" + std::to_string(component.id()), std::string(component.registered_type_name()) + " enabled", component.enabled() ? "true" : "false", true, true});
+            auto* audioSource = dynamic_cast<components::AudioSourceComponent*>(&component);
+            if (audioSource) fields.push_back({
+                std::to_string(component.id()) + ":audioStatus", "Resource", audio_source_status(
+                    *audioSource, audioAssetChoices_, audioAssetStatus_), false, false});
             for (auto& p : component.properties()) {
                 if (!p.get || has_flag(p.flags, PropertyFlags::Hidden)) continue;
-                fields.push_back({std::to_string(component.id()) + ":" + p.name, p.displayName, property_text(p.get()), p.editable(), p.type == PropertyType::Bool});
+                if (audioSource && p.name == "assetId") continue;
+                EditorInspectorField field{
+                    std::to_string(component.id()) + ":" + p.name, p.displayName, property_text(p.get()),
+                    p.editable(), p.type == PropertyType::Bool};
+                if (audioSource && p.name == "clipPath") field.choices = audioAssetChoices_;
+                if (audioSource && p.name == "bus") field.choices = audio_bus_choices();
+                fields.push_back(std::move(field));
             }
         });
     }
@@ -320,6 +358,31 @@ void EditorUiModel::set_asset_preview(EditorAssetPreviewUiState state) {
 void EditorUiModel::set_media_state(EditorMediaUiState state) {
     if (same_media_state(mediaState_, state)) return;
     mediaState_ = std::move(state);
+    ++revision_;
+}
+
+void EditorUiModel::set_audio_asset_choices(
+    std::shared_ptr<const std::vector<EditorInspectorChoice>> choices) {
+    if (!choices) choices = std::make_shared<const std::vector<EditorInspectorChoice>>();
+    if (audioAssetChoices_ && audioAssetChoices_->size() == choices->size() &&
+        std::equal(audioAssetChoices_->begin(), audioAssetChoices_->end(), choices->begin(),
+                   [](const auto& left, const auto& right) {
+                       return left.value == right.value && left.label == right.label && left.assetId == right.assetId;
+                   })) return;
+    audioAssetChoices_ = std::move(choices);
+    ++revision_;
+}
+
+void EditorUiModel::set_audio_asset_choices(std::vector<EditorInspectorChoice> choices) {
+    constexpr std::size_t maxChoices = 256;
+    if (choices.size() > maxChoices) choices.resize(maxChoices);
+    set_audio_asset_choices(std::make_shared<const std::vector<EditorInspectorChoice>>(std::move(choices)));
+}
+
+void EditorUiModel::set_audio_asset_status(std::string status) {
+    if (status.size() > 160) status.resize(160);
+    if (audioAssetStatus_ == status) return;
+    audioAssetStatus_ = std::move(status);
     ++revision_;
 }
 

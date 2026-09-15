@@ -16,6 +16,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace shinkou::render { class Renderer; }
@@ -140,6 +141,7 @@ private:
     std::unordered_map<std::string, DockRect> floatingHeaderRects_;
     std::unordered_map<std::string, AssetAction> assetActions_;
     std::unordered_map<std::string, AssetAction> assetContextActions_;
+    std::unordered_map<std::string, std::pair<std::string, std::string>> inspectorChoiceActions_;
     std::unordered_set<std::string> activeRegions_;
     DockWorkspace* workspace_{nullptr};
     DockRect dockArea_{};
@@ -230,6 +232,8 @@ private:
     std::string editFieldId_, editText_, editError_;
     bool editSelectAll_{false}, assetSelectAll_{false};
     std::unordered_map<std::string, EditorInspectorField> inspectorFields_;
+    std::string openInspectorChoiceId_;
+    float inspectorChoiceScroll_{0.0f};
     float inspectorScroll_{0}, hierarchyScroll_{0}, hierarchyContentHeight_{0}, hierarchyPageHeight_{0};
     std::unordered_set<ObjectId> collapsedObjects_;
     std::vector<ObjectId> visibleObjects_;
