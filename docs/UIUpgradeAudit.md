@@ -1583,6 +1583,42 @@
 - 当前 manifest 转换以现有项目 root 为边界，多 mount 显示策略、重命名迁移、导入复制和依赖图仍需资源数据库阶段定义。
 - 当前样例 smoke 仍是 retained command/render graph 证据；真实 Windows Explorer 拖放、音频设备输出和模型材质 GPU 预览继续作为平台/媒体专项 QA。
 
+## 第 4.30 子阶段：AudioSource 场景播放传输与 Inspector 控制
+
+### 实现与范围
+
+- `AudioSceneSystem` 增加对象级 `pause`、`resume` 和 `transport_state`；场景音频的运行时 voice 仍只由 bridge 持有，World/scene JSON 不增加句柄字段。
+- `Engine` 将 `AudioSceneSystem` 注入 `EditorLayer`。AudioSource Inspector 在组件顶部显示 transport 状态，并提供 Play、Pause、Stop 三个 retained controls；Play 对 Paused 状态走 Resume，其它状态按当前资源身份重新启动。
+- 控件命令使用 `audio-source:<ObjectId>` target，与 Media 面板预览 transport 分离；运行时播放/暂停/停止不进入 Undo，因为它们改变的是会话态 voice 而非场景配置。
+- 视觉实现遵循本轮 UI design 约束：复用现有行高和按钮层级，使用文字标签而非平台/emoji 图标，维持 focus/pressed/selected 的 retained 状态。
+
+### 契约与证据
+
+- `shinkou_audio_scene_system_tests` 通过：transport 状态从 Playing → Paused → Playing → Stopped，Stop 后 clip/voice 资源回收；现有 manifest identity、revision invalidation、共享 clip、pending/invalid 和 JSON 契约保持通过。
+- `shinkou_editor_interaction_tests` 通过：fake AudioBackend 由 Inspector 点击真实驱动 AudioSceneSystem，Play/Pause/Resume/Stop 均验证对象级 scene voice 状态；Project Media 预览通道仍独立。
+- 构建：`cmake --build out/build/mingw-debug -j 2` 通过，sample、测试和 benchmark targets 均完成链接。
+- focused：`ctest --test-dir out/build/mingw-debug -R "shinkou_(audio_scene_system|editor_interaction)_tests" --output-on-failure` 为 `2/2` passed、总计 `14.87 sec`。
+- 全量：`ctest --test-dir out/build/mingw-debug --output-on-failure` 为 `55/55` passed、0 failures、总计 `48.61 sec`。
+- Engine smoke：`out/build/mingw-debug/shinkou_engine_sample.exe dx11 --frames 10` 退出 `0`，输出 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=10 passes=40 draws=30`；UI trace 为 `editor-ui-commands=184 editor-ui-text=41 editor-ui-assets=11 editor-ui-visible-assets=11`，render graph 含 `editor_scene_present`。
+
+### 安全、性能与视觉审计
+
+- EditorLayer 只接受 `audio-source:<ObjectId>` 有界 target，并在 World 中确认对象与 AudioSource 组件存在；未连接 subsystem、非法 target 和不满足状态转换的操作只产生诊断，不创建新句柄。
+- Play/Pause/Resume/Stop 通过 AudioSceneSystem 主线程 API 执行；没有在 paint/input 路径扫描文件、解码媒体、访问网络、启动 shell 或持久化运行时句柄。
+- transport state 是 bounded presentation string；Inspector controls 复用 retained command map，列表/按钮不引入每帧 manifest rebuild；D3D11 smoke 的 UI/scene pass 链路保持稳定。
+- 视觉审计覆盖 Inspector 默认视口内状态可见、三按钮固定同一行、dark theme/DPI 1.5 的逻辑坐标；按钮使用 flat surface/border/accent 语言，非平台依赖符号。
+
+### 失败状态与回滚路径
+
+- AudioSystem 未初始化显示 Unavailable；对象不存在、组件禁用或资源身份不可用时 Play 返回失败并保留 manifest 诊断；Pause/Resume 只接受对应 voice 状态，Stop 释放 scene binding。
+- 回滚路径是移除 EditorLayer 的 AudioSceneSystem 注入、transport state field 和 target 分发，保留 4.29 的资源选择/AssetId 联动，不影响 Media 面板预览。
+
+### 未解决风险与下一轮
+
+- transport 当前没有 seek/cursor 或真实时长显示；AudioSystem 已有 cursor API，但需要定义 backend capability、时间轴和场景 voice 的一致语义后再开放。
+- Inspector 还没有 listener、min/max distance、rolloff、velocity 等空间音频参数；下一轮先定义序列化组件字段与 AudioScene/AudioSystem 的参数边界，再做空间调试可视化。
+- CTest 与 sample 仍不能替代真实 Windows 音频设备、Explorer 拖放和 GPU 模型材质质量 QA；这些继续保留为平台专项入口。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

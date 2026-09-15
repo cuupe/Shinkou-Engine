@@ -261,6 +261,8 @@ class EditorUiModel {
     std::string inspectorSignature_;
     std::shared_ptr<const std::vector<EditorInspectorChoice>> audioAssetChoices_{};
     std::string audioAssetStatus_{"Audio manifest unavailable"};
+    ComponentId audioTransportComponent_{0};
+    std::string audioTransportState_{"Unavailable"};
     EditorBuildUiState buildState_{};
     EditorAssetPreviewUiState assetPreview_{};
     EditorMediaUiState mediaState_{};
@@ -294,6 +296,7 @@ public:
     void set_audio_asset_choices(std::shared_ptr<const std::vector<EditorInspectorChoice>> choices);
     void set_audio_asset_choices(std::vector<EditorInspectorChoice> choices);
     void set_audio_asset_status(std::string status);
+    void set_audio_transport_state(ComponentId component, std::string state);
     void execute(EditorCommand command) noexcept;
     const std::vector<EditorInspectorField>& inspector_fields() const noexcept { return inspectorFields_; }
     const std::vector<std::string>& component_types() const noexcept { return componentTypes_; }

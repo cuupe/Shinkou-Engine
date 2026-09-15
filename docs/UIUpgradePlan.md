@@ -902,3 +902,23 @@
 - 性能/视觉：静态 choice snapshot 在帧间复用；popup 高度最多 220 logical px，长列表滚动而不是无限绘制；沿用 flat native Windows surface/border/accent token 和现有 DPI scale。
 - 失败状态与回滚：manifest 未就绪时保留明确状态并允许之后刷新；选择失败不改变 World；回滚可移除 choice metadata 与 specialized renderer，恢复通用属性编辑。
 - 下一入口：AudioSource playback transport、listener/3D spatial 参数与 streaming policy；并行完善 manifest rename/import migration 和模型材质/纹理预览。
+
+### 第 4.30 子阶段：AudioSource 场景播放传输与 Inspector 控制
+
+目标：让编辑器 Inspector 中的 AudioSource 控件真正作用于场景音频桥，而不是只修改配置；Play、Pause、Resume、Stop 必须经过 AudioSceneSystem 管理的 voice 生命周期。
+
+实现范围：
+
+- AudioSceneSystem 暴露对象级 pause/resume 和只读 transport state，继续隐藏 AudioVoiceId/AudioAssetId；Play 在暂停状态下恢复，否则按当前 manifest/path/AssetId 重新启动。
+- Engine 将 AudioSceneSystem 注入 EditorLayer；Inspector 为选中的 AudioSource 显示 Playing、Paused、Stopped、Pending、Finished 或 Unavailable，并提供 Play/Pause/Stop 语义按钮。
+- 传输命令带有 `audio-source:<ObjectId>` 作用域，避免与 Project Media 面板的预览 voice 混淆；运行时操作不写入场景 JSON，不污染 Undo 栈。
+- 非目标：本轮不添加 seek/cursor、listener 编辑器 gizmo、3D 衰减曲线、streaming 进度或多源混音面板。
+
+审计与验证安排：
+
+- 单元：AudioSceneSystem 覆盖 play → pause → resume → stop、状态映射和无效对象/未初始化 backend；保留 manifest identity、共享 clip、失效重绑和 JSON 测试。
+- 集成：EditorInteraction 使用 fake AudioBackend 通过 Inspector 真实点击 Play/Pause/Resume/Stop，验证 scene voice 而非 media preview voice；全量构建/CTest 和 D3D11 多帧 smoke 必须通过。
+- 安全/性能：transport 只操作已绑定对象和现有 AudioSystem 句柄，不在 UI paint 中读文件或启动进程；状态是小字符串，控制命令在主线程边界执行；不新增每帧分配或跨线程回调。
+- 视觉：沿用现有 Inspector 行高、flat button hierarchy、focus/pressed/accent 状态；transport 状态固定在组件顶部，窄窗口下三按钮等宽收缩但不覆盖标签。
+- 失败状态与回滚：未连接 AudioScene/AudioSystem 时显示 Unavailable；不存在或禁用对象不创建 voice；回滚可去掉注入和 transport fields，保留 4.29 资源选择。
+- 下一入口：listener/3D 空间参数与距离衰减策略；随后增加可审计的 streaming/cursor contract，并推进 manifest rename/import migration 与模型材质/纹理预览。

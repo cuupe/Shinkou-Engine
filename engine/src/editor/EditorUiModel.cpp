@@ -300,6 +300,9 @@ void EditorUiModel::sync(World& world) {
             if (audioSource) fields.push_back({
                 std::to_string(component.id()) + ":audioStatus", "Resource", audio_source_status(
                     *audioSource, audioAssetChoices_, audioAssetStatus_), false, false});
+            if (audioSource) fields.push_back({
+                std::to_string(component.id()) + ":audioTransport", "Playback", audioTransportComponent_ == component.id()
+                    ? audioTransportState_ : "Stopped", false, false});
             for (auto& p : component.properties()) {
                 if (!p.get || has_flag(p.flags, PropertyFlags::Hidden)) continue;
                 if (audioSource && p.name == "assetId") continue;
@@ -383,6 +386,14 @@ void EditorUiModel::set_audio_asset_status(std::string status) {
     if (status.size() > 160) status.resize(160);
     if (audioAssetStatus_ == status) return;
     audioAssetStatus_ = std::move(status);
+    ++revision_;
+}
+
+void EditorUiModel::set_audio_transport_state(ComponentId component, std::string state) {
+    if (state.size() > 32) state.resize(32);
+    if (audioTransportComponent_ == component && audioTransportState_ == state) return;
+    audioTransportComponent_ = component;
+    audioTransportState_ = std::move(state);
     ++revision_;
 }
 

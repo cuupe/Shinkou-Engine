@@ -89,6 +89,7 @@ bool Engine::initialize() {
     }
     if (config_.editor) {
         editor_.set_audio_system(&audio_);
+        editor_.set_audio_scene_system(&audioScene_);
         editor_.set_asset_system(&assets_);
         if (!editor_.initialize(false)) {
             SHINKOU_LOG_ERROR("Editor subsystem initialization failed");

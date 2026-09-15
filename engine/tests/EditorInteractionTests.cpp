@@ -1,5 +1,6 @@
 #include "shinkou/editor/EditorLayer.h"
 #include "shinkou/editor/EditorDocument.h"
+#include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/World.h"
 #include "shinkou/render/RenderScene.h"
 #include <chrono>
@@ -26,6 +27,66 @@ public:
     const input::MouseState& mouse_state() const override { return mouse; }
     const std::vector<input::GamepadState>& gamepads() const override { return pads; }
     const std::vector<input::InputEvent>& events() const override { return frame; }
+};
+
+class TestAudioBackend final : public audio::IAudioBackend {
+    struct Voice {
+        audio::AudioVoiceId id{0};
+        audio::AudioBus bus{audio::AudioBus::Master};
+        audio::AudioVoiceState state{audio::AudioVoiceState::Invalid};
+    };
+    std::vector<Voice> voices_;
+
+    Voice* find(audio::AudioVoiceId id) noexcept {
+        for (auto& voice : voices_) if (voice.id == id) return &voice;
+        return nullptr;
+    }
+    const Voice* find(audio::AudioVoiceId id) const noexcept {
+        for (const auto& voice : voices_) if (voice.id == id) return &voice;
+        return nullptr;
+    }
+
+public:
+    bool initialize(const audio::AudioConfig&) override { return true; }
+    void shutdown() override { voices_.clear(); }
+    void update(Seconds) override {}
+    audio::AudioVoiceId play(const audio::AudioAssetDesc&, const audio::AudioPlayParams& params) override {
+        const auto id = audio::make_audio_handle(static_cast<std::uint32_t>(voices_.size()), 1);
+        voices_.push_back({id, params.bus, params.startPaused ? audio::AudioVoiceState::Paused : audio::AudioVoiceState::Playing});
+        return id;
+    }
+    void stop(audio::AudioVoiceId id, Seconds) override { if (auto* voice = find(id)) voice->state = audio::AudioVoiceState::Stopped; }
+    void pause(audio::AudioVoiceId id) override { if (auto* voice = find(id); voice && voice->state == audio::AudioVoiceState::Playing) voice->state = audio::AudioVoiceState::Paused; }
+    void resume(audio::AudioVoiceId id) override { if (auto* voice = find(id); voice && voice->state == audio::AudioVoiceState::Paused) voice->state = audio::AudioVoiceState::Playing; }
+    void set_volume(audio::AudioVoiceId, float) override {}
+    void set_pitch(audio::AudioVoiceId, float) override {}
+    void set_pan(audio::AudioVoiceId, float) override {}
+    void set_spatial(audio::AudioVoiceId, const audio::AudioPlayParams&) override {}
+    void set_listener(const audio::AudioListener&) override {}
+    void set_bus_volume(audio::AudioBus, float) override {}
+    void set_bus_muted(audio::AudioBus, bool) override {}
+    audio::AudioTrackId create_track(const audio::AudioTrackDesc&) override { return 0; }
+    void destroy_track(audio::AudioTrackId) override {}
+    void set_track_volume(audio::AudioTrackId, float) override {}
+    void set_track_muted(audio::AudioTrackId, bool) override {}
+    audio::AudioTrackSnapshot track_snapshot(audio::AudioTrackId) const override { return {}; }
+    audio::AudioVoiceState state(audio::AudioVoiceId id) const override {
+        const auto* voice = find(id);
+        return voice ? voice->state : audio::AudioVoiceState::Invalid;
+    }
+    std::uint32_t collect_finished(audio::AudioVoiceId*, std::uint32_t) override { return 0; }
+    void stop_all(audio::AudioBus bus, Seconds) override {
+        for (auto& voice : voices_) if (bus == audio::AudioBus::Master || voice.bus == bus)
+            voice.state = audio::AudioVoiceState::Stopped;
+    }
+    std::string last_error() const override { return {}; }
+    audio::AudioDiagnostics diagnostics() const override {
+        audio::AudioDiagnostics result;
+        for (const auto& voice : voices_)
+            if (voice.state == audio::AudioVoiceState::Playing || voice.state == audio::AudioVoiceState::Paused)
+                ++result.activeVoices;
+        return result;
+    }
 };
 
 class ModelArtifactProcessor final : public assets::IAssetProcessor {
@@ -163,9 +224,17 @@ int main() {
         require(EditorBuildProfileStore::serialize_set(profileSet, profileSetJson, &profileSetError),
                 "could not create multi-profile fixture");
         std::ofstream(project / ".shinkou" / "build-profile.json") << profileSetJson;
+        audio::AudioConfig audioConfig;
+        audioConfig.assetRoot = project;
+        audioConfig.startDevice = false;
+        audio::AudioSystem audioSystem(std::make_unique<TestAudioBackend>(), audioConfig);
+        require(audioSystem.initialize(), "editor audio test backend initialization failed");
+        audio::AudioSceneSystem audioScene;
         EditorLayer editor; editor.set_project_root(project.generic_string());
         editor.set_layout_path((project/"Saved/layout.json").generic_string());
         require(editor.initialize(false),"editor initialization failed");
+        editor.set_audio_system(&audioSystem);
+        editor.set_audio_scene_system(&audioScene);
         editor.set_asset_system(&resourceSystem);
         editor.set_display_size(1280,720,1);
         render::Renderer renderer;
@@ -384,6 +453,25 @@ int main() {
             }
         }
         require(audioStatusVisible, "AudioSource inspector did not show linked resource status");
+        const auto audioTarget = "audio-source:" + std::to_string(created);
+        const auto audioPlayControl = "command:media-play:" + audioTarget;
+        const auto audioPauseControl = "command:media-pause:" + audioTarget;
+        const auto audioStopControl = "command:media-stop:" + audioTarget;
+        require(region(audioPlayControl).width > 0 && region(audioPauseControl).width > 0 &&
+                region(audioStopControl).width > 0,
+                "AudioSource playback transport controls were not registered");
+        click(audioPlayControl);
+        require(audioScene.transport_state(created, audioSystem) == "Playing",
+                "AudioSource Play did not start the scene voice");
+        click(audioPauseControl);
+        require(audioScene.transport_state(created, audioSystem) == "Paused",
+                "AudioSource Pause did not pause the scene voice");
+        click(audioPlayControl);
+        require(audioScene.transport_state(created, audioSystem) == "Playing",
+                "AudioSource Play did not resume a paused scene voice");
+        click(audioStopControl);
+        require(audioScene.transport_state(created, audioSystem) == "Stopped",
+                "AudioSource Stop did not release the scene voice");
         click("field:name");text("Edited Object");key("Return");
         require(world.find_object(created)->name()=="Edited Object","inspector did not commit name");
         std::string positionField;
@@ -564,8 +652,8 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         require(editor.media_preview().kind == "Audio" && editor.media_preview().path == "assets/preview.wav" &&
-                !editor.media_preview().available && editor.media_preview().status.find("not connected") != std::string::npos,
-                "audio asset did not expose an honest unavailable preview state");
+                editor.media_preview().available && editor.media_preview().status == "AudioSystem connected",
+                "audio asset did not expose the connected AudioSystem preview state");
         editor.set_panel_visible("media", false);
         editor.execute_command(EditorCommand::TogglePage, "media", world); tick();
         require(region("command:media-play").width > 0 && region("command:media-stop").width > 0,
@@ -673,6 +761,8 @@ int main() {
                 editor.asset_preview().modelTextureLabel.find("TextureB") != std::string::npos,
                 "GLTF material selection did not follow its base-color texture reference");
         editor.shutdown();
+        audioScene.shutdown(audioSystem);
+        audioSystem.shutdown();
         resourceSystem.shutdown();
         std::filesystem::remove_all(project);
         std::cout << "Editor document, real filesystem, input routing, inspector, undo and simulation passed\n";

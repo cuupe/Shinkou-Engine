@@ -229,7 +229,13 @@ int main() {
 
     assert(scene.play(world, first.id(), audio, &assetSystem));
     assert(scene.clip_count() == 1 && audio.asset_count() == 1);
+    assert(scene.transport_state(first.id(), audio) == "Playing");
+    assert(scene.pause(first.id(), audio));
+    assert(scene.transport_state(first.id(), audio) == "Paused");
+    assert(scene.resume(first.id(), audio));
+    assert(scene.transport_state(first.id(), audio) == "Playing");
     scene.stop(first.id(), audio);
+    assert(scene.transport_state(first.id(), audio) == "Stopped");
     assert(scene.clip_count() == 0 && audio.asset_count() == 0);
     firstSource->assetId = loopAssetId;
     assert(!scene.play(world, first.id(), audio, &assetSystem));

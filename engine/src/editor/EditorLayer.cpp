@@ -3,6 +3,7 @@
 
 #include "shinkou/GameObject.h"
 #include "shinkou/World.h"
+#include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/render/RenderScene.h"
 #include "shinkou/reflection/Reflection.h"
 #include "shinkou/reflection/Serialization.h"
@@ -1273,6 +1274,49 @@ bool EditorLayer::edit_field(std::string_view id, std::string_view value) {
     document_changed(); lastStatus_ = "Property updated"; return true;
 }
 
+bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::string_view target, World& world) {
+    constexpr std::string_view prefix{"audio-source:"};
+    if (target.rfind(prefix, 0) != 0) return false;
+    ObjectId objectId = 0;
+    try {
+        objectId = static_cast<ObjectId>(std::stoull(std::string(target.substr(prefix.size()))));
+    } catch (...) {
+        lastStatus_ = "Audio source target is invalid";
+        return true;
+    }
+    if (!audioSceneSystem_ || !audioSystem_ || !audioSystem_->initialized()) {
+        lastStatus_ = "Audio scene transport is unavailable";
+        push_console(lastStatus_);
+        return true;
+    }
+
+    bool changed = false;
+    switch (command) {
+    case EditorCommand::MediaPlay:
+        changed = audioSceneSystem_->transport_state(objectId, *audioSystem_) == "Paused"
+            ? audioSceneSystem_->resume(objectId, *audioSystem_)
+            : audioSceneSystem_->play(world, objectId, *audioSystem_, assetSystem_);
+        lastStatus_ = changed ? "Audio source playing" : "Audio source could not play";
+        break;
+    case EditorCommand::MediaPause:
+        changed = audioSceneSystem_->pause(objectId, *audioSystem_);
+        lastStatus_ = changed ? "Audio source paused" : "Audio source is not playing";
+        break;
+    case EditorCommand::MediaStop:
+        if (world.find_object(objectId) &&
+            world.find_object(objectId)->get_component<components::AudioSourceComponent>()) {
+            audioSceneSystem_->stop(objectId, *audioSystem_);
+            changed = true;
+        }
+        lastStatus_ = changed ? "Audio source stopped" : "Audio source was not found";
+        break;
+    default:
+        return false;
+    }
+    push_console(lastStatus_);
+    return true;
+}
+
 void EditorLayer::dispatch_command(EditorCommand command, std::string_view target, World& world) {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     std::string selectedPath;
@@ -1421,9 +1465,11 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         open_diagnostic_in_ide(target);
         break;
     case EditorCommand::MediaPlay:
+        if (dispatch_audio_source_transport(command, target, world)) break;
         start_audio_preview();
         break;
     case EditorCommand::MediaPause:
+        if (dispatch_audio_source_transport(command, target, world)) break;
         if (audioSystem_ && audioPreviewVoice_ != 0 &&
             audioSystem_->state(audioPreviewVoice_) == audio::AudioVoiceState::Playing) {
             audioSystem_->pause(audioPreviewVoice_);
@@ -1433,6 +1479,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         }
         break;
     case EditorCommand::MediaStop:
+        if (dispatch_audio_source_transport(command, target, world)) break;
         stop_audio_preview();
         lastStatus_ = "Audio preview stopped";
         sync_media_preview_state();
@@ -3966,6 +4013,20 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     if (uiModel_.selected_object() != layout_.selectedObject) uiModel_.select_object(layout_.selectedObject);
     uiModel_.set_audio_asset_choices(audioInspectorChoices_);
     uiModel_.set_audio_asset_status(assetManifestStatus_);
+    ComponentId audioTransportComponent = 0;
+    std::string audioTransportState = "Unavailable";
+    if (auto* selected = world.find_object(layout_.selectedObject)) {
+        selected->each_component([&](Component& component) {
+            if (audioTransportComponent != 0) return;
+            if (dynamic_cast<components::AudioSourceComponent*>(&component)) {
+                audioTransportComponent = component.id();
+                audioTransportState = audioSceneSystem_ && audioSystem_
+                    ? audioSceneSystem_->transport_state(selected->id(), *audioSystem_)
+                    : "Unavailable";
+            }
+        });
+    }
+    uiModel_.set_audio_transport_state(audioTransportComponent, std::move(audioTransportState));
     { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
     mediaPanel_.update(dt);
     // Asset enumeration is asynchronous and on-demand. Never recursively

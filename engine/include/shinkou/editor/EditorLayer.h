@@ -45,6 +45,7 @@ namespace shinkou {
 class World;
 class GameObject;
 namespace input { class InputSystem; }
+namespace audio { class AudioSceneSystem; }
 
 namespace editor {
 
@@ -264,6 +265,7 @@ class EditorLayer {
     std::shared_ptr<LiveBuildOutput> liveBuildOutput_{};
     std::uint64_t liveBuildUiRevision_{0};
     audio::AudioSystem* audioSystem_{nullptr};
+    audio::AudioSceneSystem* audioSceneSystem_{nullptr};
     assets::AssetSystem* assetSystem_{nullptr};
     bool assetSystemRootNeedsRestart_{false};
     audio::AudioVoiceId audioPreviewVoice_{0};
@@ -294,6 +296,7 @@ class EditorLayer {
     std::string scenePath_{"assets/Scenes/Untitled.scene"};
     bool checkpoint(World& world);
     bool edit_field(std::string_view id, std::string_view value);
+    bool dispatch_audio_source_transport(EditorCommand command, std::string_view target, World& world);
     void document_changed(bool preserveRedo = false);
 
     void register_builtin_panels();
@@ -441,6 +444,9 @@ public:
 
     void set_project_root(std::string path);
     void set_audio_system(audio::AudioSystem* audioSystem) noexcept;
+    void set_audio_scene_system(audio::AudioSceneSystem* audioSceneSystem) noexcept {
+        audioSceneSystem_ = audioSceneSystem;
+    }
     void set_asset_system(assets::AssetSystem* assetSystem);
     void set_layout_path(std::string path);
     void set_display_size(float width, float height, float dpiScale = 1.0f) noexcept;

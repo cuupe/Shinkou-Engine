@@ -71,8 +71,15 @@ public:
     void sync(World& world, AudioSystem& audio, const assets::AssetSystem* assetSystem = nullptr);
     bool play(World& world, ObjectId object, AudioSystem& audio,
               const assets::AssetSystem* assetSystem = nullptr);
+    bool pause(ObjectId object, AudioSystem& audio);
+    bool resume(ObjectId object, AudioSystem& audio);
     void stop(ObjectId object, AudioSystem& audio);
     void shutdown(AudioSystem& audio);
+
+    // Presentation-facing transport state. Runtime voice/asset handles stay
+    // private to this bridge; the editor only receives a bounded semantic
+    // state string for the selected source.
+    std::string transport_state(ObjectId object, const AudioSystem& audio) const;
 
     const AudioSceneDiagnostics& diagnostics() const noexcept { return diagnostics_; }
     std::size_t source_count() const noexcept { return sources_.size(); }

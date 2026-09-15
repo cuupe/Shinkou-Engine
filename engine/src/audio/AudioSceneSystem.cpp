@@ -264,11 +264,44 @@ bool AudioSceneSystem::play(World& world, ObjectId objectId, AudioSystem& audio,
     return start_source(*object, *source, binding, audio, assetSystem);
 }
 
+bool AudioSceneSystem::pause(ObjectId objectId, AudioSystem& audio) {
+    const auto found = sources_.find(objectId);
+    if (found == sources_.end() || found->second.voice == 0 ||
+        audio.state(found->second.voice) != AudioVoiceState::Playing) return false;
+    audio.pause(found->second.voice);
+    return audio.state(found->second.voice) == AudioVoiceState::Paused;
+}
+
+bool AudioSceneSystem::resume(ObjectId objectId, AudioSystem& audio) {
+    const auto found = sources_.find(objectId);
+    if (found == sources_.end() || found->second.voice == 0 ||
+        audio.state(found->second.voice) != AudioVoiceState::Paused) return false;
+    audio.resume(found->second.voice);
+    return audio.state(found->second.voice) == AudioVoiceState::Playing;
+}
+
 void AudioSceneSystem::stop(ObjectId objectId, AudioSystem& audio) {
     const auto found = sources_.find(objectId);
     if (found == sources_.end()) return;
     stop_source(audio, found->second);
     found->second.started = true;
+}
+
+std::string AudioSceneSystem::transport_state(ObjectId objectId, const AudioSystem& audio) const {
+    if (!audio.initialized()) return "Unavailable";
+    const auto found = sources_.find(objectId);
+    if (found == sources_.end()) return "Stopped";
+    const auto& binding = found->second;
+    if (binding.pending) return "Pending";
+    if (binding.voice == 0) return "Stopped";
+    switch (audio.state(binding.voice)) {
+    case AudioVoiceState::Playing: return "Playing";
+    case AudioVoiceState::Paused: return "Paused";
+    case AudioVoiceState::Finished: return "Finished";
+    case AudioVoiceState::Stopped: return "Stopped";
+    case AudioVoiceState::Invalid: return "Unavailable";
+    }
+    return "Unavailable";
 }
 
 void AudioSceneSystem::shutdown(AudioSystem& audio) {
