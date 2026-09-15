@@ -3,6 +3,7 @@
 #include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/World.h"
 #include "shinkou/render/RenderScene.h"
+#include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -424,10 +425,13 @@ int main() {
         tick();
         const auto audioClipField = "field:" + std::to_string(audioSource->id()) + ":clipPath";
         const auto audioBusField = "field:" + std::to_string(audioSource->id()) + ":bus";
+        const auto audioMinDistanceField = "field:" + std::to_string(audioSource->id()) + ":minDistance";
+        const auto audioMaxDistanceField = "field:" + std::to_string(audioSource->id()) + ":maxDistance";
+        const auto audioRolloffField = "field:" + std::to_string(audioSource->id()) + ":rolloff";
         require(region(audioClipField).width > 0 && region(audioBusField).width > 0 &&
                 editor.editor_ui().interaction_regions().find("field:" + std::to_string(audioSource->id()) + ":assetId") ==
                     editor.editor_ui().interaction_regions().end(),
-                "AudioSource inspector did not expose specialized clip/bus fields");
+                "AudioSource inspector did not expose clip/bus/spatial fields");
         click(audioClipField);
         require(region("inspector-choice-popup").width > 0, "AudioSource clip picker did not open");
         std::string previewAudioChoice;
@@ -445,6 +449,26 @@ int main() {
                 "AudioSource bus choice control did not open");
         click("inspector-choice:0");
         require(audioSource->bus == 0, "AudioSource bus choice did not commit");
+        const auto inspectorSurface = region("inspector.background");
+        gesture.type = input::InputEventType::MouseWheel;
+        gesture.position = {inspectorSurface.x + inspectorSurface.width * 0.5f,
+                            inspectorSurface.y + inspectorSurface.height * 0.5f};
+        gesture.delta.y = -20.0f;
+        fake->queue.push_back(gesture);
+        tick();
+        require(region(audioMinDistanceField).width > 0 && region(audioMaxDistanceField).width > 0 &&
+                region(audioRolloffField).width > 0,
+                "AudioSource inspector did not expose spatial fields after scrolling");
+        click(audioMinDistanceField); text("12.5"); key("Return");
+        click(audioMaxDistanceField); text("40"); key("Return");
+        click(audioRolloffField); text("0.75"); key("Return");
+        require(std::abs(audioSource->minDistance - 12.5f) < 0.001f &&
+                std::abs(audioSource->maxDistance - 40.0f) < 0.001f &&
+                std::abs(audioSource->rolloff - 0.75f) < 0.001f,
+                "AudioSource spatial inspector fields did not commit");
+        gesture.delta.y = 20.0f;
+        fake->queue.push_back(gesture);
+        tick();
         bool audioStatusVisible = false;
         for (const auto& command : editor.editor_ui().render_list().commands()) {
             if (command.type == ui::DrawCommandType::Text && command.text.find("Ready · assets/preview.wav") != std::string::npos) {

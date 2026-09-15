@@ -23,6 +23,8 @@ struct AudioSceneDiagnostics {
     std::size_t invalidatedSources{0};
     std::size_t loadedClips{0};
     std::size_t failedSources{0};
+    ObjectId listenerObject{0};
+    bool listenerBound{false};
     std::string lastError{};
 };
 
@@ -42,6 +44,9 @@ class AudioSceneSystem final {
         bool spatialized{false};
         float volume{1.0f};
         float pitch{1.0f};
+        float minDistance{1.0f};
+        float maxDistance{100.0f};
+        float rolloff{1.0f};
         std::uint64_t assetId{0};
         AudioAssetId asset{0};
         AudioVoiceId voice{0};
@@ -59,6 +64,7 @@ class AudioSceneSystem final {
     AudioAssetId acquire_clip(AudioSystem& audio, const std::string& path, bool streaming);
     void release_clip(AudioSystem& audio, const std::string& path, AudioAssetId asset);
     void stop_source(AudioSystem& audio, SourceBinding& binding);
+    void sync_listener(World& world, AudioSystem& audio);
     bool start_source(GameObject& object, components::AudioSourceComponent& source,
                       SourceBinding& binding, AudioSystem& audio,
                       const assets::AssetSystem* assetSystem);

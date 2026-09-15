@@ -337,6 +337,9 @@ public:
     float volume{1.0f};
     float pitch{1.0f};
     bool spatialized{false};
+    float minDistance{1.0f};
+    float maxDistance{100.0f};
+    float rolloff{1.0f};
     bool streaming{false};
 
     std::string_view type_name() const noexcept override { return "AudioSource"; }
@@ -351,6 +354,9 @@ protected:
         builder.add("volume", &volume, PropertyFlags::Serialized, 0.0, 1.0, 0.01);
         builder.add("pitch", &pitch, PropertyFlags::Serialized, 0.01, 8.0, 0.01);
         builder.add("spatialized", &spatialized, PropertyFlags::Serialized);
+        builder.add("minDistance", &minDistance, PropertyFlags::Serialized, 0.01, 100000.0, 0.01, "Min Distance");
+        builder.add("maxDistance", &maxDistance, PropertyFlags::Serialized, 0.01, 100000.0, 0.01, "Max Distance");
+        builder.add("rolloff", &rolloff, PropertyFlags::Serialized, 0.0, 10.0, 0.01);
         builder.add("streaming", &streaming, PropertyFlags::Serialized);
     }
 };

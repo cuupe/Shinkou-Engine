@@ -2,6 +2,7 @@
 #include "shinkou/assets/AssetSystem.h"
 #include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/editor/EditorDocument.h"
+#include "shinkou/render/RenderScene.h"
 
 #include <algorithm>
 #include <cassert>
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -18,18 +20,29 @@ class RecordingBackend final : public shinkou::audio::IAudioBackend {
     std::unordered_map<shinkou::audio::AudioVoiceId, shinkou::audio::AudioVoiceState> voices_;
     shinkou::audio::AudioVoiceId nextVoice_{1};
     std::size_t stopCalls_{0};
+    shinkou::audio::AudioPlayParams lastPlayParams_{};
+    shinkou::audio::AudioPlayParams lastSpatialParams_{};
+    shinkou::audio::AudioListener lastListener_{};
+    std::size_t spatialCalls_{0};
+    std::size_t listenerCalls_{0};
 
 public:
     void finish_all() {
         for (auto& [voice, state] : voices_) { (void)voice; state = shinkou::audio::AudioVoiceState::Finished; }
     }
     std::size_t stop_calls() const noexcept { return stopCalls_; }
+    const shinkou::audio::AudioPlayParams& last_play_params() const noexcept { return lastPlayParams_; }
+    const shinkou::audio::AudioPlayParams& last_spatial_params() const noexcept { return lastSpatialParams_; }
+    const shinkou::audio::AudioListener& last_listener() const noexcept { return lastListener_; }
+    std::size_t spatial_calls() const noexcept { return spatialCalls_; }
+    std::size_t listener_calls() const noexcept { return listenerCalls_; }
 
     bool initialize(const shinkou::audio::AudioConfig&) override { return true; }
     void shutdown() override { voices_.clear(); }
     void update(shinkou::Seconds) override {}
     shinkou::audio::AudioVoiceId play(const shinkou::audio::AudioAssetDesc&,
                                       const shinkou::audio::AudioPlayParams& params) override {
+        lastPlayParams_ = params;
         const auto voice = nextVoice_++;
         voices_[voice] = params.startPaused ? shinkou::audio::AudioVoiceState::Paused
                                              : shinkou::audio::AudioVoiceState::Playing;
@@ -48,8 +61,14 @@ public:
     void set_volume(shinkou::audio::AudioVoiceId, float) override {}
     void set_pitch(shinkou::audio::AudioVoiceId, float) override {}
     void set_pan(shinkou::audio::AudioVoiceId, float) override {}
-    void set_spatial(shinkou::audio::AudioVoiceId, const shinkou::audio::AudioPlayParams&) override {}
-    void set_listener(const shinkou::audio::AudioListener&) override {}
+    void set_spatial(shinkou::audio::AudioVoiceId, const shinkou::audio::AudioPlayParams& params) override {
+        lastSpatialParams_ = params;
+        ++spatialCalls_;
+    }
+    void set_listener(const shinkou::audio::AudioListener& listener) override {
+        lastListener_ = listener;
+        ++listenerCalls_;
+    }
     void set_bus_volume(shinkou::audio::AudioBus, float) override {}
     void set_bus_muted(shinkou::audio::AudioBus, bool) override {}
     shinkou::audio::AudioTrackId create_track(const shinkou::audio::AudioTrackDesc&) override { return 0; }
@@ -130,7 +149,19 @@ int main() {
     firstSource->loop = true;
     firstSource->spatialized = true;
     firstSource->volume = 0.5f;
+    firstSource->minDistance = 2.0f;
+    firstSource->maxDistance = 45.0f;
+    firstSource->rolloff = 0.6f;
     first.get_component<components::TransformComponent>()->set_position({3.0f, 2.0f, 1.0f});
+
+    const auto camera = world.ecs().create();
+    render::CameraComponent cameraComponent;
+    cameraComponent.active = true;
+    world.ecs().emplace<render::CameraComponent>(camera, cameraComponent);
+    render::TransformComponent listenerTransform;
+    listenerTransform.local.position = {10.0f, 4.0f, -2.0f};
+    listenerTransform.local.rotation = math::FromAxisAngle({0.0f, 1.0f, 0.0f}, math::Pi * 0.5f);
+    world.ecs().emplace<render::TransformComponent>(camera, listenerTransform);
 
     audio::AudioConfig config;
     config.assetRoot = project;
@@ -167,6 +198,35 @@ int main() {
     assert(scene.source_count() == 1 && scene.clip_count() == 1);
     assert(scene.diagnostics().activeSources == 1 && scene.diagnostics().playingSources == 1);
     assert(audio.asset_count() == 1);
+    assert(scene.diagnostics().listenerBound && scene.diagnostics().listenerObject == 0);
+    assert(backendSpy->listener_calls() > 0);
+    assert(std::abs(backendSpy->last_listener().position.x - 10.0f) < 0.001f &&
+           std::abs(backendSpy->last_listener().position.y - 4.0f) < 0.001f &&
+           std::abs(backendSpy->last_listener().position.z + 2.0f) < 0.001f);
+    assert(std::abs(backendSpy->last_listener().forward.x - 1.0f) < 0.001f &&
+           std::abs(backendSpy->last_listener().forward.z) < 0.001f);
+    assert(std::abs(backendSpy->last_play_params().position.x - 3.0f) < 0.001f &&
+           std::abs(backendSpy->last_play_params().minDistance - 2.0f) < 0.001f &&
+           std::abs(backendSpy->last_play_params().maxDistance - 45.0f) < 0.001f &&
+           std::abs(backendSpy->last_play_params().rolloff - 0.6f) < 0.001f);
+    assert(backendSpy->spatial_calls() > 0);
+
+    firstSource->minDistance = 80.0f;
+    firstSource->maxDistance = 20.0f;
+    firstSource->rolloff = std::numeric_limits<float>::quiet_NaN();
+    scene.sync(world, audio, &assetSystem);
+    assert(backendSpy->last_play_params().minDistance == 80.0f &&
+           backendSpy->last_play_params().maxDistance == 80.0f &&
+           backendSpy->last_play_params().rolloff == 1.0f);
+
+    cameraComponent.active = false;
+    world.ecs().emplace_or_replace<render::CameraComponent>(camera, cameraComponent);
+    scene.sync(world, audio, &assetSystem);
+    assert(!scene.diagnostics().listenerBound && scene.diagnostics().listenerObject == 0);
+    assert(std::abs(backendSpy->last_listener().forward.z - 1.0f) < 0.001f &&
+           std::abs(backendSpy->last_listener().up.y - 1.0f) < 0.001f);
+    cameraComponent.active = true;
+    world.ecs().emplace_or_replace<render::CameraComponent>(camera, cameraComponent);
 
     scene.sync(world, audio, &assetSystem);
     assert(scene.source_count() == 1 && scene.clip_count() == 1 && audio.asset_count() == 1);

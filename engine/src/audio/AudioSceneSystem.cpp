@@ -3,6 +3,7 @@
 #include "shinkou/GameObject.h"
 #include "shinkou/World.h"
 #include "shinkou/assets/AssetSystem.h"
+#include "shinkou/render/RenderScene.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +13,9 @@ namespace shinkou::audio {
 namespace {
 
 constexpr std::uint32_t kLastBus = static_cast<std::uint32_t>(AudioBus::Count) - 1u;
+constexpr float kMinSpatialDistance = 0.01f;
+constexpr float kMaxSpatialDistance = 100000.0f;
+constexpr float kMaxRolloff = 10.0f;
 
 enum class AssetIdentityState : std::uint8_t { Valid, Pending, Invalid };
 
@@ -19,6 +23,26 @@ struct AssetIdentityCheck {
     AssetIdentityState state{AssetIdentityState::Valid};
     std::string error{};
 };
+
+float normalized_min_distance(float value) noexcept {
+    return std::clamp(std::isfinite(value) ? value : 1.0f,
+                      kMinSpatialDistance, kMaxSpatialDistance);
+}
+
+float normalized_max_distance(float minDistance, float value) noexcept {
+    return std::clamp(std::isfinite(value) ? value : 100.0f,
+                      minDistance, kMaxSpatialDistance);
+}
+
+float normalized_rolloff(float value) noexcept {
+    return std::clamp(std::isfinite(value) ? value : 1.0f, 0.0f, kMaxRolloff);
+}
+
+math::Vec3 finite_vec3(math::Vec3 value) noexcept {
+    return {math::IsFinite(value.x) ? value.x : 0.0f,
+            math::IsFinite(value.y) ? value.y : 0.0f,
+            math::IsFinite(value.z) ? value.z : 0.0f};
+}
 
 bool valid_project_path(std::string_view value, std::filesystem::path& normalized) {
     if (value.empty()) return false;
@@ -36,8 +60,11 @@ AudioPlayParams play_params(const components::AudioSourceComponent& source, cons
     params.streaming = source.streaming;
     params.volume = std::clamp(std::isfinite(source.volume) ? source.volume : 1.0f, 0.0f, 1.0f);
     params.pitch = std::clamp(std::isfinite(source.pitch) ? source.pitch : 1.0f, 0.01f, 8.0f);
+    params.minDistance = normalized_min_distance(source.minDistance);
+    params.maxDistance = normalized_max_distance(params.minDistance, source.maxDistance);
+    params.rolloff = normalized_rolloff(source.rolloff);
     if (const auto* transform = object.get_component<components::TransformComponent>())
-        params.position = math::TransformPoint(transform->world_matrix(), {});
+        params.position = finite_vec3(math::TransformPoint(transform->world_matrix(), {}));
     return params;
 }
 
@@ -117,6 +144,29 @@ void AudioSceneSystem::stop_source(AudioSystem& audio, SourceBinding& binding) {
     binding.pending = false;
 }
 
+void AudioSceneSystem::sync_listener(World& world, AudioSystem& audio) {
+    AudioListener listener{};
+    bool bound = false;
+    world.ecs().each<render::CameraComponent, render::TransformComponent>(
+        [&](Entity entity, const render::CameraComponent& camera,
+            const render::TransformComponent& transform) {
+            if (bound || !camera.active || !transform.visible) return;
+            const auto rotation = math::Normalize(transform.local.rotation);
+            listener.position = finite_vec3(transform.local.position);
+            listener.forward = math::Normalize(math::Rotate(rotation, {0.0f, 0.0f, 1.0f}));
+            listener.up = math::Normalize(math::Rotate(rotation, {0.0f, 1.0f, 0.0f}));
+            if (math::LengthSquared(listener.forward) <= math::Epsilon)
+                listener.forward = {0.0f, 0.0f, 1.0f};
+            if (math::LengthSquared(listener.up) <= math::Epsilon)
+                listener.up = {0.0f, 1.0f, 0.0f};
+            if (const auto* object = world.find_object(entity))
+                diagnostics_.listenerObject = object->id();
+            bound = true;
+        });
+    audio.set_listener(listener);
+    diagnostics_.listenerBound = bound;
+}
+
 bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceComponent& source,
                                     SourceBinding& binding, AudioSystem& audio,
                                     const assets::AssetSystem* assetSystem) {
@@ -136,6 +186,9 @@ bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceC
     binding.spatialized = source.spatialized;
     binding.volume = source.volume;
     binding.pitch = source.pitch;
+    binding.minDistance = normalized_min_distance(source.minDistance);
+    binding.maxDistance = normalized_max_distance(binding.minDistance, source.maxDistance);
+    binding.rolloff = normalized_rolloff(source.rolloff);
     binding.pending = false;
     const auto identity = validate_asset_identity(source, binding.path, assetSystem);
     if (identity.state != AssetIdentityState::Valid) {
@@ -180,6 +233,8 @@ void AudioSceneSystem::sync(World& world, AudioSystem& audio,
         return;
     }
 
+    sync_listener(world, audio);
+
     world.each_object([&](GameObject& object) {
         auto* source = object.get_component<components::AudioSourceComponent>();
         if (!source) return;
@@ -199,7 +254,10 @@ void AudioSceneSystem::sync(World& world, AudioSystem& audio,
         const bool configChanged = binding.bus != std::min(source->bus, kLastBus) ||
             binding.streaming != source->streaming || binding.loop != source->loop ||
             binding.spatialized != source->spatialized || binding.volume != source->volume ||
-            binding.pitch != source->pitch || binding.assetId != source->assetId;
+            binding.pitch != source->pitch || binding.minDistance != normalized_min_distance(source->minDistance) ||
+            binding.maxDistance != normalized_max_distance(normalized_min_distance(source->minDistance), source->maxDistance) ||
+            binding.rolloff != normalized_rolloff(source->rolloff) ||
+            binding.assetId != source->assetId;
         if (pathChanged || identityChanged || manifestChanged || (configChanged && binding.voice != 0)) {
             if (manifestChanged) {
                 ++diagnostics_.invalidatedSources;

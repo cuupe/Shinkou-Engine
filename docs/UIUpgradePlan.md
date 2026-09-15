@@ -922,3 +922,22 @@
 - 视觉：沿用现有 Inspector 行高、flat button hierarchy、focus/pressed/accent 状态；transport 状态固定在组件顶部，窄窗口下三按钮等宽收缩但不覆盖标签。
 - 失败状态与回滚：未连接 AudioScene/AudioSystem 时显示 Unavailable；不存在或禁用对象不创建 voice；回滚可去掉注入和 transport fields，保留 4.29 资源选择。
 - 下一入口：listener/3D 空间参数与距离衰减策略；随后增加可审计的 streaming/cursor contract，并推进 manifest rename/import migration 与模型材质/纹理预览。
+### 第 4.31 子阶段：AudioSource 空间参数与 Camera Listener 绑定
+
+目标：让 AudioSource 的距离衰减参数进入可序列化 Inspector 与 AudioSystem 参数链路，并将当前活动渲染 Camera 作为受控的场景 Listener；先建立确定的运行时契约，再为后续 3D 音频可视化和多 Listener 策略留出边界。
+
+实现范围：
+
+- `AudioSourceComponent` 增加 `minDistance`、`maxDistance`、`rolloff`，沿用属性反射/scene JSON；运行时对 NaN、无穷、负值和反向距离做有限归一化，保证 backend 收到可用区间。
+- `AudioSceneSystem` 在同步边界扫描首个 active/visible `render::CameraComponent + render::TransformComponent`，将位置、由旋转推导的 forward/up 提交给 `AudioSystem::set_listener`；没有有效 Camera 时提交默认 Listener，并在 diagnostics 标记未绑定。
+- source binding 将空间参数纳入配置变更检测；空间源启动和每帧更新都向 backend 传递位置、距离和 rolloff。World 仍只保存编辑意图，不保存 AudioVoice/decoder 句柄。
+- Inspector 复用通用数值属性行显示并编辑三个空间参数；不在本轮引入 gizmo、衰减曲线、velocity 编辑、多 Listener 选择或跨线程 AudioEvent。
+
+审计与验证安排：
+
+- 单元：fake backend 捕获 play/set_spatial/set_listener 参数；覆盖旋转到 forward/up、Camera 禁用回退默认 Listener、空间参数变更重绑、NaN/反向距离归一化和 JSON 保存恢复。
+- 集成：EditorInteraction 验证三个 Inspector 字段可见并能提交；完整构建、AudioScene/Editor focused CTest、全量 CTest 和 D3D11 editor 多帧 smoke。
+- 安全/性能：只遍历现有 ECS 相机，不读取文件、不启动进程、不访问网络；参数在音频启动/同步边界做常量上限钳制；Listener 同步不分配容器、不触碰 manifest 锁。
+- 视觉：继续使用 Windows-first flat Inspector 行、现有 DPI logical coordinates 和语义文本标签；不增加仅图标控件，窄面板保持可读/可编辑。
+- 失败状态与回滚：无 Camera 使用稳定默认 Listener；无效数值不会传递到 backend；回滚只移除新增字段与 listener sync，保留 4.30 transport 和 4.29 picker。
+- 下一入口：定义 cursor/seek capability 与场景 voice 时间轴，再推进 streaming 策略；模型侧继续做材质/纹理/深度预览，资源侧定义 rename/import migration。

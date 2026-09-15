@@ -1619,6 +1619,41 @@
 - Inspector 还没有 listener、min/max distance、rolloff、velocity 等空间音频参数；下一轮先定义序列化组件字段与 AudioScene/AudioSystem 的参数边界，再做空间调试可视化。
 - CTest 与 sample 仍不能替代真实 Windows 音频设备、Explorer 拖放和 GPU 模型材质质量 QA；这些继续保留为平台专项入口。
 
+## 第 4.31 子阶段：AudioSource 空间参数与 Camera Listener 绑定
+
+### 实现与范围
+
+- `AudioSourceComponent` 增加可序列化 `minDistance`、`maxDistance`、`rolloff`；AudioSceneSystem 将它们映射到 `AudioPlayParams`，并把空间配置变化纳入 source binding 重启条件。
+- AudioSceneSystem 每次同步从首个 active/visible 渲染 Camera 读取位置和旋转，推导 forward/up 并提交给 `AudioSystem::set_listener`；无有效 Camera 时提交默认 Listener，diagnostics 暴露 `listenerBound` 与 `listenerObject`。
+- Inspector 沿用通用数值编辑器暴露三个空间字段；运行时对 NaN/无穷、负值、过大距离和 max 小于 min 做边界归一化。World/scene JSON 仍只保存配置意图，不保存 voice、backend 或 decoder 句柄。
+- 非目标：没有新增 listener gizmo、衰减曲线、多 Listener 策略、velocity 编辑、seek/cursor 或 streaming 进度；这些继续按计划拆分。
+
+### 契约与证据
+
+- `shinkou_audio_scene_system_tests` fake backend 捕获首个 Camera 的 Listener 姿态、AudioSource 的 play/set_spatial 距离参数，验证 Camera 禁用后的默认 Listener、NaN/反向距离归一化和空间配置重绑。
+- `shinkou_editor_interaction_tests` 验证 Inspector 中 min/max distance 与 rolloff 字段可见且可提交，同时保留 4.29 picker、4.30 scene transport 和既有 Undo/Redo。
+- 构建：`cmake --build out/build/mingw-debug -j 2` 通过；最终代码 focused CTest `2/2` passed、总计 `15.41 sec`；全量 CTest `55/55` passed、0 failures、总计 `26.52 sec`。
+- Engine smoke：最终重链后的 `out/build/mingw-debug/shinkou_engine_sample.exe dx11 --frames 10` 退出 `0`，报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=10 passes=40 draws=30`；render graph 含 `editor_scene_present`，UI trace 为 `editor-ui-commands=184 editor-ui-text=41 editor-ui-assets=11 editor-ui-visible-assets=11 editor-ui-dpi=1.5`。现有并行 Physics/CMake 改动保持未纳入本轮提交。
+
+### 安全、性能与视觉审计
+
+- Listener 只读取 World 已有 ECS Camera/Transform，不做文件 IO、进程启动、网络访问或 manifest 锁等待；每帧提交固定大小 `AudioListener`，不建立临时容器。
+- 空间数值由序列化属性范围和 AudioSceneSystem 双层边界保护；maxDistance 始终不小于 minDistance，backend 不接收非有限值。
+- Inspector 复用 Windows-first flat surface、既有行高和 logical DPI 坐标；没有新增图标依赖，窄面板通过既有滚动/裁剪保持可读。
+- 4.30 的对象级 transport target 与本轮空间参数分离：transport 改变 session voice，空间字段改变 scene configuration 并由现有 editor property transaction 处理。
+
+### 失败状态与回滚路径
+
+- 没有 active/visible Camera 时使用稳定默认 Listener 并报告未绑定；Camera/Transform 数据异常时仍回退 forward/up 默认向量。
+- 空间字段编辑失败不会修改 World；运行时非法值只在 AudioPlayParams 边界归一化，不创建额外资源。
+- 回滚可移除新增字段、binding 比较与 listener sync，保留 4.30 transport、4.29 picker 和既有 AudioSource path/ID 契约。
+
+### 未解决风险与下一轮
+
+- 当前 Listener 选择是首个 active Camera，尚未有显式主 Listener/多相机优先级，也未计算 listener velocity；后续应先定义可序列化/运行时选择契约。
+- 当前距离参数已进入 backend，但没有 Inspector 衰减曲线和空间调试 gizmo；模型深度/material/texture GPU 预览与资源 rename/import migration 仍是独立阶段。
+- 下一轮进入 cursor/seek capability 与场景 voice 时间轴，随后推进 streaming 策略和真实设备/媒体平台 QA。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：
