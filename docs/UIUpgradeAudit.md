@@ -1858,6 +1858,39 @@
 - 当前已完成 1280×720 dark/DPI 1.5 的真实窗口证据，尚未完成 1600、1024/窄窗口、light/high-contrast 和多 DPI matrix。
 - streaming buffer、loop/end-of-file、播放头刷新预算、异步 duration derived cache、rename/import migration 与完整 PBR/material/texture/depth/animation model preview 仍未完成；不能宣称最终 Unity 级能力已完成。
 
+## 第 4.38 子阶段：资源改名/删除与活动场景引用迁移
+
+### 实现与范围
+
+- `EditorLayer::remap_live_asset_references` 现在对文件和目录使用 normalized project-relative prefix，将活动 World 中 `AssetReferenceComponent` 的 path 迁移到新位置；`AudioSourceComponent` 同步迁移 `clipPath` 并清零旧 `assetId`。
+- `poll_asset_manifest_scan` 发布新 immutable manifest 后调用 pending refresh：按 `FileSystemService::project_relative_existing` 得到的 canonical source path 查找新 entry，普通资源重新绑定 AssetId；AudioSource 仅接受 `key.type == "audio"`，否则保持 path + `assetId=0` 的 missing/unavailable 语义。
+- Delete 路径按同一 prefix 使 live reference 的 AssetId 失效但保留 path，方便 Inspector/场景诊断；选中 asset 和当前 Asset Browser 目录在 rename/delete 时同步更新。
+- 活动 World 发生外部文件迁移时清空旧 `EditorDocument` undo/redo snapshots 并标记 scene dirty，因为现有 history 只保存 World、不能原子地回滚 filesystem rename；这避免用户 Undo 恢复已经不存在的旧路径。
+- 未加载 scene/prefab 文件、跨项目移动、依赖图重写和 AssetId 算法变更仍明确不在本轮范围。
+
+### 契约与证据
+
+- `shinkou_editor_interaction_tests` 通过真实 retained Project browser 路径：`Folder/Nested/needle.txt -> renamed.txt` 后断言文件存在、live reference path 更新、旧/新 manifest AssetId 不同且引用重新绑定新 ID；同一测试通过 Context menu Delete 后断言文件消失、live reference path 保留且 AssetId 为 0。
+- 同一回归保留并通过 AudioSource picker/transport/waveform、模型 AssetId 场景实例、native drop、viewport boundary、scene save/open、Undo/Redo、build profile 和 compile_commands 集成检查；focused CTest 为 `1/1 passed`。
+- 迁移后重新等待 manifest ready，再执行 viewport boundary 断言；这验证了 delete 引起的异步 AssetSystem refresh 不会被错误地当作坐标或拖放错误。
+- 全量 `cmake --build out/build/mingw-debug -j 2` 通过；完整 CTest `56/56 passed`、0 failures、总计 `20.04 sec`；`shinkou_editor_interaction_tests` focused rerun `1/1 passed`、`19.09 sec`。`git diff --check` 无实际 whitespace error（仅报告仓库既有 LF→CRLF 提示）。
+
+### 安全、性能与视觉审计
+
+- Rename/Delete 的原始 IO 仍由 `FileSystemService` 执行，拒绝 project root、绝对路径、`..` 穿越和已存在目标；引用迁移只消费已校验的组件字符串和 manifest canonical path。
+- rename 的 World 遍历是一次性 bounded component pass；ID rebinding 在后台 manifest worker 完成后、主线程发布快照的边界发生；paint 不 hash 文件、不启动进程、不访问 decoder 或音频设备。
+- 本轮没有改变 retained geometry 或 renderer/backend presentation contract；现有 Windows-first Project browser、状态栏、console 和 Inspector 视觉基线保持不变，交互测试覆盖 context-menu delete 和资源树入口。
+
+### 失败状态与回滚路径
+
+- 文件 rename/delete 失败时不修改活动 World；manifest 未发现新 entry 时 path 保留、AssetId 为 0；AudioSource 类型变化也不会错误绑定为非音频资源。
+- 旧 world-only undo snapshots 在迁移后被清空，这是明确的安全一致性策略；回滚可移除 live migration/pending refresh 并保留原始 FileSystemService 事务和 manifest refresh。
+
+### 未解决风险与下一轮
+
+- 当前迁移只覆盖活动 World，未加载的 scene/prefab 仍需要结构化引用 migration；文件操作本身还没有加入可回滚的统一历史栈。
+- streaming buffer、loop/end-of-file、playback-head refresh budget、异步 duration derived cache、多 DPI/主题视觉矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

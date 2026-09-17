@@ -47,6 +47,28 @@ float effective_editor_ui_scale(float dpiScale, float userScale) noexcept {
     return std::clamp(dpi * user, 0.25f, 8.0f);
 }
 
+std::string normalized_project_path(std::string_view value) {
+    return std::filesystem::u8path(std::string(value)).lexically_normal().generic_string();
+}
+
+bool path_is_or_below(std::string_view path, std::string_view prefix) {
+    const auto normalizedPath = normalized_project_path(path);
+    const auto normalizedPrefix = normalized_project_path(prefix);
+    if (normalizedPath.empty() || normalizedPrefix.empty()) return false;
+    return normalizedPath == normalizedPrefix ||
+        normalizedPath.rfind(normalizedPrefix + '/', 0) == 0;
+}
+
+std::string remap_project_path(std::string_view path, std::string_view from,
+                               std::string_view to) {
+    const auto normalizedPath = normalized_project_path(path);
+    const auto normalizedFrom = normalized_project_path(from);
+    const auto normalizedTo = normalized_project_path(to);
+    if (!path_is_or_below(normalizedPath, normalizedFrom)) return normalizedPath;
+    if (normalizedPath == normalizedFrom) return normalizedTo;
+    return normalizedTo + normalizedPath.substr(normalizedFrom.size());
+}
+
 #if defined(SHINKOU_PLATFORM_WINDOWS)
 enum NativeEditorMenuId : UINT {
     kNativeNewScene = 41001,
@@ -748,6 +770,7 @@ void EditorLayer::set_project_root(std::string path) {
     clear_media_preview();
     clear_audio_asset_bindings();
     reset_model_scene_assets();
+    pendingAssetReferenceRefreshes_.clear();
     if (initialized_ && assetSystem_) assetSystemRootNeedsRestart_ = true;
     reset_asset_system_preview("AssetSystem root changed; waiting for resource index...");
     reset_asset_manifest(assetSystemRootNeedsRestart_ ?
@@ -840,6 +863,7 @@ void EditorLayer::set_asset_system(assets::AssetSystem* assetSystem) {
     }
     clear_audio_asset_bindings();
     reset_model_scene_assets();
+    pendingAssetReferenceRefreshes_.clear();
     assetSystem_ = assetSystem;
     if (!initialized_) assetSystemRootNeedsRestart_ = false;
     reset_asset_manifest(assetSystem_ ? "Waiting for AssetSystem manifest..." :
@@ -1714,6 +1738,126 @@ void EditorLayer::reset_asset_manifest(std::string status) {
     assetManifestStatus_ = std::move(status);
 }
 
+std::size_t EditorLayer::remap_live_asset_references(std::string_view from,
+                                                     std::string_view to) {
+    if (!activeWorld_) return 0;
+    const auto normalizedFrom = normalized_project_path(from);
+    const auto normalizedTo = normalized_project_path(to);
+    if (normalizedFrom.empty() || normalizedTo.empty() || normalizedFrom == normalizedTo) return 0;
+
+    std::size_t changed = 0;
+    activeWorld_->each_object([&](GameObject& object) {
+        if (auto* reference = object.get_component<AssetReferenceComponent>()) {
+            if (path_is_or_below(reference->path(), normalizedFrom)) {
+                const auto next = remap_project_path(reference->path(), normalizedFrom, normalizedTo);
+                if (reference->set_path(next)) ++changed;
+            }
+        }
+        if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
+            if (path_is_or_below(audioSource->clipPath, normalizedFrom)) {
+                audioSource->clipPath = remap_project_path(audioSource->clipPath, normalizedFrom, normalizedTo);
+                audioSource->assetId = 0;
+                ++changed;
+            }
+        }
+    });
+    if (changed == 0) return 0;
+
+    pendingAssetReferenceRefreshes_.push_back({normalizedTo});
+    // A filesystem transaction cannot be represented by EditorDocument's
+    // world-only snapshots. Discard snapshots that still contain the old
+    // path instead of allowing Undo to restore broken references.
+    undo_.clear();
+    redo_.clear();
+    sceneDirty_ = true;
+    uiModel_.invalidate();
+    editorUi_.invalidate_layout();
+    return changed;
+}
+
+std::size_t EditorLayer::invalidate_live_asset_references(std::string_view path) {
+    if (!activeWorld_) return 0;
+    const auto normalizedPath = normalized_project_path(path);
+    if (normalizedPath.empty()) return 0;
+
+    std::size_t changed = 0;
+    activeWorld_->each_object([&](GameObject& object) {
+        if (auto* reference = object.get_component<AssetReferenceComponent>()) {
+            if (path_is_or_below(reference->path(), normalizedPath) && reference->asset_id() != 0) {
+                reference->set_asset_id(0);
+                ++changed;
+            }
+        }
+        if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
+            if (path_is_or_below(audioSource->clipPath, normalizedPath) && audioSource->assetId != 0) {
+                audioSource->assetId = 0;
+                ++changed;
+            }
+        }
+    });
+    if (changed == 0) return 0;
+
+    undo_.clear();
+    redo_.clear();
+    sceneDirty_ = true;
+    uiModel_.invalidate();
+    editorUi_.invalidate_layout();
+    return changed;
+}
+
+void EditorLayer::apply_pending_asset_reference_refreshes() {
+    if (!activeWorld_ || !assetManifest_ || pendingAssetReferenceRefreshes_.empty()) return;
+
+    const auto find_entry = [&](std::string_view path) -> const assets::AssetManifestEntry* {
+        const auto normalized = normalized_project_path(path);
+        for (const auto& entry : *assetManifest_) {
+            const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
+            if (!relative.empty() && normalized_project_path(relative.generic_string()) == normalized)
+                return &entry;
+        }
+        return nullptr;
+    };
+
+    std::size_t rebound = 0;
+    std::size_t unresolved = 0;
+    for (const auto& refresh : pendingAssetReferenceRefreshes_) {
+        activeWorld_->each_object([&](GameObject& object) {
+            if (auto* reference = object.get_component<AssetReferenceComponent>()) {
+                if (path_is_or_below(reference->path(), refresh.destinationPrefix)) {
+                    const auto* entry = find_entry(reference->path());
+                    const auto nextId = entry ? entry->id : 0;
+                    if (reference->asset_id() != nextId) {
+                        reference->set_asset_id(nextId);
+                        if (nextId != 0) ++rebound;
+                        else ++unresolved;
+                    }
+                }
+            }
+            if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
+                if (path_is_or_below(audioSource->clipPath, refresh.destinationPrefix)) {
+                    const auto* entry = find_entry(audioSource->clipPath);
+                    const auto nextId = entry && entry->key.type == "audio" ? entry->id : 0;
+                    if (audioSource->assetId != nextId) {
+                        audioSource->assetId = nextId;
+                        if (nextId != 0) ++rebound;
+                        else ++unresolved;
+                    }
+                }
+            }
+        });
+    }
+    pendingAssetReferenceRefreshes_.clear();
+    if (rebound != 0 || unresolved != 0) {
+        std::ostringstream status;
+        status << "Asset references refreshed: " << rebound << " rebound";
+        if (unresolved != 0) status << ", " << unresolved << " unresolved";
+        lastStatus_ = status.str();
+        push_console(lastStatus_);
+        uiModel_.invalidate();
+        editorUi_.invalidate_layout();
+    }
+}
+
 void EditorLayer::request_asset_manifest_scan() {
     if (!assetManifestDirty_ && !assetManifestFuture_.valid()) return;
     if (!assetSystem_) {
@@ -1827,6 +1971,7 @@ void EditorLayer::poll_asset_manifest_scan() {
     if (!result.readbackError.empty()) assetManifestStatus_ += " (readback fallback: " + result.readbackError + ")";
     lastStatus_ = assetManifestStatus_;
     push_console(lastStatus_);
+    apply_pending_asset_reference_refreshes();
 }
 
 void EditorLayer::set_selected_asset(std::string path) {
@@ -3168,11 +3313,22 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
             push_console(lastStatus_);
             return;
         }
-        if (selectedAsset_ == path) set_selected_asset(target.generic_string());
+        const auto oldPath = normalized_project_path(path);
+        const auto newPath = normalized_project_path(target.generic_string());
+        const auto remappedReferences = remap_live_asset_references(oldPath, newPath);
+        if (path_is_or_below(selectedAsset_, oldPath))
+            set_selected_asset(remap_project_path(selectedAsset_, oldPath, newPath));
+        if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), oldPath)) {
+            assetDirectory_ = std::filesystem::u8path(remap_project_path(
+                assetDirectory_.generic_string(), oldPath, newPath));
+            editorUi_.set_asset_directory(assetDirectory_);
+        }
         reset_asset_manifest("AssetSystem manifest refresh requested");
         ++fileScanGeneration_;
         assetsDirty_ = true;
         lastStatus_ = "Renamed resource to " + newName.generic_string();
+        if (remappedReferences != 0)
+            lastStatus_ += " and migrated " + std::to_string(remappedReferences) + " live reference(s)";
         break;
     }
     case EditorAssetAction::NewFolder: {
@@ -3199,11 +3355,19 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
             push_console(lastStatus_);
             return;
         }
-        if (selectedAsset_ == path) set_selected_asset({});
+        const auto invalidatedReferences = invalidate_live_asset_references(path);
+        const auto normalizedPath = normalized_project_path(path);
+        if (path_is_or_below(selectedAsset_, normalizedPath)) set_selected_asset({});
+        if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), normalizedPath)) {
+            assetDirectory_.clear();
+            editorUi_.set_asset_directory(assetDirectory_);
+        }
         reset_asset_manifest("AssetSystem manifest refresh requested");
         ++fileScanGeneration_;
         assetsDirty_ = true;
         lastStatus_ = "Deleted resource " + std::filesystem::path(path).filename().string();
+        if (invalidatedReferences != 0)
+            lastStatus_ += " and invalidated " + std::to_string(invalidatedReferences) + " live reference(s)";
         break;
     }
     push_console(lastStatus_);

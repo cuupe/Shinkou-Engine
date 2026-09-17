@@ -1061,3 +1061,23 @@
 - 视觉：验证 dark Windows-first shell、1280×720、DPI 144 / logical scale 1.5、Inspector 滚动后的 Timeline、accent/muted waveform 和 asset icon。
 - 失败状态与回滚：fixture 创建/索引失败则 sample 返回非零；GPU capture 或脚本失败不被 GDI fallback 冒充；回滚只删除 `--audio-fixture` 与脚本，不影响常规编辑器和 4.36 command evidence。
 - 下一入口：补 1600、1024/窄窗口、light/high-contrast 和 DPI matrix；之后进入 streaming buffer/loop/end-of-file 语义、播放头刷新预算和资源 rename/import migration。
+
+### 第 4.38 子阶段：资源改名/删除与活动场景引用迁移
+
+目标：让 Project 资源操作与活动场景中的 `AssetReferenceComponent`、`AudioSourceComponent` 保持一致；文件系统成功但场景仍指向旧路径或旧 AssetId 的状态必须被消除，并且缺失资源要保留可诊断信息。
+
+实现范围：
+
+- `EditorLayer` 的资源 Rename 支持文件和目录前缀迁移：活动场景引用的 project-relative path 一起重写，旧 AssetId 立即失效，下一次异步 manifest snapshot 发布后按 canonical source path 重新绑定新 AssetId。
+- `AudioSourceComponent` 只有在新 manifest entry 的类型仍为 `audio` 时才重新绑定；类型不匹配或导入失败时保留新路径但将 AssetId 置零，让 Inspector/AudioScene 显示明确的未绑定状态。
+- Delete 保留组件路径作为 missing-reference 诊断线索，只清除 AssetId；目录删除按路径前缀覆盖全部子资源。当前选中资源和 Asset Browser 目录也同步迁移/回退。
+- 文件事务不伪装成 `EditorDocument` 的 world-only Undo：发生活动场景引用迁移时清空仍含旧路径的 undo/redo 快照、标记 scene dirty，用户必须显式保存场景，避免 Undo 恢复已不存在的引用。
+- 非目标：本轮不扫描并改写未加载的外部 scene 文件，不改变 AssetId 算法，不把文件系统操作放进 paint，也不实现跨项目移动或依赖图重写。
+
+审计与验证安排：
+
+- 集成：`EditorInteractionTests` 通过真实 Project browser Rename/Context-menu Delete，断言文件实际改名/删除、活动场景引用路径、manifest 新旧 AssetId 重新绑定和 missing reference 失效；保留拖入视口、Undo/Redo、AudioSource、模型和编译器面板回归。
+- 安全：所有新旧路径继续经过 `FileSystemService` project-root boundary；只接受 normalized relative path/prefix，不把资源名称交给 shell 或外部进程；manifest source path 重新 canonicalize 后才允许绑定。
+- 性能：重写只遍历当前活动 World 的引用；manifest lookup 只发生在异步扫描完成边界，paint 只读取现有 snapshot，不做文件 IO、hash、decoder 或额外 voice 创建。
+- 失败状态与回滚：rename/delete 失败不触碰 World；新 entry 缺失时 AssetId 保持 0；回滚可移除迁移方法和 pending refresh，保留已有 FileSystemService 和 manifest refresh。
+- 下一入口：补未加载 scene/prefab 的结构化引用 migration 与文件操作历史，再进入 streaming buffer/loop/end-of-file/playback-head budget 及多窗口/主题视觉矩阵。

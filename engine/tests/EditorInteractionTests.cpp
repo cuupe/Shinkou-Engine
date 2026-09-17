@@ -267,13 +267,20 @@ int main() {
                 "asset system could not write the editor manifest fixture");
         assets::AssetId previewModelAssetId = 0;
         assets::AssetId previewAudioAssetId = 0;
+        assets::AssetId needleAssetId = 0;
+        assets::AssetId folderExtraAssetId = 0;
         for (const auto& entry : resourceSystem.scan_sources()) {
             if (entry.key.type == "model" && entry.sourcePath.filename() == "preview.obj") {
                 previewModelAssetId = entry.id;
             }
             if (entry.key.type == "audio" && entry.sourcePath.filename() == "preview.wav") previewAudioAssetId = entry.id;
+            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
+                "assets/Folder/Nested/needle.txt") needleAssetId = entry.id;
+            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
+                "assets/Folder-extra.txt") folderExtraAssetId = entry.id;
         }
-        require(previewModelAssetId != 0 && previewAudioAssetId != 0,
+        require(previewModelAssetId != 0 && previewAudioAssetId != 0 && needleAssetId != 0 &&
+                folderExtraAssetId != 0,
                 "asset system manifest did not index the model/audio fixtures");
         EditorBuildProfile alternateProfile;
         alternateProfile.id = "release";
@@ -320,6 +327,15 @@ int main() {
         auto text = [&](const char* text) { input::InputEvent e;e.type=input::InputEventType::TextInput;e.text=text;fake->queue.push_back(e);tick(); };
         for(int i=0;i<200 && editor.ui_asset_file_count()<100;++i) {tick();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
         require(editor.ui_asset_file_count()>100,"async file scan did not finish");
+        auto& referenceObject = world.create_object("Needle Reference");
+        auto* needleReference = referenceObject.add_component<AssetReferenceComponent>(
+            "assets/Folder/Nested/needle.txt", needleAssetId);
+        require(needleReference != nullptr, "could not create asset rename migration fixture");
+        auto& deletedReferenceObject = world.create_object("Deleted Asset Reference");
+        auto* deletedReference = deletedReferenceObject.add_component<AssetReferenceComponent>(
+            "assets/Folder-extra.txt", folderExtraAssetId);
+        require(deletedReference != nullptr, "could not create asset delete invalidation fixture");
+        tick();
         const auto camera = world.ecs().create();
         world.ecs().emplace<render::CameraComponent>(camera);
         render::TransformComponent cameraTransform; cameraTransform.local.position={0,0,-5};
@@ -462,6 +478,20 @@ int main() {
                 "open asset command accepted a path outside the project root");
         key("F2"); text("renamed.txt"); key("Return");
         require(std::filesystem::exists(project/"assets/Folder/Nested/renamed.txt"),"real rename failed");
+        require(needleReference->path() == "assets/Folder/Nested/renamed.txt",
+                "asset rename did not migrate the live reference path");
+        assets::AssetId renamedNeedleAssetId = 0;
+        for (int i = 0; i < 200 && needleReference->asset_id() == 0; ++i) {
+            tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        for (const auto& entry : resourceSystem.scan_sources()) {
+            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
+                "assets/Folder/Nested/renamed.txt") renamedNeedleAssetId = entry.id;
+        }
+        require(renamedNeedleAssetId != 0 && renamedNeedleAssetId != needleAssetId &&
+                needleReference->asset_id() == renamedNeedleAssetId,
+                "asset rename did not rebind the live reference to the new manifest identity");
         click("assets.filter"); key("Left Ctrl"); key("A");
         {input::InputEvent e;e.type=input::InputEventType::KeyUp;e.control="key:Left Ctrl";fake->queue.push_back(e);tick();}
         key("Backspace"); key("Return"); key("End");tick();
@@ -621,7 +651,13 @@ int main() {
         editor.execute_command(EditorCommand::SaveScene,"assets/Scenes/test.scene",world);
         require(std::filesystem::exists(project/"assets/Scenes/test.scene"),"save scene failed");
         editor.execute_command(EditorCommand::NewScene,{},world);require(world.object_count()==0,"new scene failed");
-        editor.execute_command(EditorCommand::OpenScene,"assets/Scenes/test.scene",world);require(world.object_count()==3,"open scene failed");
+        editor.execute_command(EditorCommand::OpenScene,"assets/Scenes/test.scene",world);require(world.object_count()==5,"open scene failed");
+        AssetReferenceComponent* liveDeletedReference = nullptr;
+        world.each_object([&](GameObject& object) {
+            auto* reference = object.get_component<AssetReferenceComponent>();
+            if (reference && reference->path() == "assets/Folder-extra.txt") liveDeletedReference = reference;
+        });
+        require(liveDeletedReference != nullptr, "restored scene lost the delete invalidation fixture");
         editor.set_panel_visible("build", false);
         editor.set_panel_visible("viewport", true);
         editor.dock_workspace().activate_tab("viewport");
@@ -740,6 +776,35 @@ int main() {
         require(world.object_count() == objectCountBeforeRejectedDrop &&
                 editor.last_status().find("not instantiable") != std::string::npos,
                 "unsupported asset drop changed the scene");
+        auto rightClick = [&](const std::string& id) {
+            const auto r = region(id);
+            fake->mouse.position = {r.x + r.width * 0.5f, r.y + r.height * 0.5f};
+            input::InputEvent right;
+            right.type = input::InputEventType::MouseButtonDown;
+            right.control = "mouse:right";
+            right.position = fake->mouse.position;
+            fake->queue.push_back(right);
+            tick();
+        };
+        rightClick("asset:assets/Folder-extra.txt");
+        click("asset-context:2");
+        click("asset-delete-confirm");
+        bool deletedReferenceInvalidated = false;
+        world.each_object([&](GameObject& object) {
+            const auto* reference = object.get_component<AssetReferenceComponent>();
+            deletedReferenceInvalidated = deletedReferenceInvalidated ||
+                (reference != nullptr && reference->path() == "assets/Folder-extra.txt" &&
+                 reference->asset_id() == 0);
+        });
+        require(!std::filesystem::exists(project / "assets/Folder-extra.txt") && deletedReferenceInvalidated,
+                "asset delete did not invalidate the live reference identity");
+        for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
+            tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        require(editor.asset_system_manifest_count() > 0 &&
+                editor.asset_system_manifest_status().find("AssetSystem manifest ready") != std::string::npos,
+                "asset manifest did not settle after reference-invalidating delete");
         const auto objectCountBeforeBoundaryDrops = world.object_count();
         require(!editor.create_asset_reference_at_viewport(
                     world, "assets/Folder", {viewportDropTarget.x + 10.0f, viewportDropTarget.y + 10.0f}) &&

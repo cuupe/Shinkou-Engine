@@ -126,6 +126,14 @@ class EditorLayer {
         bool readbackValidated{false};
     };
 
+    // File operations are external to EditorDocument's world-only history.
+    // Keep the destination prefixes until the next manifest snapshot so live
+    // scene references can reacquire their manifest-backed identities after a
+    // rename without making the render thread scan the filesystem.
+    struct PendingAssetReferenceRefresh {
+        std::string destinationPrefix;
+    };
+
     struct AsyncModelSceneAsset {
         std::uint64_t generation{0};
         std::uint64_t sourceStamp{0};
@@ -205,6 +213,7 @@ class EditorLayer {
     bool assetSystemPreviewLoading_{false};
     bool assetSystemPreviewReady_{false};
     std::shared_ptr<const std::vector<assets::AssetManifestEntry>> assetManifest_{};
+    std::vector<PendingAssetReferenceRefresh> pendingAssetReferenceRefreshes_{};
     std::shared_ptr<const std::vector<EditorInspectorChoice>> audioInspectorChoices_{};
     std::string assetManifestStatus_{"AssetSystem manifest not connected"};
     EditorAssetPreviewUiState assetPreviewState_{};
@@ -311,6 +320,9 @@ class EditorLayer {
     void reset_asset_manifest(std::string status);
     void request_asset_manifest_scan();
     void poll_asset_manifest_scan();
+    std::size_t remap_live_asset_references(std::string_view from, std::string_view to);
+    std::size_t invalidate_live_asset_references(std::string_view path);
+    void apply_pending_asset_reference_refreshes();
     void set_selected_asset(std::string path);
     void request_asset_preview();
     void poll_asset_preview();
