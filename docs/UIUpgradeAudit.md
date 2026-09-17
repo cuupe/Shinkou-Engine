@@ -1995,6 +1995,41 @@
 - history 目前是进程内的线性栈，尚未跨会话持久化；回收项需要启动时治理、空间上限和用户可见的恢复/永久清理面板。
 - 批量文件操作、并发外部修改冲突、streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成。
 
+## 第 4.42 子阶段：跨会话文件事务日志
+
+### 实现与范围
+
+- 新增 `engine/include/shinkou/editor/FileHistory.h` 与 `engine/src/editor/FileHistory.cpp`，通过 Shinkou reflection/JSON 序列化 `editor.FileHistoryDocument` 和文件操作条目；日志固定版本 1，单文件上限 1 MiB、条目上限 64。
+- `EditorLayer` 在初始化、项目根切换、Reload Layout 和 Reset Layout 时重新载入 `.shinkou/file-history.json`；载入前清理旧根的进程内 history/recycle 分支，避免跨项目污染。
+- 载入时逐项校验 Rename 的 source/destination 状态、Recycle Delete 的原路径/回收路径状态和 `.shinkou/recycle` 边界；无效条目跳过并写入 Console，不执行任意日志路径。
+- 当前 fileUndo 分支在新文件事务、文件 Undo/Redo 后原子重写；Undo 后 journal 为空，Redo 后 journal 重新包含可恢复 delete。`.shinkou` 仍由 AssetSystem 排除在资源 manifest 之外。
+- 非目标：本轮不实现回收区空间治理、跨进程锁、批量恢复 UI 或永久删除 UI；日志只描述编辑器已知的 Rename/Recycle Delete。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug --target shinkou_editor_interaction_tests -j 2` 通过；当前并行 Physics CMake 配置暂时过滤该编辑器源文件，因此本地验证通过 `target_sources` 显式补入 `FileHistory.cpp`，在基础配置下则由 engine source glob 自动收集。
+- 聚焦 CTest：`shinkou_editor_interaction_tests` `1/1 passed`，总计 `39.80 sec`；覆盖真实 Project browser Delete、日志落盘、第二个 `EditorLayer` 跨实例加载、Undo 清空 journal、Redo 重写 journal。
+- `EditorInteractionTests` 同时断言真实回收文件状态、AssetSystem manifest 不含 `.shinkou` 内容、Undo 后原始 AssetId 重新绑定、Redo 后引用重新失效；测试使用重建后的当前 World 引用，避免 scene snapshot restore 后使用失效指针。
+- Reload Layout/Reset Layout 已与初始化和 `set_project_root` 使用相同的 history 切换钩子；完整构建通过，全量 CTest `57/57 passed`、0 failures，总计 `68.91 sec`，包含并行 Physics 测试。
+
+### 安全、性能与视觉审计
+
+- 文件安全：日志仅由反射 JSON 解析为结构化字段；所有 source/destination/recycle path 继续经过项目相对规范化，回收项必须位于 `.shinkou/recycle`，原子写入避免半截日志覆盖。
+- 数据安全：日志只恢复磁盘状态明确匹配的操作；未知版本、缺失文件、目标冲突、越界回收路径和超限输入均跳过并报告，不会因启动自动改写项目资源。
+- 性能：JSON IO 只发生在初始化、布局切换和文件事务/Undo/Redo 边界；没有新增 paint、retained draw list、renderer、preview decoder、audio voice 或 AssetSystem worker 工作。
+- 视觉/交互：不改变 Project Browser 行高、快捷键、DPI logical geometry、Inspector 或 backend presentation；恢复/跳过状态沿用状态栏和 Console，可在后续 recovery panel 轮次补齐窗口级证据。
+
+### 失败状态与回滚路径
+
+- journal 读取失败时编辑器继续打开项目，Console 保留原因；单条冲突不会阻止其他有效条目载入。journal 写入失败不伪造成功状态，但当前进程内 history 仍可继续使用。
+- 切换项目/布局前会移除旧项目的回收分支，避免误把旧 root 的可恢复操作带入新 root；新 root 的有效日志重新建立 file history marker。
+- 回滚可移除 `FileHistoryDocument` 和 load/save hooks，回到 4.41 进程内 history；删除仍保留 4.41 的可恢复 recycle 语义。
+
+### 未解决风险与下一轮
+
+- 跨会话日志尚未治理孤立回收项、磁盘空间上限、外部进程并发修改和用户可见恢复/永久清理；当前只做安全跳过，不做自动破坏性清理。
+- streaming buffer/loop/end-of-file、播放头刷新预算、多 DPI/主题矩阵以及模型 PBR/material/texture/depth/animation 仍未完成；项目仍不能宣称完整 Unity 级能力已完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

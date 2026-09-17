@@ -1143,3 +1143,22 @@
 - 视觉/交互：状态栏和 Console 明确显示 `Undo to restore`/`recoverable`；不改变 Project Browser retained layout、快捷键路由、DPI geometry 或 renderer seam。
 - 失败状态与回滚：回收移动或恢复失败时保留历史项、报告错误且不修改引用；迁移失败不覆盖文档；回滚可退回物理删除实现，但将明确失去可恢复性，不作为长期目标。
 - 下一入口：跨会话操作日志/回收区治理，然后推进 streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题矩阵与完整模型材质/纹理/动画预览。
+
+### 第 4.42 子阶段：跨会话文件事务日志
+
+目标：编辑器重启或重新加载项目布局后，仍能安全识别上一会话留下的可恢复文件操作；日志损坏、过期或与磁盘状态冲突时必须可审计地丢弃，而不能盲目执行文件变更。
+
+实现范围：
+
+- 新增 `editor.FileHistoryDocument` 反射序列化模型，将当前可 Undo 的文件操作持久化到项目私有 `.shinkou/file-history.json`；只保存当前线性 `fileUndo_` 分支，Undo 后立即清空对应日志，Redo 后重新写入。
+- 启动、`set_project_root`、Reload Layout 和 Reset Layout 都先清理旧项目的进程内文件历史，再读取新项目日志；Rename 仅在 source 缺失且 destination 存在时恢复，Recycle Delete 仅在原路径缺失且回收项存在时恢复。
+- 日志读取限制为 1 MiB、最多 64 条操作；未知类型、越界回收路径、缺失文件、冲突状态和不支持版本全部跳过并写入 Console 审计信息，保留有效条目继续使用。
+- 非目标：本轮不自动永久清理回收区、不解决多个编辑器进程并发写入、不恢复跨项目日志、不把日志或回收内容暴露给 AssetSystem manifest。
+
+审计与验证安排：
+
+- 集成：真实 Project browser Delete 后检查 `.shinkou/file-history.json`；创建第二个 EditorLayer 重新打开同一项目并断言历史载入；文件 Undo 断言日志为空，Redo 断言回收删除重新持久化。
+- 安全：日志仍使用 `FileSystemService` 的项目根边界和原子写入；回收路径必须位于 `.shinkou/recycle`；JSON 解析、条目数量和文件大小均有上限，不执行日志中的命令或外部路径。
+- 性能：只在事务、Undo/Redo、项目初始化和布局切换边界做有限 JSON IO；paint、renderer、preview worker、AudioScene 和 AssetSystem manifest worker 不读取日志。
+- 失败状态与回滚：日志读取/写入失败只报告并继续正常编辑；冲突条目不执行；删除持久化仍可回滚到 4.41 的进程内历史实现，但会失去重启后的恢复能力。
+- 下一入口：启动时回收区空间/孤儿项治理和用户可见的恢复面板；随后处理音频 streaming buffer/loop/end-of-file 与播放头预算、多 DPI/主题矩阵，以及模型 PBR/material/texture/depth/animation 预览。

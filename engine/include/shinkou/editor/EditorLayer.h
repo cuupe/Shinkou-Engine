@@ -3,6 +3,7 @@
 #include "shinkou/Types.h"
 #include "shinkou/editor/DockLayout.h"
 #include "shinkou/editor/FileSystem.h"
+#include "shinkou/editor/FileHistory.h"
 #include "shinkou/editor/EditorUiModel.h"
 #include "shinkou/editor/EditorUi.h"
 #include "shinkou/editor/EditorDocument.h"
@@ -330,6 +331,8 @@ class EditorLayer {
     bool checkpoint(World& world);
     void reset_edit_history_for_file_operation();
     void record_file_operation(FileOperation operation);
+    void load_file_history();
+    void save_file_history();
     std::filesystem::path make_recycle_path(std::string_view source);
     bool apply_file_operation(FileOperation& operation, bool forward, std::string& error);
     bool edit_field(std::string_view id, std::string_view value);
@@ -546,6 +549,7 @@ public:
         static const std::vector<assets::AssetManifestEntry> empty;
         return assetManifest_ ? *assetManifest_ : empty;
     }
+    std::size_t file_history_undo_count() const noexcept { return fileUndo_.size(); }
     const std::string& asset_system_manifest_status() const noexcept { return assetManifestStatus_; }
 };
 

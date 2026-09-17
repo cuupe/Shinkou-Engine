@@ -867,6 +867,24 @@ int main() {
                     "editor recycle metadata leaked into the AssetSystem manifest");
         }
         require_unloaded_reference("assets/Folder-extra.txt");
+        auto read_file_history = [&]() {
+            FileSystemService historyFiles(project);
+            FileHistoryDocument history;
+            std::string historyJson, historyError;
+            require(historyFiles.read_text(".shinkou/file-history.json", historyJson, &historyError) &&
+                        FileHistoryDocument::from_json(historyJson, history, historyError),
+                    "file operation journal could not be read");
+            return history;
+        };
+        const auto deletedHistory = read_file_history();
+        require(deletedHistory.entries.size() == 1 &&
+                    deletedHistory.entries.front().kind == "recycle-delete" &&
+                    deletedHistory.entries.front().sourcePath == "assets/Folder-extra.txt",
+                "file delete did not persist a validated operation journal");
+        EditorLayer restartedEditor;
+        restartedEditor.set_project_root(project.generic_string());
+        require(restartedEditor.initialize(false) && restartedEditor.file_history_undo_count() == 1,
+                "a new editor session did not load the recoverable file journal");
         AssetReferenceComponent* currentDeletedReference = nullptr;
         world.each_object([&](GameObject& object) {
             auto* reference = object.get_component<AssetReferenceComponent>();
@@ -906,10 +924,15 @@ int main() {
                  " uri=" + editorManifestUri + " type=" + editorManifestType +
                  " manifest=" + std::to_string(editor.asset_system_manifest_count()) +
                  " status=" + editor.asset_system_manifest_status()).c_str());
+        require(read_file_history().entries.empty(),
+                "file Undo did not persist the cleared operation journal");
         editor.execute_command(EditorCommand::Redo, {}, world);
         require(!std::filesystem::exists(project / "assets/Folder-extra.txt") &&
                     currentDeletedReference->asset_id() == 0,
                 "file Redo did not reapply the recoverable delete");
+        require(read_file_history().entries.size() == 1 &&
+                    read_file_history().entries.front().kind == "recycle-delete",
+                "file Redo did not persist the recoverable operation journal");
         for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
             tick();
             std::this_thread::sleep_for(std::chrono::milliseconds(2));

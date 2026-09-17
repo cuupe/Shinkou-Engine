@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cctype>
 #include <cstring>
 #include <filesystem>
@@ -266,6 +267,7 @@ bool EditorLayer::initialize(bool enableImGui) {
     load_layout_file();
     if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
     fileSystem_.set_root(layout_.projectRoot);
+    load_file_history();
     buildSystem_.set_project_root(fileSystem_.root());
     buildSystem_.refresh_toolchains();
     load_build_profile();
@@ -782,7 +784,9 @@ void EditorLayer::set_project_root(std::string path) {
         const auto root = std::filesystem::absolute(layout_.projectRoot).lexically_normal();
         if (std::filesystem::path(layout_.layoutFile).is_relative()) set_layout_path((root/layout_.layoutFile).generic_string());
     }
+    reset_edit_history_for_file_operation();
     fileSystem_.set_root(layout_.projectRoot);
+    load_file_history();
     buildSystem_.set_project_root(fileSystem_.root());
     load_build_profile();
     refresh_ide_tools();
@@ -1082,7 +1086,9 @@ bool EditorLayer::load_layout() {
     clear_media_preview();
     const bool loaded = load_layout_file();
     if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
+    reset_edit_history_for_file_operation();
     fileSystem_.set_root(layout_.projectRoot);
+    load_file_history();
     buildSystem_.set_project_root(fileSystem_.root());
     load_build_profile();
     refresh_ide_tools();
@@ -1187,7 +1193,9 @@ void EditorLayer::reset_layout() {
     modelTextureSelection_ = -1;
     assetPreviewState_ = {};
     uiModel_.set_asset_preview(assetPreviewState_);
+    reset_edit_history_for_file_operation();
     fileSystem_.set_root(layout_.projectRoot);
+    load_file_history();
     buildSystem_.set_project_root(fileSystem_.root());
     load_build_profile();
     refresh_ide_tools();
@@ -1256,6 +1264,102 @@ void EditorLayer::reset_edit_history_for_file_operation() {
     redoHistory_.clear();
 }
 
+void EditorLayer::load_file_history() {
+    fileUndo_.clear();
+    fileRedo_.clear();
+    undoHistory_.erase(std::remove(undoHistory_.begin(), undoHistory_.end(), EditHistoryKind::File),
+                       undoHistory_.end());
+    redoHistory_.erase(std::remove(redoHistory_.begin(), redoHistory_.end(), EditHistoryKind::File),
+                       redoHistory_.end());
+
+    std::string json, error;
+    if (!fileSystem_.read_text_limited(".shinkou/file-history.json", 1u * 1024u * 1024u,
+                                      json, nullptr, &error)) {
+        bool directory = false;
+        if (!fileSystem_.exists(".shinkou/file-history.json", &directory)) return;
+        push_console("File history journal ignored: " + error);
+        return;
+    }
+    FileHistoryDocument document;
+    if (!FileHistoryDocument::from_json(json, document, error)) {
+        push_console("File history journal ignored: " + error);
+        return;
+    }
+
+    std::size_t skipped = 0;
+    std::uint64_t maximumSerial = fileOperationSerial_;
+    for (const auto& entry : document.entries) {
+        FileOperation operation;
+        if (entry.kind == "rename") {
+            const auto source = normalized_project_path(entry.sourcePath);
+            const auto destination = normalized_project_path(entry.destinationPath);
+            if (source.empty() || destination.empty() || source == destination ||
+                fileSystem_.exists(source) || !fileSystem_.exists(destination)) {
+                ++skipped;
+                continue;
+            }
+            operation.kind = FileOperation::Kind::Rename;
+            operation.sourcePath = source;
+            operation.destinationPath = destination;
+        } else if (entry.kind == "recycle-delete") {
+            const auto source = normalized_project_path(entry.sourcePath);
+            const auto recycle = normalized_project_path(entry.recyclePath);
+            if (source.empty() || recycle.empty() || !path_is_or_below(recycle, ".shinkou/recycle") ||
+                fileSystem_.exists(source) || !fileSystem_.exists(recycle)) {
+                ++skipped;
+                continue;
+            }
+            operation.kind = FileOperation::Kind::RecycleDelete;
+            operation.sourcePath = source;
+            operation.recyclePath = recycle;
+            operation.selectedAssetBefore = entry.selectedAssetBefore;
+            operation.assetDirectoryBefore = std::filesystem::u8path(entry.assetDirectoryBefore);
+            const auto serialText = std::filesystem::u8path(recycle).parent_path().filename().string();
+            std::uint64_t serial = 0;
+            const auto result = std::from_chars(serialText.data(), serialText.data() + serialText.size(), serial);
+            if (result.ec == std::errc{} && result.ptr == serialText.data() + serialText.size())
+                maximumSerial = std::max(maximumSerial, serial);
+        } else {
+            ++skipped;
+            continue;
+        }
+        fileUndo_.push_back(std::move(operation));
+        undoHistory_.push_back(EditHistoryKind::File);
+    }
+    fileOperationSerial_ = maximumSerial;
+    if (skipped != 0) {
+        push_console("File history journal skipped " + std::to_string(skipped) + " stale/conflicting operation(s)");
+        save_file_history();
+    }
+}
+
+void EditorLayer::save_file_history() {
+    FileHistoryDocument document;
+    document.entries.reserve(std::min<std::size_t>(fileUndo_.size(), 64));
+    const auto append = [&](const FileOperation& operation) {
+        FileHistoryEntry entry;
+        if (operation.kind == FileOperation::Kind::Rename) {
+            entry.kind = "rename";
+            entry.sourcePath = operation.sourcePath;
+            entry.destinationPath = operation.destinationPath;
+        } else {
+            entry.kind = "recycle-delete";
+            entry.sourcePath = operation.sourcePath;
+            entry.recyclePath = operation.recyclePath;
+            entry.selectedAssetBefore = operation.selectedAssetBefore;
+            entry.assetDirectoryBefore = operation.assetDirectoryBefore.generic_string();
+        }
+        document.entries.push_back(std::move(entry));
+    };
+    const auto begin = fileUndo_.size() > 64 ? fileUndo_.size() - 64 : 0;
+    for (std::size_t index = begin; index < fileUndo_.size(); ++index) append(fileUndo_[index]);
+    std::string json, error;
+    if (!document.to_json(json, error) ||
+        !fileSystem_.write_text_atomic(".shinkou/file-history.json", json, &error)) {
+        push_console("File history journal write failed: " + (error.empty() ? "unknown error" : error));
+    }
+}
+
 void EditorLayer::record_file_operation(FileOperation operation) {
     // A new filesystem transaction starts a new linear edit branch. Old
     // recycle entries are removed with the discarded branch; the active
@@ -1263,6 +1367,7 @@ void EditorLayer::record_file_operation(FileOperation operation) {
     reset_edit_history_for_file_operation();
     fileUndo_.push_back(std::move(operation));
     undoHistory_.push_back(EditHistoryKind::File);
+    save_file_history();
 }
 
 std::filesystem::path EditorLayer::make_recycle_path(std::string_view source) {
@@ -1744,6 +1849,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
             destination.push_back(std::move(operation));
             sourceHistory.pop_back();
             destinationHistory.push_back(EditHistoryKind::File);
+            save_file_history();
             lastStatus_ = undo ? "File operation undone" : "File operation redone";
             push_console(lastStatus_);
         }
