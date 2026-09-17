@@ -1925,6 +1925,40 @@
 - 迁移后的未加载文档会安全地保存正确 path，但其旧 ID 被置零；重新打开后基于 manifest canonical path 的自动 rebind 尚未完成，下一轮补齐并增加对应断言。
 - 文件操作历史、失败重试/批量报告、streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成；项目仍不能宣称最终 Unity 级能力已完成。
 
+## 第 4.40 子阶段：文档打开与 manifest 的 AssetId 重新绑定
+
+### 实现与范围
+
+- 新增 `EditorLayer::rebind_asset_references_from_manifest`：manifest immutable snapshot 发布后扫描活动 World；Open Scene/Prefab 时若 snapshot 已就绪也立即执行，未就绪则等待下次发布。
+- `AssetReferenceComponent` 按 `FileSystemService::project_relative_existing(entry.sourcePath)` 得到的 canonical project-relative path 绑定任意匹配 entry；`AudioSourceComponent` 只有 entry type 为 `audio` 才绑定，其他情况保持 path + `assetId=0`。
+- 重新绑定成功会标记 scene dirty，要求用户显式 Save Scene；不存在资源不清除 path，只维持 0，保留 missing-reference 诊断。没有改变 AssetId 计算、manifest schema 或资源处理器。
+- EditorInteraction 增加 path-only rebind、Refresh Assets、打开 `Unloaded.prefab`、重命名/删除资源分别恢复/保持 ID、再打开 `test.scene` 的真实流程断言。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug --target shinkou_editor_interaction_tests -j 2` 通过；构建期间并行 Physics 静态库正常重新链接，本轮没有暂存其改动。
+- 聚焦 CTest：`shinkou_editor_interaction_tests` `1/1 passed`，总计 `30.90 sec`；覆盖 Refresh Assets -> manifest publish -> path-only rebind 和 OpenScene -> immediate rebind 两条边界。
+- 最终全量构建 `cmake --build out/build/mingw-debug -j 2` 通过；全量 CTest `56/56 passed`、0 failures，总计 `32.41 sec`。
+- EditorInteraction 断言迁移 prefab 中 renamed path 得到新 manifest ID，deleted path 保持旧诊断路径且 ID 为 0，并断言重新打开活动 scene 后 object count 为 5；同时保留资源浏览器、拖放 boundary、AudioSource、模型预览、编译器集成与 Undo/Redo。
+- 视觉/渲染链路不变：本轮无新增 screenshot；4.37 的 D3D11 1280×720/DPI 144 capture 继续作为 UI/backend baseline，本轮新增证据是文档打开和 manifest identity 状态链路。
+
+### 安全、性能与视觉审计
+
+- rebind 不相信文档里的旧 ID，必须通过当前 manifest entry 和 canonical source path；AudioSource 还必须通过资源类型校验，避免把纹理/模型 ID 绑定成音频。
+- manifest 不可用或 source 缺失时不做同步扫描、不生成猜测 ID；path 保留、ID 为 0，现有 Inspector/AudioScene missing/pending 语义继续生效。
+- rebind 只在 manifest 发布和 OpenScene 边界执行一次有界 World component pass；不在 paint、renderer、decoder、音频设备或进程启动路径做工作。
+- 没有改变 retained draw list、输入桥、DPI logical geometry 或 renderer presentation seam；成功/失败状态仍由已有状态栏、console 和 Inspector identity 文案承载。
+
+### 失败状态与回滚路径
+
+- manifest future 失败、路径越界、类型不匹配或资源删除时，rebind 返回 0/写入 0，不抛出异常、不覆盖文档路径；下一次合法 manifest 可再次尝试。
+- 用户未保存的 scene 仍不会被自动写盘；rebind 只标 dirty。回滚可移除 rebind 方法与 OpenScene/manifest 调用，保留 4.39 的结构化迁移和旧 ID 清零策略。
+
+### 未解决风险与下一轮
+
+- 文件 rename/delete 尚未拥有跨 filesystem + World 的可恢复事务 history；批量操作报告、失败重试和用户确认语义仍需设计。
+- streaming buffer/loop/end-of-file、播放头刷新预算、异步 duration cache、多 DPI/主题视觉矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成，项目仍不能宣称最终 Unity 级能力已完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

@@ -333,6 +333,7 @@ class EditorLayer {
     AssetDocumentMigrationReport migrate_asset_documents(std::string_view from,
                                                          std::string_view to,
                                                          bool invalidateIdentity);
+    std::size_t rebind_asset_references_from_manifest();
     void apply_pending_asset_reference_refreshes();
     void set_selected_asset(std::string path);
     void request_asset_preview();

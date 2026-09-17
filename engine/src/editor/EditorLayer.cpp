@@ -1626,7 +1626,16 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         if (!fileSystem_.read_text(path, json, &error) || !EditorDocument::from_json(json, next, error)) { lastStatus_ = "Open failed: " + error; break; }
         if (!checkpoint(world)) break;
         if (!next.restore(world, layout_.selectedObject, error)) { undo_.pop_back(); lastStatus_ = "Open failed: " + error; break; }
-        scenePath_ = path; document_changed(); sceneDirty_ = false; lastStatus_ = "Opened " + path; break;
+        scenePath_ = path;
+        document_changed();
+        sceneDirty_ = false;
+        const auto rebound = rebind_asset_references_from_manifest();
+        lastStatus_ = "Opened " + path;
+        if (rebound != 0) {
+            sceneDirty_ = true;
+            lastStatus_ += " and rebound " + std::to_string(rebound) + " asset reference(s)";
+        }
+        break;
     }
     case EditorCommand::SaveScene:
     case EditorCommand::SaveSceneAs: {
@@ -1892,6 +1901,47 @@ EditorLayer::AssetDocumentMigrationReport EditorLayer::migrate_asset_documents(
     return report;
 }
 
+std::size_t EditorLayer::rebind_asset_references_from_manifest() {
+    if (!activeWorld_ || !assetManifest_) return 0;
+
+    const auto find_entry = [&](std::string_view path) -> const assets::AssetManifestEntry* {
+        const auto normalized = normalized_project_path(path);
+        if (normalized.empty() || normalized == ".") return nullptr;
+        for (const auto& entry : *assetManifest_) {
+            const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
+            if (!relative.empty() && normalized_project_path(relative.generic_string()) == normalized)
+                return &entry;
+        }
+        return nullptr;
+    };
+
+    std::size_t changed = 0;
+    activeWorld_->each_object([&](GameObject& object) {
+        if (auto* reference = object.get_component<AssetReferenceComponent>()) {
+            const auto* entry = find_entry(reference->path());
+            const auto nextId = entry ? entry->id : 0;
+            if (reference->asset_id() != nextId) {
+                reference->set_asset_id(nextId);
+                ++changed;
+            }
+        }
+        if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
+            const auto* entry = find_entry(audioSource->clipPath);
+            const auto nextId = entry && entry->key.type == "audio" ? entry->id : 0;
+            if (audioSource->assetId != nextId) {
+                audioSource->assetId = nextId;
+                ++changed;
+            }
+        }
+    });
+    if (changed != 0) {
+        sceneDirty_ = true;
+        uiModel_.invalidate();
+        editorUi_.invalidate_layout();
+    }
+    return changed;
+}
+
 void EditorLayer::apply_pending_asset_reference_refreshes() {
     if (!activeWorld_ || !assetManifest_ || pendingAssetReferenceRefreshes_.empty()) return;
 
@@ -2059,6 +2109,11 @@ void EditorLayer::poll_asset_manifest_scan() {
     lastStatus_ = assetManifestStatus_;
     push_console(lastStatus_);
     apply_pending_asset_reference_refreshes();
+    const auto rebound = rebind_asset_references_from_manifest();
+    if (rebound != 0) {
+        lastStatus_ = "Asset references rebound from manifest: " + std::to_string(rebound);
+        push_console(lastStatus_);
+    }
 }
 
 void EditorLayer::set_selected_asset(std::string path) {

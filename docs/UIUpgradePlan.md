@@ -1101,3 +1101,23 @@
 - 视觉/交互：不改变 retained geometry、Inspector 行高或 Renderer/backend seam；继续依靠现有 Project browser 状态栏/console 和真实 UI 输入证明迁移结果。
 - 失败状态与回滚：单文档失败不会覆盖原文件；扫描上限、解析错误和写入错误在状态栏/console 中汇总；活动场景的 world-only undo 仍在外部文件迁移后清空，避免跨域回滚造成旧路径复活。
 - 下一入口：为重新打开的文档增加基于 manifest canonical source path 的 AssetId rebind，并引入可审计的文件操作历史；随后处理 streaming playback contract、多 DPI/主题矩阵和模型材质/纹理/深度/动画预览。
+
+### 第 4.40 子阶段：文档打开与 manifest 的 AssetId 重新绑定
+
+目标：4.39 为避免悬挂身份而清零迁移文档的旧 `AssetId` 后，重新打开文档或 manifest 刷新必须按 canonical source path 恢复可用身份；缺失资源继续保持 0 和可诊断路径。
+
+实现范围：
+
+- `EditorLayer::rebind_asset_references_from_manifest` 在 manifest 快照发布后遍历活动 World，并在 Open Scene/Prefab 且 manifest 已就绪时立即执行；`AssetReference` 接受任意匹配 entry，`AudioSource` 仅接受 `key.type == "audio"`。
+- 重新绑定使用 `FileSystemService::project_relative_existing` 的 canonical source path 比较，不依赖目录顺序、旧 ID 或全文文档搜索；成功恢复 ID 会标记 scene dirty，用户仍可显式 Save Scene 持久化修复结果。
+- manifest 尚未就绪时不猜测、不同步扫描；下一快照发布后再处理。找不到文件、类型不匹配或 source path 越界时只保留 path/AssetId=0。
+- 非目标：本轮不修改 AssetId 哈希算法、不自动写回所有打开文档、不引入文件操作 Undo；统一文件事务历史与批量报告继续单独规划。
+
+审计与验证安排：
+
+- 集成：EditorInteraction 先将 live reference 手动降为 path-only 并触发真实 Refresh Assets，断言 manifest-ready rebind；随后实际打开 `Unloaded.prefab`，断言重命名资源恢复新 ID、已删除资源保持 0，再打开活动 scene 断言对象数量和场景完整性。
+- 安全：rebind 只读取 immutable manifest 和 live component 字段；任何 ID 写入前都经过 canonical source path 与资源类型检查，不接收 UI 字符串作为 ID，不触碰 shell/进程/decoder。
+- 性能：仅在 manifest 发布或文档打开边界做 bounded World component pass；paint 只消费已绑定状态，不做 filesystem IO/hash；没有新增 voice、preview future 或 renderer submission。
+- 视觉/交互：成功恢复/无法恢复均通过既有状态栏和 Inspector identity 文案呈现，不改变 retained layout、DPI geometry 或 backend seam。
+- 失败状态与回滚：manifest 不可用时保持 0 并等待；路径不存在时保留 missing-reference path；回滚可移除 rebind 调用，4.39 的安全清零和结构化路径迁移仍成立。
+- 下一入口：加入文件操作 history 的事务模型和可恢复报告，再推进 streaming buffer/loop/end-of-file、播放头预算、视觉矩阵以及模型导入材质/纹理/动画能力。

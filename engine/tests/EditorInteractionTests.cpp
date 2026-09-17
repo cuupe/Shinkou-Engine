@@ -540,6 +540,14 @@ int main() {
                 needleReference->asset_id() == renamedNeedleAssetId,
                 "asset rename did not rebind the live reference to the new manifest identity");
         require_unloaded_reference("assets/Folder/Nested/renamed.txt");
+        needleReference->set_asset_id(0);
+        editor.execute_command(EditorCommand::RefreshAssets, {}, world);
+        for (int i = 0; i < 120 && needleReference->asset_id() == 0; ++i) {
+            tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        require(needleReference->asset_id() == renamedNeedleAssetId,
+                "manifest-ready rebind did not restore a path-only asset reference");
         click("assets.filter"); key("Left Ctrl"); key("A");
         {input::InputEvent e;e.type=input::InputEventType::KeyUp;e.control="key:Left Ctrl";fake->queue.push_back(e);tick();}
         key("Backspace"); key("Return"); key("End");tick();
@@ -854,6 +862,22 @@ int main() {
         require(editor.asset_system_manifest_count() > 0 &&
                 editor.asset_system_manifest_status().find("AssetSystem manifest ready") != std::string::npos,
                 "asset manifest did not settle after reference-invalidating delete");
+        editor.execute_command(EditorCommand::OpenScene, "assets/Scenes/Unloaded.prefab", world);
+        AssetReferenceComponent* reopenedRenamedReference = nullptr;
+        AssetReferenceComponent* reopenedDeletedReference = nullptr;
+        world.each_object([&](GameObject& object) {
+            auto* reference = object.get_component<AssetReferenceComponent>();
+            if (!reference) return;
+            if (reference->path() == "assets/Folder/Nested/renamed.txt") reopenedRenamedReference = reference;
+            if (reference->path() == "assets/Folder-extra.txt") reopenedDeletedReference = reference;
+        });
+        require(reopenedRenamedReference != nullptr && reopenedDeletedReference != nullptr,
+                "reopening migrated prefab lost one of its structured references");
+        require(reopenedRenamedReference->asset_id() == renamedNeedleAssetId &&
+                reopenedDeletedReference->asset_id() == 0,
+                "reopening migrated prefab did not reconcile manifest and missing AssetIds");
+        editor.execute_command(EditorCommand::OpenScene, "assets/Scenes/test.scene", world);
+        require(world.object_count() == 5, "reopening the active scene after prefab rebind damaged the scene");
         const auto objectCountBeforeBoundaryDrops = world.object_count();
         require(!editor.create_asset_reference_at_viewport(
                     world, "assets/Folder", {viewportDropTarget.x + 10.0f, viewportDropTarget.y + 10.0f}) &&
