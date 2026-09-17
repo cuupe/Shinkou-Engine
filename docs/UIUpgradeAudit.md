@@ -1891,6 +1891,40 @@
 - 当前迁移只覆盖活动 World，未加载的 scene/prefab 仍需要结构化引用 migration；文件操作本身还没有加入可回滚的统一历史栈。
 - streaming buffer、loop/end-of-file、playback-head refresh budget、异步 duration derived cache、多 DPI/主题视觉矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成。
 
+## 第 4.39 子阶段：未加载 scene/prefab 的结构化引用迁移
+
+### 实现与范围
+
+- `EditorLayer::migrate_asset_documents` 在 Rename/Delete 文件事务成功后，以 32768 条递归项目文件上限筛选 `.scene`/`.prefab`，跳过当前 `scenePath_` 对应的活动场景，避免未保存 World 被直接落盘。
+- 每个候选文档使用 `FileSystemService::read_text_limited` 的 16 MiB 上限和 `EditorDocument::from_json` 完整解析；只改写已知 `AssetReference.path`/`assetId` 与 `AudioSource.clipPath`/`assetId` 字段。Rename 写入新 normalized prefix 并令 ID 为 `0`，Delete 保留旧 path 供诊断并令 ID 为 `0`。
+- 合法且有变化的文档通过 `EditorDocument::to_json` 和 `write_text_atomic` 更新；解析失败、大小超限、序列化失败、写入失败或扫描达到上限时跳过原文件，并保留首个审计错误。
+- `EditorInteractionTests` 增加未打开 `assets/Scenes/Unloaded.prefab` fixture：Rename 后验证 `assets/Folder/Nested/renamed.txt`，Delete 后验证 `assets/Folder-extra.txt` 仍存在于文档且两者 AssetId 都为 `0`。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug -j 2` 通过，随后 `shinkou_editor_interaction_tests` 目标重编译通过。
+- 聚焦 CTest：`shinkou_editor_interaction_tests` `1/1 passed`，总计 `22.80 sec`；测试通过真实 retained Project browser Rename 和 Context-menu Delete 触发文件事务，不直接调用迁移私有方法。
+- 最终全量 CTest：`56/56 passed`、0 failures，总计 `31.60 sec`；结果包含当前工作区并行 Physics 测试，但本轮只提交 UI/文档相关文件。
+- 断言覆盖：磁盘资源 rename/delete、活动 World path/AssetId 迁移、异步 manifest rebind、未加载 prefab 的结构化 path/ID 迁移、场景 Save/Open、拖放边界、AudioSource waveform/transport、模型 AssetId 场景实例、编译器/项目集成面板和 Undo/Redo 回归。
+- 视觉/渲染链路未改变：本轮没有新增截图，沿用 4.37 的 D3D11 1280×720/DPI 144 baseline；本轮证明的是 Project browser -> FileSystemService -> EditorDocument structured write 的交互与持久化链路。
+
+### 安全、性能与视觉审计
+
+- 文件安全：候选路径来自受限 `FileSystemService::list`，读写仍做 canonical project-root boundary；不接受任意绝对路径、`..` 穿越或全文替换；未知/损坏文档保持原样。
+- 数据安全：Rename 清零旧 AssetId，Delete 保留 missing-reference path 并清零 AssetId；活动场景继续清空无法覆盖 filesystem 的 world-only undo/redo，避免恢复旧路径。
+- 性能：单次操作只做一轮 bounded document scan；每个合法文档最多一次 parse 和一次 atomic write；无 paint、渲染、decoder、AssetSystem manifest worker 或 audio voice 额外工作。
+- 视觉：没有改变 retained draw list、输入桥、DPI logical geometry 或 backend presentation；状态栏/console 汇总跳过数量和首个错误，后续将通过 visual fixture 补持久化迁移状态的窗口证据。
+
+### 失败状态与回滚路径
+
+- 文件事务失败时不启动文档迁移；单个文档失败不覆盖它的原内容；扫描上限或解析错误只增加 skipped/audit 状态，不影响其他合法文档。
+- 活动场景不被离线 writer 直接改写；用户仍通过 Save Scene 决定何时持久化内存迁移。回滚可移除 `migrate_asset_documents` 调用及 4.39 fixture，保留 4.38 live migration。
+
+### 未解决风险与下一轮
+
+- 迁移后的未加载文档会安全地保存正确 path，但其旧 ID 被置零；重新打开后基于 manifest canonical path 的自动 rebind 尚未完成，下一轮补齐并增加对应断言。
+- 文件操作历史、失败重试/批量报告、streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成；项目仍不能宣称最终 Unity 级能力已完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

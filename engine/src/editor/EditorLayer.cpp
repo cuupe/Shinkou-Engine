@@ -1805,6 +1805,93 @@ std::size_t EditorLayer::invalidate_live_asset_references(std::string_view path)
     return changed;
 }
 
+EditorLayer::AssetDocumentMigrationReport EditorLayer::migrate_asset_documents(
+    std::string_view from, std::string_view to, bool invalidateIdentity) {
+    AssetDocumentMigrationReport report;
+    const auto normalizedFrom = normalized_project_path(from);
+    const auto normalizedTo = normalized_project_path(to);
+    if (normalizedFrom.empty() || (!invalidateIdentity && normalizedTo.empty())) return report;
+
+    // This is deliberately bounded. Asset operations run on the editor thread,
+    // so a malformed or unexpectedly large project must not turn a rename into
+    // an unbounded scan or an uncontrolled rewrite.
+    constexpr std::size_t kMaxDocumentEntries = 32768;
+    const auto entries = fileSystem_.list({}, true, kMaxDocumentEntries);
+    const auto activeScene = normalized_project_path(scenePath_);
+    if (entries.size() >= kMaxDocumentEntries) {
+        ++report.filesSkipped;
+        report.firstError = "project file scan reached the unloaded document safety limit";
+    }
+
+    const auto remember_error = [&](std::string message) {
+        if (report.firstError.empty()) report.firstError = std::move(message);
+    };
+    const auto is_document = [](const std::filesystem::path& path) {
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+        return extension == ".scene" || extension == ".prefab";
+    };
+    const auto rewrite_property = [&](DocumentComponent& component,
+                                      std::string_view pathProperty) {
+        DocumentProperty* pathPropertyValue = nullptr;
+        DocumentProperty* idPropertyValue = nullptr;
+        for (auto& property : component.properties) {
+            if (property.name == pathProperty) pathPropertyValue = &property;
+            else if (property.name == "assetId") idPropertyValue = &property;
+        }
+        if (!pathPropertyValue || !path_is_or_below(pathPropertyValue->value, normalizedFrom)) return false;
+        if (!invalidateIdentity)
+            pathPropertyValue->value = remap_project_path(pathPropertyValue->value, normalizedFrom, normalizedTo);
+        if (idPropertyValue) idPropertyValue->value = "0";
+        return true;
+    };
+
+    for (const auto& entry : entries) {
+        if (entry.directory || !is_document(entry.relativePath)) continue;
+        const auto documentPath = normalized_project_path(entry.relativePath.generic_string());
+        // The active scene has already been migrated in memory. Rewriting its
+        // on-disk copy here would make an unsaved editor edit unexpectedly
+        // durable and would bypass the normal Save Scene transaction.
+        if (!activeScene.empty() && documentPath == activeScene) continue;
+        ++report.filesScanned;
+
+        std::string json, error;
+        bool truncated = false;
+        if (!fileSystem_.read_text_limited(entry.relativePath, 16u * 1024u * 1024u,
+                                           json, &truncated, &error) || truncated) {
+            ++report.filesSkipped;
+            remember_error(documentPath + ": " + (error.empty() ? "document is too large" : error));
+            continue;
+        }
+        EditorDocument document;
+        if (!EditorDocument::from_json(json, document, error)) {
+            ++report.filesSkipped;
+            remember_error(documentPath + ": " + (error.empty() ? "unsupported document format" : error));
+            continue;
+        }
+
+        std::size_t changed = 0;
+        for (auto& object : document.objects) {
+            for (auto& component : object.components) {
+                if (component.type == "AssetReference" && rewrite_property(component, "path")) ++changed;
+                else if (component.type == "AudioSource" && rewrite_property(component, "clipPath")) ++changed;
+            }
+        }
+        if (changed == 0) continue;
+
+        if (!document.to_json(json, error) ||
+            !fileSystem_.write_text_atomic(entry.relativePath, json, &error)) {
+            ++report.filesSkipped;
+            remember_error(documentPath + ": " + (error.empty() ? "could not write migrated document" : error));
+            continue;
+        }
+        ++report.filesChanged;
+        report.referencesChanged += changed;
+    }
+    return report;
+}
+
 void EditorLayer::apply_pending_asset_reference_refreshes() {
     if (!activeWorld_ || !assetManifest_ || pendingAssetReferenceRefreshes_.empty()) return;
 
@@ -3316,6 +3403,7 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         const auto oldPath = normalized_project_path(path);
         const auto newPath = normalized_project_path(target.generic_string());
         const auto remappedReferences = remap_live_asset_references(oldPath, newPath);
+        const auto migratedDocuments = migrate_asset_documents(oldPath, newPath, false);
         if (path_is_or_below(selectedAsset_, oldPath))
             set_selected_asset(remap_project_path(selectedAsset_, oldPath, newPath));
         if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), oldPath)) {
@@ -3329,6 +3417,15 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         lastStatus_ = "Renamed resource to " + newName.generic_string();
         if (remappedReferences != 0)
             lastStatus_ += " and migrated " + std::to_string(remappedReferences) + " live reference(s)";
+        if (migratedDocuments.referencesChanged != 0)
+            lastStatus_ += " plus " + std::to_string(migratedDocuments.referencesChanged) +
+                " unloaded reference(s) in " + std::to_string(migratedDocuments.filesChanged) + " document(s)";
+        if (migratedDocuments.filesSkipped != 0) {
+            lastStatus_ += " (" + std::to_string(migratedDocuments.filesSkipped) +
+                " document(s) skipped)";
+            if (!migratedDocuments.firstError.empty()) push_console(
+                "Unloaded document migration audit: " + migratedDocuments.firstError);
+        }
         break;
     }
     case EditorAssetAction::NewFolder: {
@@ -3355,8 +3452,9 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
             push_console(lastStatus_);
             return;
         }
-        const auto invalidatedReferences = invalidate_live_asset_references(path);
         const auto normalizedPath = normalized_project_path(path);
+        const auto invalidatedReferences = invalidate_live_asset_references(path);
+        const auto migratedDocuments = migrate_asset_documents(normalizedPath, {}, true);
         if (path_is_or_below(selectedAsset_, normalizedPath)) set_selected_asset({});
         if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), normalizedPath)) {
             assetDirectory_.clear();
@@ -3368,6 +3466,15 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         lastStatus_ = "Deleted resource " + std::filesystem::path(path).filename().string();
         if (invalidatedReferences != 0)
             lastStatus_ += " and invalidated " + std::to_string(invalidatedReferences) + " live reference(s)";
+        if (migratedDocuments.referencesChanged != 0)
+            lastStatus_ += " plus " + std::to_string(migratedDocuments.referencesChanged) +
+                " unloaded reference(s) in " + std::to_string(migratedDocuments.filesChanged) + " document(s)";
+        if (migratedDocuments.filesSkipped != 0) {
+            lastStatus_ += " (" + std::to_string(migratedDocuments.filesSkipped) +
+                " document(s) skipped)";
+            if (!migratedDocuments.firstError.empty()) push_console(
+                "Unloaded document migration audit: " + migratedDocuments.firstError);
+        }
         break;
     }
     push_console(lastStatus_);

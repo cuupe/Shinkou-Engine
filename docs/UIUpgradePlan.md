@@ -1081,3 +1081,23 @@
 - 性能：重写只遍历当前活动 World 的引用；manifest lookup 只发生在异步扫描完成边界，paint 只读取现有 snapshot，不做文件 IO、hash、decoder 或额外 voice 创建。
 - 失败状态与回滚：rename/delete 失败不触碰 World；新 entry 缺失时 AssetId 保持 0；回滚可移除迁移方法和 pending refresh，保留已有 FileSystemService 和 manifest refresh。
 - 下一入口：补未加载 scene/prefab 的结构化引用 migration 与文件操作历史，再进入 streaming buffer/loop/end-of-file/playback-head budget 及多窗口/主题视觉矩阵。
+
+### 第 4.39 子阶段：未加载 scene/prefab 的结构化引用迁移
+
+目标：资源 Rename/Delete 不只修复当前 World，还要修复项目中尚未打开的 `.scene`/`.prefab` 文档，同时保留活动场景的未保存语义和损坏文件的可恢复性。
+
+实现范围：
+
+- `EditorLayer` 在成功完成文件事务后，以 `FileSystemService::list` 的 32768 条上限遍历项目内 `.scene`/`.prefab`；每个候选文档最多读取 16 MiB，并必须通过 `EditorDocument::from_json` 的完整结构校验。
+- 迁移只访问 `AssetReference.path`、`AssetReference.assetId`、`AudioSource.clipPath` 和 `AudioSource.assetId` 四类已知字段：Rename 改写 project-relative path 并清零旧 ID，Delete 保留 missing-reference path 并清零 ID；不做任意全文替换。
+- 活动场景文件跳过落盘迁移，由当前 World 的 live migration 和显式 Save Scene 负责；其他合法文档使用原子写入。格式不支持、超限、解析失败或写入失败的文件原样保留并进入审计状态。
+- 非目标：本轮不变更 AssetId 算法、不把文件系统事务伪装成 World Undo、不迁移跨项目依赖、不在 paint 或渲染线程做文件 IO；未加载文档的重新打开时 AssetId rebind 作为下一轮入口。
+
+审计与验证安排：
+
+- 集成：在 `EditorInteractionTests` 预先创建未打开的 `assets/Scenes/Unloaded.prefab`，通过真实 Project Rename/Context-menu Delete 后重新读取并解析文档，分别断言重命名路径、删除后的保留路径和清零 AssetId。
+- 安全：扫描、读取、写入继续经过 project-root boundary；路径只按 normalized component property/prefix 处理；读取、文件数量和序列化均有上限，未知文档不被猜测式重写。
+- 性能：资源操作只在成功事务后做一次有界文档扫描；每个文档只 parse/write 一次，paint、preview worker、manifest worker 和 renderer 不参与；活动场景仍保持单次 World component pass。
+- 视觉/交互：不改变 retained geometry、Inspector 行高或 Renderer/backend seam；继续依靠现有 Project browser 状态栏/console 和真实 UI 输入证明迁移结果。
+- 失败状态与回滚：单文档失败不会覆盖原文件；扫描上限、解析错误和写入错误在状态栏/console 中汇总；活动场景的 world-only undo 仍在外部文件迁移后清空，避免跨域回滚造成旧路径复活。
+- 下一入口：为重新打开的文档增加基于 manifest canonical source path 的 AssetId rebind，并引入可审计的文件操作历史；随后处理 streaming playback contract、多 DPI/主题矩阵和模型材质/纹理/深度/动画预览。

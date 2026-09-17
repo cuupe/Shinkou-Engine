@@ -134,6 +134,14 @@ class EditorLayer {
         std::string destinationPrefix;
     };
 
+    struct AssetDocumentMigrationReport {
+        std::size_t filesScanned{0};
+        std::size_t filesChanged{0};
+        std::size_t referencesChanged{0};
+        std::size_t filesSkipped{0};
+        std::string firstError;
+    };
+
     struct AsyncModelSceneAsset {
         std::uint64_t generation{0};
         std::uint64_t sourceStamp{0};
@@ -322,6 +330,9 @@ class EditorLayer {
     void poll_asset_manifest_scan();
     std::size_t remap_live_asset_references(std::string_view from, std::string_view to);
     std::size_t invalidate_live_asset_references(std::string_view path);
+    AssetDocumentMigrationReport migrate_asset_documents(std::string_view from,
+                                                         std::string_view to,
+                                                         bool invalidateIdentity);
     void apply_pending_asset_reference_refreshes();
     void set_selected_asset(std::string path);
     void request_asset_preview();

@@ -217,6 +217,7 @@ int main() {
 
         const auto project = std::filesystem::temp_directory_path()/ ("shinkou-ui-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(project/"assets/Folder/Nested");
+        std::filesystem::create_directories(project/"assets/Scenes");
         std::ofstream(project/"assets/Folder/Nested/needle.txt") << "fixture";
         const auto previewWav = make_audio_fixture_wav();
         {
@@ -282,6 +283,27 @@ int main() {
         require(previewModelAssetId != 0 && previewAudioAssetId != 0 && needleAssetId != 0 &&
                 folderExtraAssetId != 0,
                 "asset system manifest did not index the model/audio fixtures");
+        World unloadedDocumentWorld;
+        unloadedDocumentWorld.register_component_type<AssetReferenceComponent>("AssetReference");
+        auto& unloadedRenameObject = unloadedDocumentWorld.create_object("Unloaded Rename Reference");
+        require(unloadedRenameObject.add_component<AssetReferenceComponent>(
+                    "assets/Folder/Nested/needle.txt", needleAssetId) != nullptr,
+                "could not create unloaded rename document fixture");
+        auto& unloadedDeleteObject = unloadedDocumentWorld.create_object("Unloaded Delete Reference");
+        require(unloadedDeleteObject.add_component<AssetReferenceComponent>(
+                    "assets/Folder-extra.txt", folderExtraAssetId) != nullptr,
+                "could not create unloaded delete document fixture");
+        EditorDocument unloadedDocument;
+        std::string unloadedDocumentJson;
+        std::string unloadedDocumentError;
+        require(EditorDocument::capture(unloadedDocumentWorld, unloadedRenameObject.id(), unloadedDocument,
+                                         unloadedDocumentError) &&
+                    unloadedDocument.to_json(unloadedDocumentJson, unloadedDocumentError),
+                "could not serialize unloaded scene/prefab fixture");
+        {
+            std::ofstream file(project / "assets/Scenes/Unloaded.prefab", std::ios::binary);
+            file << unloadedDocumentJson;
+        }
         EditorBuildProfile alternateProfile;
         alternateProfile.id = "release";
         alternateProfile.name = "CMake Release";
@@ -312,6 +334,31 @@ int main() {
         input::InputSystem input(std::move(backend)); input.initialize();
         FrameIndex frame=0;
         auto tick = [&] { input.poll(); editor.process_input(input,world); editor.prepare_frame(renderer,world); editor.draw(renderer,world,1.0f/60,frame++); };
+        auto require_unloaded_reference = [&](const std::string& expectedPath) {
+            FileSystemService files(project);
+            std::string documentJson, documentError;
+            EditorDocument document;
+            require(files.read_text("assets/Scenes/Unloaded.prefab", documentJson, &documentError) &&
+                        EditorDocument::from_json(documentJson, document, documentError),
+                    "unloaded scene/prefab document could not be read after asset operation");
+            bool found = false;
+            for (const auto& object : document.objects) {
+                for (const auto& component : object.components) {
+                    if (component.type != "AssetReference") continue;
+                    std::string pathValue;
+                    std::string assetIdValue;
+                    for (const auto& property : component.properties) {
+                        if (property.name == "path") pathValue = property.value;
+                        else if (property.name == "assetId") assetIdValue = property.value;
+                    }
+                    if (pathValue == expectedPath) {
+                        found = true;
+                        require(assetIdValue == "0", "unloaded reference retained a stale AssetId");
+                    }
+                }
+            }
+            require(found, "unloaded scene/prefab reference was not migrated");
+        };
         auto region = [&](const std::string& id) {
             const auto& regions=editor.editor_ui().interaction_regions();
             auto it=regions.find(id);
@@ -492,6 +539,7 @@ int main() {
         require(renamedNeedleAssetId != 0 && renamedNeedleAssetId != needleAssetId &&
                 needleReference->asset_id() == renamedNeedleAssetId,
                 "asset rename did not rebind the live reference to the new manifest identity");
+        require_unloaded_reference("assets/Folder/Nested/renamed.txt");
         click("assets.filter"); key("Left Ctrl"); key("A");
         {input::InputEvent e;e.type=input::InputEventType::KeyUp;e.control="key:Left Ctrl";fake->queue.push_back(e);tick();}
         key("Backspace"); key("Return"); key("End");tick();
@@ -798,6 +846,7 @@ int main() {
         });
         require(!std::filesystem::exists(project / "assets/Folder-extra.txt") && deletedReferenceInvalidated,
                 "asset delete did not invalidate the live reference identity");
+        require_unloaded_reference("assets/Folder-extra.txt");
         for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
             tick();
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
