@@ -59,6 +59,7 @@ enum class EditorCommand : std::uint8_t {
     SetDiagnosticFilter,
     SelectBuildDiagnostic,
     OpenDiagnosticInIde,
+    PruneFileRecovery,
     MediaPlay,
     MediaPause,
     MediaStop,
@@ -241,6 +242,25 @@ struct EditorBuildUiState {
     std::vector<std::string> outputLines;
 };
 
+struct EditorFileRecoveryEntryModel {
+    std::string kind;
+    std::string sourcePath;
+    std::string destinationPath;
+    std::string recyclePath;
+    std::uintmax_t bytes{0};
+    bool recoverable{false};
+    bool orphan{false};
+};
+
+struct EditorFileRecoveryUiState {
+    std::string status{"Recovery area is clean"};
+    std::size_t undoCount{0};
+    std::size_t redoCount{0};
+    std::size_t orphanCount{0};
+    std::uintmax_t totalBytes{0};
+    std::vector<EditorFileRecoveryEntryModel> entries;
+};
+
 class EditorUiModel {
     std::vector<EditorMenuModel> menus_;
     std::vector<EditorPageModel> pages_;
@@ -269,6 +289,7 @@ class EditorUiModel {
     bool audioTransportDurationKnown_{false};
     std::shared_ptr<const EditorAudioPreviewSnapshot> audioTransportPreview_{};
     EditorBuildUiState buildState_{};
+    EditorFileRecoveryUiState fileRecoveryState_{};
     EditorAssetPreviewUiState assetPreview_{};
     EditorMediaUiState mediaState_{};
 
@@ -296,6 +317,7 @@ public:
     void set_active_page(std::string pageId);
     void set_page_visible(std::string_view pageId, bool visible) noexcept;
     void set_build_state(EditorBuildUiState state);
+    void set_file_recovery_state(EditorFileRecoveryUiState state);
     void set_asset_preview(EditorAssetPreviewUiState state);
     void set_media_state(EditorMediaUiState state);
     void set_audio_asset_choices(std::shared_ptr<const std::vector<EditorInspectorChoice>> choices);
@@ -319,6 +341,7 @@ public:
     bool playing() const noexcept { return playing_; }
     bool paused() const noexcept { return paused_; }
     const EditorBuildUiState& build_state() const noexcept { return buildState_; }
+    const EditorFileRecoveryUiState& file_recovery_state() const noexcept { return fileRecoveryState_; }
     const EditorAssetPreviewUiState& asset_preview() const noexcept { return assetPreview_; }
     const EditorMediaUiState& media_state() const noexcept { return mediaState_; }
     double audio_transport_cursor() const noexcept { return audioTransportCursor_; }

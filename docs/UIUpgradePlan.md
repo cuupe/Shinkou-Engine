@@ -1162,3 +1162,24 @@
 - 性能：只在事务、Undo/Redo、项目初始化和布局切换边界做有限 JSON IO；paint、renderer、preview worker、AudioScene 和 AssetSystem manifest worker 不读取日志。
 - 失败状态与回滚：日志读取/写入失败只报告并继续正常编辑；冲突条目不执行；删除持久化仍可回滚到 4.41 的进程内历史实现，但会失去重启后的恢复能力。
 - 下一入口：启动时回收区空间/孤儿项治理和用户可见的恢复面板；随后处理音频 streaming buffer/loop/end-of-file 与播放头预算、多 DPI/主题矩阵，以及模型 PBR/material/texture/depth/animation 预览。
+
+### 第 4.43 子阶段：可见的文件恢复与回收区治理
+
+目标：把跨会话日志和回收区状态呈现为正式的编辑器面板，让用户能够在不离开项目的情况下审查 Undo/Redo、识别磁盘冲突、发现孤立回收项并主动清理，同时保持默认工作区克制、不抢占 Scene viewport。
+
+实现范围：
+
+- 新增 `File Recovery` dock panel 与 Window 菜单入口，使用 `EditorFileRecoveryUiState` 只读快照展示当前 Undo/Redo 数量、回收区占用、操作路径、可恢复状态和孤立项。
+- `Undo latest`/`Redo latest` 复用既有 EditorCommand 总线和 filesystem + World + manifest 事务；面板不直接执行文件 IO，不引入第二套撤销实现。
+- 增加明确的 `Prune orphans` 动作，只删除不再被 fileUndo/fileRedo 保护的 `.shinkou/recycle/<operation>` 根目录；受保护回收项、活动资源和日志本身不会被清理。
+- 回收区扫描限制为 512 个条目，UI 条目最多 64 个；占用超过 512 MiB 或扫描达到上限时显示危险/治理状态，但不在启动时静默永久删除用户数据。
+- 非目标：本轮不加入跨进程锁、不把回收项恢复成新 AssetId、不做批量选择/拖放恢复；这些仍需在并发与资产依赖治理轮次中设计。
+
+审计与验证安排：
+
+- 集成：真实 Project Delete 后通过 retained Window/Recovery panel 检查 Undo 控件；点击 Undo/Redo 断言文件、World reference、manifest identity 和 journal 同步变化；panel 状态反映 undo/redo 计数。
+- 安全：Prune 仅接受编辑器生成且位于项目根 `.shinkou/recycle` 的操作根；历史 Undo/Redo 的回收目录建立保护集合，外部路径、未知目录和日志文件不进入清理目标。
+- 性能：回收区扫描只在初始化、项目切换、文件事务、Undo/Redo、Prune 后的模型边界执行；retained paint 仅读取快照，不递归扫描、不删除、不触碰 renderer、decoder 或 audio voice。
+- 视觉：恢复面板默认隐藏并停靠到既有底部 tab stack；采用与 Build/Media 相同的平面 surface、语义 accent/danger、稳定 42 logical px 行，保留 dark/light/high-contrast 和 DPI 缩放路径。
+- 失败状态与回滚：磁盘状态与历史不匹配时条目显示不可恢复并由 4.42 loader 跳过；Prune 单项失败只记录 Console；可回滚面板和治理命令而保留 4.42 持久化日志。
+- 下一入口：把回收区快照接入更完整的批量文件事务/外部并发冲突报告，然后进入音频 streaming buffer/loop/end-of-file 与播放头刷新预算、多 DPI/主题 capture matrix 和模型材质/纹理/深度/动画预览。

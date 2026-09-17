@@ -148,6 +148,7 @@ void register_layout_types(reflection::TypeRegistry& registry) {
         .field("showSettings", &EditorLayoutState::showSettings)
         .field("showMedia", &EditorLayoutState::showMedia)
         .field("showBuild", &EditorLayoutState::showBuild)
+        .field("showRecovery", &EditorLayoutState::showRecovery)
         .take(), &ignored);
 }
 
@@ -368,6 +369,7 @@ bool EditorLayer::initialize(bool enableImGui) {
 void EditorLayer::process_input(const input::InputSystem& input, World& world) {
     if (!initialized_) return;
     activeWorld_ = &world;
+    if (fileRecoveryUiDirty_) sync_file_recovery_ui_state();
     // The component is registered on every active world so a dropped asset
     // reference can survive scene document capture/restore and editor undo.
     world.register_component_type<AssetReferenceComponent>("AssetReference");
@@ -667,6 +669,7 @@ void EditorLayer::register_builtin_panels() {
     add("settings", "Editor Settings", false);
     add("media", "Media Preview", false);
     add("build", "Build", false);
+    add("recovery", "File Recovery", false);
 }
 
 void EditorLayer::build_default_workspace() {
@@ -677,6 +680,7 @@ void EditorLayer::build_default_workspace() {
         DockPanel{"assets", "Asset Browser", true, true, {180.0f, 90.0f}},
         DockPanel{"console", "Console", true, true, {180.0f, 90.0f}},
         DockPanel{"build", "Build", false, true, {220.0f, 180.0f}},
+        DockPanel{"recovery", "File Recovery", false, true, {220.0f, 160.0f}},
     }, 0);
     auto center = DockNode::split(leaf("viewport", "Viewport", true, {320.0f, 220.0f}),
                                   std::move(bottom), DockSplitOrientation::Vertical, 0.64f);
@@ -693,7 +697,8 @@ void EditorLayer::build_default_workspace() {
     dockWorkspace_.add_tab("viewport", DockPanel{"media", "Media Preview", false, true, {280.0f, 180.0f}}, false);
     const auto isBuiltin = [](std::string_view id) {
         return id == "hierarchy" || id == "inspector" || id == "viewport" || id == "game" || id == "assets" ||
-            id == "console" || id == "profiler" || id == "render-graph" || id == "settings" || id == "media" || id == "build";
+            id == "console" || id == "profiler" || id == "render-graph" || id == "settings" || id == "media" ||
+            id == "build" || id == "recovery";
     };
     for (const auto& panel : panels_) {
         if (!isBuiltin(panel.id)) dockWorkspace_.add_tab("viewport", DockPanel{panel.id, panel.title, panel.defaultVisible, true, {160.0f, 100.0f}}, false);
@@ -718,6 +723,7 @@ void EditorLayer::sync_page_visibility() noexcept {
     uiModel_.set_page_visible("settings", layout_.showSettings);
     uiModel_.set_page_visible("media", layout_.showMedia);
     uiModel_.set_page_visible("build", layout_.showBuild);
+    uiModel_.set_page_visible("recovery", layout_.showRecovery);
 }
 
 bool EditorLayer::register_panel(EditorPanel panel) {
@@ -757,6 +763,7 @@ bool EditorLayer::set_panel_visible(std::string_view id, bool visible) {
     else if (id == "settings") layout_.showSettings = visible;
     else if (id == "media") layout_.showMedia = visible;
     else if (id == "build") layout_.showBuild = visible;
+    else if (id == "recovery") layout_.showRecovery = visible;
     dockWorkspace_.set_panel_visibility(id, visible);
     editorUi_.invalidate_layout();
     sync_page_visibility();
@@ -977,6 +984,7 @@ bool EditorLayer::load_layout_file() {
     set_panel_visible("settings", layout_.showSettings);
     set_panel_visible("media", layout_.showMedia);
     set_panel_visible("build", layout_.showBuild);
+    set_panel_visible("recovery", layout_.showRecovery);
     lastStatus_ = "Layout loaded: " + layout_.layoutFile;
     return true;
 }
@@ -1262,9 +1270,11 @@ void EditorLayer::reset_edit_history_for_file_operation() {
     fileRedo_.clear();
     undoHistory_.clear();
     redoHistory_.clear();
+    fileRecoveryUiDirty_ = true;
 }
 
 void EditorLayer::load_file_history() {
+    fileRecoveryUiDirty_ = true;
     fileUndo_.clear();
     fileRedo_.clear();
     undoHistory_.erase(std::remove(undoHistory_.begin(), undoHistory_.end(), EditHistoryKind::File),
@@ -1360,6 +1370,131 @@ void EditorLayer::save_file_history() {
     }
 }
 
+void EditorLayer::sync_file_recovery_ui_state() {
+    EditorFileRecoveryUiState state;
+    state.undoCount = fileUndo_.size();
+    state.redoCount = fileRedo_.size();
+
+    constexpr std::size_t kMaxRecycleEntries = 512;
+    const auto recycleRoot = std::filesystem::u8path(".shinkou/recycle");
+    const auto recycleEntries = fileSystem_.list(recycleRoot, true, kMaxRecycleEntries);
+    const bool bounded = recycleEntries.size() >= kMaxRecycleEntries;
+    std::unordered_set<std::string> recycleRoots;
+    std::unordered_map<std::string, std::uintmax_t> bytesByRoot;
+    for (const auto& entry : recycleEntries) {
+        const auto relative = entry.relativePath.lexically_relative(recycleRoot);
+        if (relative.empty() || relative == std::filesystem::path(".")) continue;
+        const auto first = relative.begin();
+        if (first == relative.end()) continue;
+        const auto root = (recycleRoot / *first).generic_string();
+        recycleRoots.insert(root);
+        if (!entry.directory) bytesByRoot[root] += entry.size;
+    }
+
+    std::unordered_set<std::string> protectedRoots;
+    const auto protect = [&](const std::vector<FileOperation>& operations) {
+        for (const auto& operation : operations) {
+            if (operation.kind != FileOperation::Kind::RecycleDelete || operation.recyclePath.empty()) continue;
+            protectedRoots.insert(std::filesystem::u8path(operation.recyclePath).parent_path().generic_string());
+        }
+    };
+    protect(fileUndo_);
+    protect(fileRedo_);
+
+    const auto append_operation = [&](const FileOperation& operation, bool undoAvailable) {
+        if (state.entries.size() >= 64) return;
+        EditorFileRecoveryEntryModel entry;
+        entry.kind = undoAvailable ? "Undo " : "Redo ";
+        entry.kind += operation.kind == FileOperation::Kind::Rename ? "Rename" : "Recycle Delete";
+        entry.sourcePath = operation.sourcePath;
+        entry.destinationPath = operation.destinationPath;
+        entry.recyclePath = operation.recyclePath;
+        if (operation.kind == FileOperation::Kind::Rename) {
+            entry.recoverable = undoAvailable
+                ? !fileSystem_.exists(operation.sourcePath) && fileSystem_.exists(operation.destinationPath)
+                : fileSystem_.exists(operation.destinationPath) && !fileSystem_.exists(operation.sourcePath);
+        } else {
+            const auto root = std::filesystem::u8path(operation.recyclePath).parent_path().generic_string();
+            entry.bytes = bytesByRoot[root];
+            entry.recoverable = undoAvailable
+                ? !fileSystem_.exists(operation.sourcePath) && fileSystem_.exists(operation.recyclePath)
+                : fileSystem_.exists(operation.sourcePath) && !fileSystem_.exists(operation.recyclePath);
+        }
+        state.entries.push_back(std::move(entry));
+    };
+    for (auto it = fileUndo_.rbegin(); it != fileUndo_.rend(); ++it) append_operation(*it, true);
+    for (auto it = fileRedo_.rbegin(); it != fileRedo_.rend(); ++it) append_operation(*it, false);
+
+    for (const auto& [root, bytes] : bytesByRoot) state.totalBytes += bytes;
+    for (const auto& root : recycleRoots) {
+        if (protectedRoots.find(root) != protectedRoots.end()) continue;
+        ++state.orphanCount;
+        if (state.entries.size() < 64) {
+            EditorFileRecoveryEntryModel orphan;
+            orphan.kind = "Orphan recovery item";
+            orphan.recyclePath = root;
+            orphan.bytes = bytesByRoot[root];
+            orphan.orphan = true;
+            state.entries.push_back(std::move(orphan));
+        }
+    }
+    state.status = state.undoCount == 0 && state.redoCount == 0 && state.orphanCount == 0
+        ? "Recovery area is clean"
+        : std::to_string(state.undoCount) + " undoable file operation(s)";
+    if (state.redoCount != 0) state.status += "; " + std::to_string(state.redoCount) + " redoable";
+    if (state.orphanCount != 0) state.status += "; " + std::to_string(state.orphanCount) + " orphan item(s)";
+    if (state.totalBytes > 512ull * 1024ull * 1024ull) state.status += "; exceeds 512 MiB budget";
+    if (bounded) state.status += " (scan limit reached)";
+    uiModel_.set_file_recovery_state(std::move(state));
+    fileRecoveryUiDirty_ = false;
+}
+
+bool EditorLayer::prune_file_recovery_orphans() {
+    constexpr std::size_t kMaxRecycleEntries = 512;
+    const auto recycleRoot = std::filesystem::u8path(".shinkou/recycle");
+    const auto entries = fileSystem_.list(recycleRoot, true, kMaxRecycleEntries);
+    std::unordered_set<std::string> roots;
+    for (const auto& entry : entries) {
+        const auto relative = entry.relativePath.lexically_relative(recycleRoot);
+        if (relative.empty() || relative == std::filesystem::path(".")) continue;
+        const auto first = relative.begin();
+        if (first != relative.end()) roots.insert((recycleRoot / *first).generic_string());
+    }
+    std::unordered_set<std::string> protectedRoots;
+    const auto protect = [&](const std::vector<FileOperation>& operations) {
+        for (const auto& operation : operations) {
+            if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
+                protectedRoots.insert(std::filesystem::u8path(operation.recyclePath).parent_path().generic_string());
+        }
+    };
+    protect(fileUndo_);
+    protect(fileRedo_);
+
+    std::size_t removed = 0;
+    std::size_t failed = 0;
+    for (const auto& root : roots) {
+        if (protectedRoots.find(root) != protectedRoots.end()) continue;
+        std::string error;
+        if (fileSystem_.remove(root, &error)) {
+            ++removed;
+        } else {
+            ++failed;
+            push_console("Recovery cleanup skipped " + root + ": " + error);
+        }
+    }
+    fileRecoveryUiDirty_ = true;
+    if (removed == 0 && failed == 0) {
+        lastStatus_ = "No orphan recovery items to prune";
+    } else {
+        lastStatus_ = "Pruned " + std::to_string(removed) + " orphan recovery item(s)";
+        if (failed != 0) lastStatus_ += "; " + std::to_string(failed) + " failed";
+    }
+    push_console(lastStatus_);
+    sync_file_recovery_ui_state();
+    editorUi_.invalidate_layout();
+    return failed == 0;
+}
+
 void EditorLayer::record_file_operation(FileOperation operation) {
     // A new filesystem transaction starts a new linear edit branch. Old
     // recycle entries are removed with the discarded branch; the active
@@ -1368,6 +1503,7 @@ void EditorLayer::record_file_operation(FileOperation operation) {
     fileUndo_.push_back(std::move(operation));
     undoHistory_.push_back(EditHistoryKind::File);
     save_file_history();
+    sync_file_recovery_ui_state();
 }
 
 std::filesystem::path EditorLayer::make_recycle_path(std::string_view source) {
@@ -1632,12 +1768,15 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
             page == "assets" ? layout_.showAssets : page == "console" ? layout_.showConsole :
             page == "profiler" ? layout_.showProfiler : page == "render-graph" ? layout_.showRenderGraph :
             page == "settings" ? layout_.showSettings : page == "build" ? layout_.showBuild :
-            page == "media" ? layout_.showMedia : false;
+            page == "media" ? layout_.showMedia : page == "recovery" ? layout_.showRecovery : false;
         const auto panelId = page == "scene" ? std::string_view{"viewport"} :
             page == "project" ? std::string_view{"assets"} : page;
-        if (!visible && page == "build" && !dockWorkspace_.activate_tab(panelId)) {
-            if (!dockWorkspace_.add_tab("console", DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}, false))
-                dockWorkspace_.add_tab("viewport", DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}, false);
+        if (!visible && (page == "build" || page == "recovery") && !dockWorkspace_.activate_tab(panelId)) {
+            const auto panel = page == "build"
+                ? DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}
+                : DockPanel{"recovery", "File Recovery", false, true, {220.0f, 160.0f}};
+            if (!dockWorkspace_.add_tab("console", panel, false))
+                dockWorkspace_.add_tab("viewport", panel, false);
         }
         if (page == "scene") set_panel_visible("viewport", !visible);
         else set_panel_visible(page == "project" ? "assets" : page, !visible);
@@ -1675,6 +1814,9 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         reset_asset_manifest("AssetSystem manifest refresh requested");
         assetsDirty_ = true;
         push_console("Asset browser refresh requested");
+        break;
+    case EditorCommand::PruneFileRecovery:
+        prune_file_recovery_orphans();
         break;
     case EditorCommand::OpenAsset: {
         const auto path = std::filesystem::path(target).lexically_normal();
@@ -1850,6 +1992,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
             sourceHistory.pop_back();
             destinationHistory.push_back(EditHistoryKind::File);
             save_file_history();
+            sync_file_recovery_ui_state();
             lastStatus_ = undo ? "File operation undone" : "File operation redone";
             push_console(lastStatus_);
         }
@@ -4909,7 +5052,7 @@ void EditorLayer::draw_main_menu(render::Renderer& renderer, World& world) {
         menu("Scene", "viewport"); menu("Game", "game"); menu("Hierarchy", "hierarchy");
         menu("Inspector", "inspector"); menu("Assets", "assets"); menu("Console", "console");
         menu("Profiler", "profiler"); menu("Render Graph", "render-graph"); menu("Build", "build"); menu("Settings", "settings");
-        menu("Media Preview", "media");
+        menu("Media Preview", "media"); menu("File Recovery", "recovery");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Theme")) {

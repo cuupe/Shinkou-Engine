@@ -114,6 +114,21 @@ bool same_build_state(const EditorBuildUiState& left, const EditorBuildUiState& 
     return true;
 }
 
+bool same_file_recovery_state(const EditorFileRecoveryUiState& left,
+                              const EditorFileRecoveryUiState& right) {
+    if (left.status != right.status || left.undoCount != right.undoCount ||
+        left.redoCount != right.redoCount || left.orphanCount != right.orphanCount ||
+        left.totalBytes != right.totalBytes || left.entries.size() != right.entries.size()) return false;
+    for (std::size_t index = 0; index < left.entries.size(); ++index) {
+        const auto& a = left.entries[index];
+        const auto& b = right.entries[index];
+        if (a.kind != b.kind || a.sourcePath != b.sourcePath ||
+            a.destinationPath != b.destinationPath || a.recyclePath != b.recyclePath ||
+            a.bytes != b.bytes || a.recoverable != b.recoverable || a.orphan != b.orphan) return false;
+    }
+    return true;
+}
+
 bool same_asset_preview(const EditorAssetPreviewUiState& left, const EditorAssetPreviewUiState& right) {
     return left.path == right.path && left.kind == right.kind && left.title == right.title &&
         left.status == right.status && left.loading == right.loading && left.truncated == right.truncated &&
@@ -179,6 +194,7 @@ void EditorUiModel::build_default_pages() {
         {"build", "Build", "Ctrl+B", false, false},
         {"media", "Media Preview", "", false, false},
         {"settings", "Project Settings", "", false, false},
+        {"recovery", "File Recovery", "", false, false},
     };
 }
 
@@ -245,6 +261,7 @@ void EditorUiModel::build_default_menus() {
             item("render-graph", "Render Graph", EditorCommand::TogglePage, {}, "render-graph"),
             item("build", "Build", EditorCommand::TogglePage, {}, "build"),
             item("media", "Media Preview", EditorCommand::TogglePage, {}, "media"),
+            item("recovery", "File Recovery", EditorCommand::TogglePage, {}, "recovery"),
         }},
         {"theme", "Theme", {
             item("dark", "Dark", EditorCommand::SetDarkTheme),
@@ -364,6 +381,13 @@ void EditorUiModel::set_page_visible(std::string_view pageId, bool visible) noex
 void EditorUiModel::set_build_state(EditorBuildUiState state) {
     if (same_build_state(buildState_, state)) return;
     buildState_ = std::move(state);
+    ++revision_;
+}
+
+void EditorUiModel::set_file_recovery_state(EditorFileRecoveryUiState state) {
+    if (state.entries.size() > 64) state.entries.resize(64);
+    if (same_file_recovery_state(fileRecoveryState_, state)) return;
+    fileRecoveryState_ = std::move(state);
     ++revision_;
 }
 

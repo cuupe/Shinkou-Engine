@@ -280,6 +280,8 @@ private:
                       const std::vector<std::string>& consoleEntries, const EditorLayoutState& layout);
     void draw_build_panel(const DockRect& rect, const EditorUiModel& model,
                           const EditorLayoutState& layout);
+    void draw_recovery_panel(const DockRect& rect, const EditorUiModel& model,
+                             const EditorLayoutState& layout);
     void draw_media_panel(const DockRect& rect, const EditorUiModel& model,
                           const ui::MediaPanel& mediaPanel, const EditorLayoutState& layout);
     void draw_generic_panel(const DockRect& rect, std::string_view id,

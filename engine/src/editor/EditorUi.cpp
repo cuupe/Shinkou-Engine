@@ -1247,6 +1247,13 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showSettings));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showMedia));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showBuild));
+    mix_key(paintKey, static_cast<std::uint64_t>(layout.showRecovery));
+    const auto& recovery = model.file_recovery_state();
+    mix_key(paintKey, recovery.status);
+    mix_key(paintKey, static_cast<std::uint64_t>(recovery.undoCount));
+    mix_key(paintKey, static_cast<std::uint64_t>(recovery.redoCount));
+    mix_key(paintKey, static_cast<std::uint64_t>(recovery.orphanCount));
+    mix_key(paintKey, static_cast<std::uint64_t>(recovery.totalBytes));
     mix_key(paintKey, std::hash<std::string_view>{}(hotRegion_));
     mix_key(paintKey, std::hash<std::string_view>{}(activeRegion_));
     mix_key(paintKey, std::hash<std::string_view>{}(draggedPanelId_));
@@ -1461,6 +1468,7 @@ void EditorUi::draw_dock(const EditorUiModel& model, const std::vector<FileEntry
         else if (panel.panelId == "settings") draw_tools_panel(content, "settings", renderer, layout);
         else if (panel.panelId == "build") draw_build_panel(content, model, layout);
         else if (panel.panelId == "media") draw_media_panel(content, model, mediaPanel, layout);
+        else if (panel.panelId == "recovery") draw_recovery_panel(content, model, layout);
         else draw_generic_panel(content, panel.panelId, panel.title, layout);
         renderList_.end_clip();
         regionClipActive_ = false;
@@ -2733,6 +2741,98 @@ void EditorUi::draw_media_panel(const DockRect& value, const EditorUiModel& mode
     renderList_.text({bounds.x + buttonWidth * 1.5f + 16.0f, controlsY + 35.0f,
                       std::max(0.0f, bounds.width - buttonWidth * 1.5f - 16.0f), 18.0f},
                      "Volume " + volume, muted, 10.0f, {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
+}
+
+void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& model,
+                                   const EditorLayoutState& layout) {
+    const auto bounds = inset(value, 10.0f);
+    const auto text = color(layout.theme == "light" ? "#3F464F" : "#CBD1DA");
+    const auto muted = color(layout.theme == "light" ? "#7A828D" : "#8F98A5");
+    const auto accent = color(layout.theme == "light" ? "#2E6FBE" : "#78A9E8");
+    const auto danger = color("#E58B82");
+    const auto border = color(layout.theme == "light" ? "#D3D7DD" : "#393D45");
+    const auto surface = color(layout.theme == "light" ? "#F5F6F8" : "#202226");
+    const auto& recovery = model.file_recovery_state();
+
+    renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, "File Recovery", text, 13.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    renderList_.text({bounds.x, bounds.y + 22.0f, bounds.width, 18.0f}, recovery.status,
+                     recovery.orphanCount != 0 || recovery.totalBytes > 512ull * 1024ull * 1024ull
+                         ? danger : recovery.undoCount != 0 ? accent : muted,
+                     10.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+
+    const auto format_bytes = [](std::uintmax_t bytes) {
+        std::ostringstream output;
+        if (bytes >= 1024u * 1024u) output << std::fixed << std::setprecision(1)
+            << (static_cast<double>(bytes) / (1024.0 * 1024.0)) << " MiB";
+        else if (bytes >= 1024u) output << std::fixed << std::setprecision(1)
+            << (static_cast<double>(bytes) / 1024.0) << " KiB";
+        else output << bytes << " B";
+        return output.str();
+    };
+    renderList_.text({bounds.x, bounds.y + 41.0f, bounds.width, 17.0f},
+                     "Undo " + std::to_string(recovery.undoCount) +
+                         "  ·  Redo " + std::to_string(recovery.redoCount) +
+                         "  ·  Recycle " + format_bytes(recovery.totalBytes),
+                     muted, 10.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+
+    const float buttonY = bounds.y + 64.0f;
+    const float buttonGap = 6.0f;
+    const float buttonWidth = std::clamp((bounds.width - buttonGap * 2.0f) / 3.0f, 76.0f, 112.0f);
+    float buttonX = bounds.x;
+    if (recovery.undoCount != 0) {
+        const auto id = command_key("recovery-undo");
+        commandActions_[id] = {EditorCommand::Undo, {}};
+        draw_button({buttonX, buttonY, buttonWidth, 25.0f}, id, "Undo latest", layout, true);
+        buttonX += buttonWidth + buttonGap;
+    }
+    if (recovery.redoCount != 0) {
+        const auto id = command_key("recovery-redo");
+        commandActions_[id] = {EditorCommand::Redo, {}};
+        draw_button({buttonX, buttonY, buttonWidth, 25.0f}, id, "Redo latest", layout);
+        buttonX += buttonWidth + buttonGap;
+    }
+    if (recovery.orphanCount != 0) {
+        const auto id = command_key("recovery-prune-orphans");
+        commandActions_[id] = {EditorCommand::PruneFileRecovery, {}};
+        draw_button({buttonX, buttonY, buttonWidth, 25.0f}, id, "Prune orphans", layout);
+    }
+
+    const float listTop = buttonY + 34.0f;
+    const auto listBounds = ui::Rect{bounds.x, listTop, bounds.width,
+                                     std::max(0.0f, bounds.y + bounds.height - listTop)};
+    renderList_.rect(listBounds, surface, 3.0f);
+    renderList_.border(listBounds, border, 1.0f, 3.0f);
+    if (recovery.entries.empty()) {
+        renderList_.text({listBounds.x + 8.0f, listBounds.y + 10.0f,
+                          std::max(0.0f, listBounds.width - 16.0f), 18.0f},
+                         "No recoverable file operations", muted, 10.0f,
+                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        return;
+    }
+    float cursor = listBounds.y + 5.0f;
+    const auto rows = std::min<std::size_t>(recovery.entries.size(),
+                                            static_cast<std::size_t>(std::max(0.0f, listBounds.height - 8.0f) / 42.0f));
+    for (std::size_t index = 0; index < rows; ++index) {
+        const auto& entry = recovery.entries[index];
+        const auto row = ui::Rect{listBounds.x + 5.0f, cursor,
+                                  std::max(0.0f, listBounds.width - 10.0f), 38.0f};
+        const auto rowId = command_key("recovery-entry", std::to_string(index));
+        if (entry.orphan) set_region(rowId, row);
+        if (hotRegion_ == rowId) renderList_.rect(row, color(layout.theme == "light" ? "#E8F1FC" : "#303B4A"), 3.0f);
+        const auto rowTitle = entry.orphan ? entry.recyclePath : entry.kind + "  " + entry.sourcePath;
+        renderList_.text({row.x + 6.0f, row.y + 3.0f, std::max(0.0f, row.width - 12.0f), 17.0f},
+                         rowTitle, entry.orphan ? danger : entry.recoverable ? text : muted, 10.0f,
+                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        std::string detail = entry.destinationPath.empty() ? entry.recyclePath : "to " + entry.destinationPath;
+        if (detail.empty()) detail = entry.recoverable ? "Ready to restore" : "Disk state changed; review before Undo";
+        if (entry.bytes != 0) detail += "  ·  " + format_bytes(entry.bytes);
+        renderList_.text({row.x + 6.0f, row.y + 20.0f, std::max(0.0f, row.width - 12.0f), 15.0f},
+                         detail, entry.orphan ? danger : muted, 9.0f,
+                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        cursor += 42.0f;
+        if (cursor >= listBounds.bottom()) break;
+    }
 }
 
 void EditorUi::draw_generic_panel(const DockRect& value, std::string_view id,

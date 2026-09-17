@@ -80,6 +80,7 @@ struct EditorLayoutState {
     bool showSettings{false};
     bool showMedia{false};
     bool showBuild{false};
+    bool showRecovery{false};
 };
 
 struct EditorPanelContext {
@@ -324,6 +325,7 @@ class EditorLayer {
     std::vector<EditHistoryKind> undoHistory_, redoHistory_;
     std::uint64_t fileOperationSerial_{0};
     bool replayingFileOperation_{false};
+    bool fileRecoveryUiDirty_{true};
     bool sceneDirty_{false};
     bool stepPending_{false};
     bool quitRequested_{false};
@@ -333,6 +335,8 @@ class EditorLayer {
     void record_file_operation(FileOperation operation);
     void load_file_history();
     void save_file_history();
+    void sync_file_recovery_ui_state();
+    bool prune_file_recovery_orphans();
     std::filesystem::path make_recycle_path(std::string_view source);
     bool apply_file_operation(FileOperation& operation, bool forward, std::string& error);
     bool edit_field(std::string_view id, std::string_view value);
@@ -550,6 +554,7 @@ public:
         return assetManifest_ ? *assetManifest_ : empty;
     }
     std::size_t file_history_undo_count() const noexcept { return fileUndo_.size(); }
+    const EditorFileRecoveryUiState& file_recovery_state() const noexcept { return uiModel_.file_recovery_state(); }
     const std::string& asset_system_manifest_status() const noexcept { return assetManifestStatus_; }
 };
 

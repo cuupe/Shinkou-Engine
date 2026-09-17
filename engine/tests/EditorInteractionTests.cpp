@@ -885,15 +885,27 @@ int main() {
         restartedEditor.set_project_root(project.generic_string());
         require(restartedEditor.initialize(false) && restartedEditor.file_history_undo_count() == 1,
                 "a new editor session did not load the recoverable file journal");
+        editor.execute_command(EditorCommand::TogglePage, "recovery", world);
+        tick();
+        require(editor.layout().showRecovery && editor.panel_visible("recovery") &&
+                    editor.file_recovery_state().undoCount == 1 &&
+                    editor.file_recovery_state().orphanCount == 0,
+                "file recovery panel did not publish the validated undo state");
+        require(region("command:recovery-undo").width > 0,
+                "file recovery panel did not expose the Undo action");
         AssetReferenceComponent* currentDeletedReference = nullptr;
         world.each_object([&](GameObject& object) {
             auto* reference = object.get_component<AssetReferenceComponent>();
             if (reference && reference->path() == "assets/Folder-extra.txt") currentDeletedReference = reference;
         });
         require(currentDeletedReference != nullptr, "live delete reference disappeared before file Undo");
-        editor.execute_command(EditorCommand::Undo, {}, world);
+        click("command:recovery-undo");
         require(std::filesystem::exists(project / "assets/Folder-extra.txt"),
                 "file Undo did not restore the deleted resource");
+        require(editor.file_recovery_state().undoCount == 0 &&
+                    editor.file_recovery_state().redoCount == 1 &&
+                    region("command:recovery-redo").width > 0,
+                "file recovery panel did not publish the redo state after Undo");
         for (int i = 0; i < 400 &&
                     (currentDeletedReference->asset_id() == 0 || editor.asset_system_manifest_count() == 0); ++i) {
             tick();
@@ -926,10 +938,12 @@ int main() {
                  " status=" + editor.asset_system_manifest_status()).c_str());
         require(read_file_history().entries.empty(),
                 "file Undo did not persist the cleared operation journal");
-        editor.execute_command(EditorCommand::Redo, {}, world);
+        click("command:recovery-redo");
         require(!std::filesystem::exists(project / "assets/Folder-extra.txt") &&
                     currentDeletedReference->asset_id() == 0,
                 "file Redo did not reapply the recoverable delete");
+        require(editor.file_recovery_state().undoCount == 1 && editor.file_recovery_state().redoCount == 0,
+                "file recovery panel did not publish the undo state after Redo");
         require(read_file_history().entries.size() == 1 &&
                     read_file_history().entries.front().kind == "recycle-delete",
                 "file Redo did not persist the recoverable operation journal");

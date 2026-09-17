@@ -2030,6 +2030,38 @@
 - 跨会话日志尚未治理孤立回收项、磁盘空间上限、外部进程并发修改和用户可见恢复/永久清理；当前只做安全跳过，不做自动破坏性清理。
 - streaming buffer/loop/end-of-file、播放头刷新预算、多 DPI/主题矩阵以及模型 PBR/material/texture/depth/animation 仍未完成；项目仍不能宣称完整 Unity 级能力已完成。
 
+## 第 4.43 子阶段：可见的文件恢复与回收区治理
+
+### 实现与范围
+
+- `EditorUiModel` 新增 `EditorFileRecoveryUiState`；`EditorLayer` 以有界 snapshot 发布 Undo/Redo 数量、当前操作、recycle 字节数、磁盘状态和 orphan 数量，保留 UI 与文件系统的生命周期边界。
+- `EditorUi` 新增默认隐藏的 `File Recovery` dock panel、Window 菜单入口和 retained controls：`Undo latest`、`Redo latest`、`Prune orphans`。操作全部回到现有 `EditorCommand::Undo/Redo/PruneFileRecovery`，没有新增旁路文件变更。
+- Recovery snapshot 递归扫描 `.shinkou/recycle` 最多 512 个条目，展示最多 64 行；当前历史和 redo history 的 operation root 建立保护集合，孤立 root 可由用户明确点击 `Prune orphans` 删除。总占用超过 512 MiB 或扫描受限时状态显示治理警告。
+- 面板保持默认关闭，加入 layout reflection、dock default workspace、Reload/Reset Layout 和 ImGui Window 菜单同步；`.shinkou` 仍不进入 AssetSystem manifest。
+
+### 契约与证据
+
+- `EditorInteractionTests` 通过真实 retained Window/Recovery panel 打开路径，断言 Delete 后 `undoCount==1`、Recovery Undo 控件存在；点击 `recovery-undo` 后断言 `undoCount==0`、`redoCount==1` 和 Redo 控件存在，再点击 `recovery-redo` 断言计数恢复。
+- 面板操作继续覆盖真实文件恢复、活动 World 引用迁移、manifest rebind、journal 清空/重写、未加载 prefab migration 和现有音频/图片/视频/模型/编译器回归。
+- `cmake --build out/build/mingw-debug --target shinkou_editor_interaction_tests -j 2` 通过；聚焦 CTest 在一次既有 manifest-ready 异步时序波动后复跑稳定，最终 `1/1 passed`，总计 `53.02 sec`。最终全量构建通过，全量 CTest `57/57 passed`、0 failures，总计 `86.00 sec`。
+
+### 安全、性能与视觉审计
+
+- Prune 的目标来自 project-root bounded `FileSystemService::list`，且只删除不在 fileUndo/fileRedo 保护集合中的 recycle operation root；`.shinkou/file-history.json`、当前资源路径和外部路径不会进入删除集合。
+- Recovery snapshot 在 `process_input`/事务边界更新，paint 只读取 `EditorFileRecoveryUiState`；列表、字节预算、条目数量都有上限，避免面板打开导致无界递归或文件 IO。
+- 视觉沿用底部 tab stack、语义颜色和共享按钮/聚焦命中区，不改变中心 viewport、Inspector 行高或 renderer/backend seam；默认 hidden，用户从 Window 菜单显式打开。
+
+### 失败状态与回滚路径
+
+- 历史与磁盘冲突显示不可恢复状态，Undo/Redo 本身仍由既有 apply_file_operation 返回错误；Prune 单项失败进入 Console，并继续处理其他孤立根。
+- 扫描达到 512 项或总占用超过 512 MiB 只产生面板警告，不静默永久删除；用户必须明确点击 `Prune orphans`，且保护项不会被清理。
+- 回滚可移除 Recovery model/panel 和 `PruneFileRecovery` 命令，保留 4.42 持久化 journal 与 4.41 recycle/Undo 语义。
+
+### 未解决风险与下一轮
+
+- 当前仍没有跨进程锁、外部编辑器并发冲突的细粒度 diff、批量选择恢复和真正的 Asset dependency graph；下轮应将这些状态纳入批量事务报告。
+- streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题视觉矩阵以及模型 PBR/material/texture/depth/animation 仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：
