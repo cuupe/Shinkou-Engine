@@ -1298,16 +1298,25 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
     bool changed = false;
     switch (command) {
     case EditorCommand::MediaSeek: {
-        if (separator == std::string::npos || payload.substr(separator + 1).rfind("relative:", 0) != 0) {
+        if (separator == std::string::npos) {
             lastStatus_ = "Audio source seek target is invalid";
             break;
         }
-        double delta = 0.0;
+        const auto seekPayload = payload.substr(separator + 1);
+        const bool relative = seekPayload.rfind("relative:", 0) == 0;
+        const bool absolute = seekPayload.rfind("absolute:", 0) == 0;
+        if (!relative && !absolute) {
+            lastStatus_ = "Audio source seek target is invalid";
+            break;
+        }
+        double requested = 0.0;
         try {
-            const auto value = payload.substr(separator + 1 + std::string_view{"relative:"}.size());
+            const auto prefix = relative ? std::string_view{"relative:"} : std::string_view{"absolute:"};
+            const auto value = seekPayload.substr(prefix.size());
             std::size_t consumed = 0;
-            delta = std::stod(value, &consumed);
-            if (consumed != value.size() || !std::isfinite(delta) || std::abs(delta) > 3600.0)
+            requested = std::stod(value, &consumed);
+            if (consumed != value.size() || !std::isfinite(requested) ||
+                (relative && std::abs(requested) > 3600.0) || (absolute && requested < 0.0))
                 throw std::invalid_argument("seek delta");
         } catch (...) {
             lastStatus_ = "Audio source seek target is invalid";
@@ -1321,7 +1330,7 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
             ? audioSceneSystem_->duration_seconds(objectId)
             : 7.0 * 24.0 * 60.0 * 60.0;
         const auto next = std::clamp(
-            audioSceneSystem_->cursor_seconds(objectId, *audioSystem_) + delta,
+            relative ? audioSceneSystem_->cursor_seconds(objectId, *audioSystem_) + requested : requested,
             0.0, duration);
         changed = audioSceneSystem_->seek(objectId, next, *audioSystem_);
         std::ostringstream status;

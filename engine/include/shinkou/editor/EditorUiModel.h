@@ -319,6 +319,10 @@ public:
     const EditorBuildUiState& build_state() const noexcept { return buildState_; }
     const EditorAssetPreviewUiState& asset_preview() const noexcept { return assetPreview_; }
     const EditorMediaUiState& media_state() const noexcept { return mediaState_; }
+    double audio_transport_cursor() const noexcept { return audioTransportCursor_; }
+    double audio_transport_duration() const noexcept { return audioTransportDuration_; }
+    bool audio_transport_cursor_supported() const noexcept { return audioTransportCursorSupported_; }
+    bool audio_transport_duration_known() const noexcept { return audioTransportDurationKnown_; }
     std::uint64_t revision() const noexcept { return revision_; }
 };
 

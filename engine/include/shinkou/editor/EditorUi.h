@@ -134,6 +134,7 @@ private:
     std::unordered_map<std::string, ui::WidgetId> regions_;
     std::unordered_map<std::string, ui::Rect> regionRects_;
     std::unordered_map<std::string, CommandAction> commandActions_;
+    std::unordered_map<std::string, double> audioTimelineDurations_;
     std::unordered_map<std::string, TabAction> tabActions_;
     std::unordered_map<std::string, std::string> tabCloseActions_;
     std::unordered_map<std::string, DockNodePath> splitterActions_;

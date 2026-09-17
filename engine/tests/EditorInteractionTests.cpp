@@ -510,9 +510,17 @@ int main() {
         click(audioSeekForwardControl);
         require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 5.0) < 0.001,
                 "AudioSource timeline seek did not move the scene voice cursor");
+        const auto audioTimelineRegion = "audio-timeline:" + std::to_string(created);
+        require(region(audioTimelineRegion).width > 0, "AudioSource continuous timeline was not registered");
+        click(audioTimelineRegion);
+        require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 15.0) < 0.001,
+                "AudioSource continuous timeline seek did not target the clicked position");
+        editor.execute_command(EditorCommand::MediaSeek, audioTarget + ":absolute:nan", world);
+        require(editor.last_status().find("invalid") != std::string::npos,
+                "AudioSource absolute seek accepted a non-finite payload");
         bool audioTimelineShowsDuration = false;
         for (const auto& command : editor.editor_ui().render_list().commands()) {
-            if (command.type == ui::DrawCommandType::Text && command.text.find("5.00 / 30.00 s") != std::string::npos) {
+            if (command.type == ui::DrawCommandType::Text && command.text.find("15.00 / 30.00 s") != std::string::npos) {
                 audioTimelineShowsDuration = true;
                 break;
             }

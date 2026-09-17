@@ -981,3 +981,23 @@
 - 视觉：复用现有 Inspector 行、flat text hierarchy、DPI-safe logical coordinates；信息不足时使用明确语义文本而非空白或虚构的时间轴比例。
 - 失败状态与回滚：后端不支持 inspect、资源缺失、duration 未知或 seek seam 不可证明时不创建额外句柄，Timeline 显示 Unavailable；回滚可删除 `AudioAssetInfo` 元数据层并退回 4.32 的有界 cursor，保留资源/场景/编辑器 target 分层。
 - 下一入口：将 metadata 检查迁移到异步 derived cache，再实现连续 timeline/waveform；并行推进资源 rename/import migration 与模型完整 material/texture/depth/animation preview。
+
+### 第 4.34 子阶段：AudioSource 连续 scrubber 与严格 absolute seek
+
+目标：将 AudioSource Inspector 从离散 transport 控件推进为可点击的连续时间轴，让编辑器点击位置直接映射到当前场景 voice；所有绝对 seek 仍必须经过同一条 capability、duration、finite-value 和 ObjectId 校验链。
+
+实现范围：
+
+- Inspector Timeline 行扩展为稳定的 retained scrubber：已知 duration 且 cursor 可用时绘制进度填充和当前位置标记；未知 duration 或不可 seek 时保留明确的 `Duration unavailable`/`Timeline unavailable`，不绘制虚假比例。
+- scrubber 点击生成 `audio-source:<ObjectId>:absolute:<seconds>`，与既有 `relative:<delta>` target 共用 AudioSceneSystem；EditorLayer 严格解析 absolute/relative 两种有限格式，按已知 duration 或 7 天安全上限夹紧。
+- Timeline 行使用独立的 76 logical px 行高和稳定 region，避免改变既有 AudioSource clip/bus/spatial/transport 字段的默认命中位置；按钮继续作为辅助 ±5 秒操作。
+- 非目标：本轮不把编辑器点击写入场景 JSON/Undo，不引入跨线程 UI 回调、waveform 解码或多源混音；波形继续由异步 Media Preview provider 和后续 derived cache 阶段负责。
+
+审计与验证安排：
+
+- 单元/集成：EditorInteraction 真实点击 scrubber 中点，断言 fake scene voice 从 5 秒定位到 15 秒；保留 AudioScene duration clamp、negative/invalid target、Pause/Resume/Stop 和 UI render 回归。
+- 安全：absolute payload 只接受严格 numeric ObjectId、`absolute:`/`relative:` 前缀和 finite seconds；不把 UI 字符串交给 shell、文件系统或 decoder。
+- 性能：scrubber paint 只读取 retained model scalar，不做 IO、解码或临时资源创建；progress marker 的绘制命令数与一个 timeline 行成常数关系。
+- 视觉：Windows-first flat surface/accent，track、marker 和文字状态在 dark/light/DPI logical coordinates 下保持可读；通过窗口捕获检查宿主 UI/viewport/asset browser 基线。
+- 失败状态与回滚：duration unknown、cursor unsupported、voice inactive 或非法点击只保留现有不可用状态；回滚可移除 scrubber region 和 absolute parser，保留 4.33 的 duration metadata 与 ±5 秒控制。
+- 下一入口：将异步 waveform/derived metadata snapshot 与场景 timeline 连接，补 streaming buffer/loop/end-of-file 语义；并行推进资源 rename/import migration 和模型材质/纹理/深度/动画预览。

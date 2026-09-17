@@ -1725,6 +1725,41 @@
 - 当前时间轴依旧是离散按钮，没有连续 slider、波形、播放头刷新策略或 streaming buffer 状态；这些需要先定义帧预算和缓存失效契约。
 - rename/import migration、derived artifact identity、完整 PBR/material/texture/depth/animation model preview 仍未完成，项目尚不能宣称 Unity 级完整能力。
 
+## 第 4.34 子阶段：AudioSource 连续 scrubber 与严格 absolute seek
+
+### 实现与范围
+
+- AudioSource Inspector Timeline 行增加 retained scrubber：duration 已知且 cursor 可用时绘制进度填充和 marker；能力不足时显示 `Duration unavailable` 或 `Timeline unavailable`，不伪造时间轴比例。
+- scrubber 使用独立 `audio-timeline:<ObjectId>` region；点击位置生成 `audio-source:<ObjectId>:absolute:<seconds>`，与已有 `relative:<delta>` 共用 AudioSceneSystem，EditorLayer 对两种 target 做严格 finite/范围/对象校验。
+- 时间轴行扩展为 76 logical px，track 与 `-5 s`/`+5 s` 辅助按钮分层绘制；该行位于 AudioSource 属性组末尾，既有 clip/bus/spatial/transport 字段命中位置不变。
+- absolute seek 仍是 session voice 操作，不写 scene JSON、不进入 Undo；paint/input 不读取文件、不解码、不启动进程，Media Preview voice 继续与 Scene Audio 分离。
+
+### 契约与证据
+
+- `shinkou_editor_interaction_tests` 真实点击 scrubber 中点：fake scene voice 从 5 秒定位到 15 秒，并显示 `15.00 / 30.00 s`；既有 picker、空间参数、Pause/Resume/Stop、Undo/Redo 保持通过。
+- `shinkou_audio_scene_system_tests` 与 `shinkou_ui_render_tests` 通过，duration clamp、scene transport 和 retained render contract 未回归；focused CTest 为 `3/3` passed、总计 `16.25 sec`。最终补充 `absolute:nan` 输入后，`shinkou_editor_interaction_tests` 单测仍通过（`13.37 sec`）。
+- `cmake --build out/build/mingw-debug -j 2` 增量全目标构建通过。
+- 最终全量 CTest：`55/55` passed、0 failures、总计 `19.36 sec`。
+- 视觉捕获：`shinkou_ui_capture.exe shinkou_engine_sample.exe editor-audio-timeline.bmp 5000 dx11` 成功，报告 `captured=1`、`client=1280x690`、`dpi=144`、`mode=EngineGpuReadback`；截图检查确认 dark Windows shell、Hierarchy、Viewport、Asset Browser、Inspector 和底部状态栏正常呈现。样例没有选中 AudioSource，因此该截图是宿主 UI 基线，不冒充时间轴截图。
+
+### 安全、性能与视觉审计
+
+- `absolute:` payload 只在 EditorLayer 解析为 finite、非负秒数，并按已知 duration 或未知时长的 7 天上限夹紧；ObjectId 必须完整消费且非零，非法字符串不会进入 AudioSceneSystem。
+- scrubber 的模型读取是常数 scalar 查询，进度 track/marker/button 提交不扫描文件、不触发 decoder、不新增 voice/asset；连续点击仍通过同一主线程 command boundary。
+- retained region 与 row height 纳入现有 DPI logical layout；track、marker、accent 和 unavailable 文本沿用 Shinkou flat surface token。已有字段命中位置由交互测试覆盖，D3D11 capture 证明宿主 presentation 链路仍可见。
+
+### 失败状态与回滚路径
+
+- duration unknown、cursor unsupported、voice inactive 或 target 非法时不发送有效 absolute seek；±5 秒按钮仍按 4.33 capability 规则工作，UI 显示明确不可用状态。
+- 如果点击落在无效区域，UiRuntime 不触发 command；如果 AudioScene 拒绝 seek，EditorLayer 只更新 bounded status，不修改场景配置。
+- 回滚可移除 `audio-timeline` region、absolute parser 和额外行高，恢复 4.33 duration metadata 与离散 transport；不影响资源 identity、空间 listener 或 Media Preview。
+
+### 未解决风险与下一轮
+
+- 当前 scrubber 只有标尺/进度 marker，没有把异步 waveform snapshot 复用到场景 Inspector；下一轮需要定义 snapshot identity、source stamp、取消/替换和缓存预算后再连接波形。
+- streaming buffer、loop/end-of-file、播放头按帧刷新和真实设备输出质量仍未完成；Miniaudio metadata 同步检查的加载尖峰也仍待 derived cache 化。
+- 资源 rename/import migration 与完整模型 PBR/material/texture/depth/animation 预览仍是后续阶段，不能宣称最终 Unity 级能力已完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

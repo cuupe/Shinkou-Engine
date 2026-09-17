@@ -165,6 +165,7 @@ void EditorUi::shutdown() noexcept {
     regions_.clear();
     regionRects_.clear();
     commandActions_.clear();
+    audioTimelineDurations_.clear();
     tabActions_.clear();
     tabCloseActions_.clear();
     splitterActions_.clear();
@@ -298,6 +299,7 @@ void EditorUi::begin_regions() {
     activeRegions_.clear();
     toolRects_.clear();
     commandActions_.clear();
+    audioTimelineDurations_.clear();
     if (auto* root = runtime_.widget(runtime_.root())) root->children.clear();
     tabActions_.clear();
     tabCloseActions_.clear();
@@ -936,6 +938,28 @@ void EditorUi::activate_region(std::string_view id, ui::Vec2 position) {
         const auto action = commandActions_.find(std::string(id));
         if (action != commandActions_.end() && callbacks_.command)
             callbacks_.command(action->second.command, action->second.target);
+        return;
+    }
+    if (id.rfind("audio-timeline:", 0) == 0) {
+        const auto duration = audioTimelineDurations_.find(std::string(id));
+        const auto bounds = regionRects_.find(std::string(id));
+        if (duration == audioTimelineDurations_.end() || bounds == regionRects_.end() ||
+            duration->second <= 0.0 || bounds->second.width <= 0.0f || !callbacks_.command) return;
+        std::uint64_t objectId = 0;
+        try {
+            std::size_t consumed = 0;
+            const auto text = std::string(id.substr(std::string_view{"audio-timeline:"}.size()));
+            objectId = static_cast<std::uint64_t>(std::stoull(text, &consumed));
+            if (consumed != text.size() || objectId == 0) return;
+        } catch (...) {
+            return;
+        }
+        const auto normalized = std::clamp(
+            (position.x - bounds->second.x) / bounds->second.width, 0.0f, 1.0f);
+        std::ostringstream target;
+        target << "audio-source:" << objectId << ":absolute:" << std::fixed << std::setprecision(6)
+               << static_cast<double>(normalized) * duration->second;
+        callbacks_.command(EditorCommand::MediaSeek, target.str());
         return;
     }
     if (id.rfind("asset-context:", 0) == 0) {
@@ -1798,19 +1822,25 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
     std::shared_ptr<const std::vector<EditorInspectorChoice>> openChoices;
     ui::Rect openChoiceAnchor{};
     std::string openChoiceValue;
-    const float totalHeight = static_cast<float>(model.inspector_fields().size()) * 52.0f + 40 + static_cast<float>(model.component_types().size())*30;
+    float totalHeight = 40.0f + static_cast<float>(model.component_types().size()) * 30.0f;
+    for (const auto& field : model.inspector_fields()) {
+        const bool timeline = field.id.size() >= 14 &&
+            field.id.compare(field.id.size() - 14, 14, ":audioTimeline") == 0;
+        totalHeight += timeline ? 76.0f : 52.0f;
+    }
     inspectorScroll_ = std::clamp(inspectorScroll_, 0.0f, std::max(0.0f,totalHeight-bounds.height));
     float y = bounds.y - inspectorScroll_;
     for (const auto& field : model.inspector_fields()) {
+        const bool audioTimeline = field.id.size() >= 14 &&
+            field.id.compare(field.id.size() - 14, 14, ":audioTimeline") == 0;
+        const float rowHeight = audioTimeline ? 76.0f : 52.0f;
         const auto id = "field:" + field.id;
         inspectorFields_[id] = field;
-        if (y+52 > bounds.y && y < bounds.y+bounds.height) {
+        if (y + rowHeight > bounds.y && y < bounds.y + bounds.height) {
             renderList_.text({bounds.x,y,bounds.width,18}, field.label, color(layout.theme == "light" ? "#59616E" : "#AAB2BE"), 11);
             const ui::Rect input{bounds.x,y+20,bounds.width,26};
             const bool audioTransport = field.id.size() >= 15 &&
                 field.id.compare(field.id.size() - 15, 15, ":audioTransport") == 0;
-            const bool audioTimeline = field.id.size() >= 14 &&
-                field.id.compare(field.id.size() - 14, 14, ":audioTimeline") == 0;
             if (audioTransport) {
                 renderList_.text({bounds.x + bounds.width - 88.0f, y, 88.0f, 18.0f}, field.value,
                                   color(layout.theme == "light" ? "#2E6FBE" : "#8DBBFF"), 10.0f,
@@ -1834,6 +1864,27 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 renderList_.text({bounds.x + bounds.width - 108.0f, y, 108.0f, 18.0f}, field.value,
                                   color(layout.theme == "light" ? "#2E6FBE" : "#8DBBFF"), 10.0f,
                                   {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
+                const auto track = ui::Rect{input.x, input.y, input.width, 10.0f};
+                const auto trackSurface = color(layout.theme == "light" ? "#E1E5EA" : "#303640");
+                const auto trackAccent = color(layout.theme == "light" ? "#2E6FBE" : "#78A9E8");
+                renderList_.rect(track, trackSurface, 4.0f);
+                const bool timelineReady = model.audio_transport_cursor_supported() &&
+                    model.audio_transport_duration_known() && model.audio_transport_duration() > 0.0;
+                if (timelineReady) {
+                    const auto normalized = std::clamp(
+                        static_cast<float>(model.audio_transport_cursor() / model.audio_transport_duration()), 0.0f, 1.0f);
+                    const auto filled = ui::Rect{track.x, track.y, track.width * normalized, track.height};
+                    if (filled.width > 0.0f) renderList_.rect(filled, trackAccent, 4.0f);
+                    const auto markerX = track.x + track.width * normalized;
+                    renderList_.line({markerX, track.y - 2.0f}, {markerX, track.y + track.height + 2.0f}, trackAccent, 1.5f);
+                } else {
+                    renderList_.text(track, model.audio_transport_cursor_supported()
+                        ? "Duration unavailable" : "Timeline unavailable", color("#98A1AD"), 9.0f,
+                        {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+                }
+                const auto timelineId = "audio-timeline:" + std::to_string(model.selected_object());
+                audioTimelineDurations_[timelineId] = timelineReady ? model.audio_transport_duration() : 0.0;
+                set_region(timelineId, track, true);
                 const float gap = 6.0f;
                 const float buttonWidth = std::max(0.0f, (input.width - gap) * 0.5f);
                 const std::string targetBase = "audio-source:" + std::to_string(model.selected_object()) + ":relative:";
@@ -1841,8 +1892,9 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 const auto forward = command_key("media-seek", targetBase + "5");
                 commandActions_[back] = {EditorCommand::MediaSeek, targetBase + "-5"};
                 commandActions_[forward] = {EditorCommand::MediaSeek, targetBase + "5"};
-                draw_button({input.x, input.y, buttonWidth, input.height}, back, "-5 s", layout, false);
-                draw_button({input.x + buttonWidth + gap, input.y, buttonWidth, input.height}, forward, "+5 s", layout, false);
+                const float controlsY = input.y + 18.0f;
+                draw_button({input.x, controlsY, buttonWidth, input.height}, back, "-5 s", layout, false);
+                draw_button({input.x + buttonWidth + gap, controlsY, buttonWidth, input.height}, forward, "+5 s", layout, false);
             } else if (field.boolean && field.editable) draw_button(input,id,field.value == "true" ? "On" : "Off",layout,field.value == "true");
             else if (field.editable && field.choices && !field.choices->empty()) {
                 std::string label = field.value.empty() ? "None" : field.value;
@@ -1858,7 +1910,7 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
             } else if (field.editable) draw_input(input,id,field.value,layout);
             else renderList_.text(input,field.value,color("#98A1AD"),12);
         }
-        y += 52;
+        y += rowHeight;
     }
     if (openChoices && openChoiceAnchor.width > 0.0f) {
         constexpr float rowHeight = 26.0f;
