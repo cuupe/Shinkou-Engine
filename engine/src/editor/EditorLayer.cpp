@@ -4066,10 +4066,11 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     bool audioTransportCursorSupported = false;
     double audioTransportDuration = 0.0;
     bool audioTransportDurationKnown = false;
+    std::shared_ptr<const EditorAudioPreviewSnapshot> audioTransportPreview;
     if (auto* selected = world.find_object(layout_.selectedObject)) {
         selected->each_component([&](Component& component) {
             if (audioTransportComponent != 0) return;
-            if (dynamic_cast<components::AudioSourceComponent*>(&component)) {
+            if (auto* audioSource = dynamic_cast<components::AudioSourceComponent*>(&component)) {
                 audioTransportComponent = component.id();
                 audioTransportState = audioSceneSystem_ && audioSystem_
                     ? audioSceneSystem_->transport_state(selected->id(), *audioSystem_)
@@ -4082,6 +4083,9 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                     audioSceneSystem_->has_duration(selected->id());
                 if (audioTransportDurationKnown)
                     audioTransportDuration = audioSceneSystem_->duration_seconds(selected->id());
+                if (audioPreviewSnapshot_ && audioPreviewSnapshot_->valid() &&
+                    selectedAsset_ == audioSource->clipPath)
+                    audioTransportPreview = audioPreviewSnapshot_;
             }
         });
     }
@@ -4089,6 +4093,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     uiModel_.set_audio_transport_cursor(audioTransportComponent, audioTransportCursor,
                                         audioTransportCursorSupported, audioTransportDuration,
                                         audioTransportDurationKnown);
+    uiModel_.set_audio_transport_preview(std::move(audioTransportPreview));
     { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
     mediaPanel_.update(dt);
     // Asset enumeration is asynchronous and on-demand. Never recursively

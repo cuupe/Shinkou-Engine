@@ -1864,17 +1864,35 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 renderList_.text({bounds.x + bounds.width - 108.0f, y, 108.0f, 18.0f}, field.value,
                                   color(layout.theme == "light" ? "#2E6FBE" : "#8DBBFF"), 10.0f,
                                   {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
-                const auto track = ui::Rect{input.x, input.y, input.width, 10.0f};
+                const auto track = ui::Rect{input.x, input.y, input.width, 14.0f};
                 const auto trackSurface = color(layout.theme == "light" ? "#E1E5EA" : "#303640");
                 const auto trackAccent = color(layout.theme == "light" ? "#2E6FBE" : "#78A9E8");
+                const auto trackMuted = color(layout.theme == "light" ? "#8E98A5" : "#6D7786");
                 renderList_.rect(track, trackSurface, 4.0f);
                 const bool timelineReady = model.audio_transport_cursor_supported() &&
                     model.audio_transport_duration_known() && model.audio_transport_duration() > 0.0;
                 if (timelineReady) {
                     const auto normalized = std::clamp(
                         static_cast<float>(model.audio_transport_cursor() / model.audio_transport_duration()), 0.0f, 1.0f);
-                    const auto filled = ui::Rect{track.x, track.y, track.width * normalized, track.height};
-                    if (filled.width > 0.0f) renderList_.rect(filled, trackAccent, 4.0f);
+                    const auto preview = model.audio_transport_preview();
+                    if (preview && preview->valid()) {
+                        const auto columns = std::min<std::size_t>(preview->peaks.size(),
+                            static_cast<std::size_t>(std::max(1.0f, track.width * 0.5f)));
+                        const float center = track.y + track.height * 0.5f;
+                        const float halfHeight = std::max(1.0f, track.height * 0.5f - 1.0f);
+                        for (std::size_t index = 0; index < columns; ++index) {
+                            const auto source = (index * preview->peaks.size()) / columns;
+                            const float amplitude = std::clamp(preview->peaks[source], 0.0f, 1.0f) * halfHeight;
+                            const float x = track.x + (static_cast<float>(index) + 0.5f) * track.width /
+                                static_cast<float>(columns);
+                            const auto waveformColor = static_cast<float>(index) /
+                                static_cast<float>(columns) <= normalized ? trackAccent : trackMuted;
+                            renderList_.line({x, center - amplitude}, {x, center + amplitude}, waveformColor, 1.0f);
+                        }
+                    } else {
+                        const auto filled = ui::Rect{track.x, track.y, track.width * normalized, track.height};
+                        if (filled.width > 0.0f) renderList_.rect(filled, trackAccent, 4.0f);
+                    }
                     const auto markerX = track.x + track.width * normalized;
                     renderList_.line({markerX, track.y - 2.0f}, {markerX, track.y + track.height + 2.0f}, trackAccent, 1.5f);
                 } else {

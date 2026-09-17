@@ -1001,3 +1001,23 @@
 - 视觉：Windows-first flat surface/accent，track、marker 和文字状态在 dark/light/DPI logical coordinates 下保持可读；通过窗口捕获检查宿主 UI/viewport/asset browser 基线。
 - 失败状态与回滚：duration unknown、cursor unsupported、voice inactive 或非法点击只保留现有不可用状态；回滚可移除 scrubber region 和 absolute parser，保留 4.33 的 duration metadata 与 ±5 秒控制。
 - 下一入口：将异步 waveform/derived metadata snapshot 与场景 timeline 连接，补 streaming buffer/loop/end-of-file 语义；并行推进资源 rename/import migration 和模型材质/纹理/深度/动画预览。
+
+### 第 4.35 子阶段：异步 waveform snapshot 与场景 scrubber 复用
+
+目标：让 AudioSource Inspector 复用已有异步 `EditorAudioPreviewSnapshot`，在不增加场景 voice 或同步解码成本的前提下显示波形；snapshot 的路径/版本不匹配时必须回退到可解释的纯进度标记。
+
+实现范围：
+
+- EditorLayer 仅将当前选中资源、AudioSource `clipPath` 和已完成的 immutable audio preview snapshot 匹配成功时传入 EditorUiModel；Model 只持有 shared immutable pointer，不拥有 decoder、文件句柄或 AudioVoice。
+- scrubber 在 duration/cursor 可用且 snapshot 有效时绘制 bounded peak columns，播放头前后使用不同语义色；没有 snapshot 时继续绘制 marker/filled track，不能在 Inspector paint 中调用 `load_editor_audio_preview`。
+- Media Preview 与 Scene Audio 仍使用独立 target/voice；共享的只是带 source stamp 的只读 waveform 数据。snapshot 更换沿现有 Model revision 触发 retained repaint。
+- 非目标：本轮不改变音频解码格式、不持久化 peaks 到场景 JSON、不自动为未选中的 AudioSource 扫描文件、不实现 streaming buffer/loop/end-of-file 状态机。
+
+审计与验证安排：
+
+- 单元/集成：EditorAudioPreview、UI render 和 EditorInteraction focused CTest；验证 snapshot provider 回归、scene scrubber/absolute seek/NaN guard 回归。
+- 性能：waveform columns 上限由 preview snapshot 与 track width 共同限制，paint 只提交 bounded line commands；shared snapshot 避免每帧分配/复制和重复解码。
+- 安全：只接受已经通过 FileSystemService/project-relative boundary 和 generation/source-stamp 校验的 snapshot；路径不匹配、snapshot invalid 或选中对象改变时立即回退。
+- 视觉：waveform 使用现有 accent/muted tokens，marker 与文本在 dark/light/DPI logical coordinates 下保持层次；capture 只作为宿主链路证据，音频场景截图需要后续专用 fixture。
+- 失败状态与回滚：snapshot future 失败或取消不影响 AudioScene transport；回滚可移除 preview pointer 和 waveform draw，保留 4.34 scrubber marker。
+- 下一入口：构建专用 AudioSource visual fixture，验证真实波形捕获；随后做 streaming buffer/loop/end-of-file 契约，再进入资源 rename/import migration 和模型预览完整性阶段。

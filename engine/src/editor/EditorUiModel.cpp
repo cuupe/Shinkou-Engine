@@ -432,6 +432,13 @@ void EditorUiModel::set_audio_transport_cursor(ComponentId component, double sec
     ++revision_;
 }
 
+void EditorUiModel::set_audio_transport_preview(
+    std::shared_ptr<const EditorAudioPreviewSnapshot> preview) {
+    if (audioTransportPreview_ == preview) return;
+    audioTransportPreview_ = std::move(preview);
+    ++revision_;
+}
+
 void EditorUiModel::execute(EditorCommand command) noexcept {
     lastCommand_ = command;
     if (command == EditorCommand::Play) { playing_ = !playing_; paused_ = false; }

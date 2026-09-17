@@ -1760,6 +1760,38 @@
 - streaming buffer、loop/end-of-file、播放头按帧刷新和真实设备输出质量仍未完成；Miniaudio metadata 同步检查的加载尖峰也仍待 derived cache 化。
 - 资源 rename/import migration 与完整模型 PBR/material/texture/depth/animation 预览仍是后续阶段，不能宣称最终 Unity 级能力已完成。
 
+## 第 4.35 子阶段：异步 waveform snapshot 与场景 scrubber 复用
+
+### 实现与范围
+
+- EditorLayer 将已完成的 immutable `EditorAudioPreviewSnapshot` 传入 EditorUiModel 的场景 transport presentation，但只有 `selectedAsset_ == AudioSource.clipPath` 且 snapshot valid 时才复用；Model 只持有 shared pointer，不创建 decoder/voice。
+- AudioSource scrubber 在 duration/cursor 可用时绘制 bounded peak columns：播放头前使用 accent，播放头后使用 muted token；snapshot 不可用时回退到 4.34 的 filled track/marker，并显示已有的 duration/capability 状态。
+- Media Preview 和 Scene Audio 的 target、句柄、播放状态继续分离；共享边界仅为已完成的只读 waveform snapshot，snapshot pointer 变更由 Model revision 触发 retained repaint。
+- 未新增 scene JSON 字段、Undo 记录、同步文件 IO 或自动扫描未选中的 AudioSource；streaming buffer/loop/end-of-file 仍未在本轮伪装完成。
+
+### 契约与证据
+
+- `shinkou_editor_audio_preview_tests`、`shinkou_ui_render_tests`、`shinkou_editor_interaction_tests` focused CTest `3/3` passed、总计 `15.35 sec`；覆盖 provider、retained renderer 和 scene scrubber/absolute seek/NaN guard 回归。
+- `cmake --build out/build/mingw-debug -j 2` 全目标增量构建通过；新增 pointer 不改变 AudioSystem/AudioSceneSystem ABI 行为，已有 55 项测试集继续作为提交前门禁。
+- 最终全量 CTest：`55/55` passed、0 failures、总计 `37.76 sec`；本轮 snapshot pointer 与 waveform draw 加入后重新验证完成。D3D11/capture 仍沿用 4.34 的宿主链路证据，真实 AudioSource waveform capture 留作下一轮专用 fixture。
+
+### 安全、性能与视觉审计
+
+- snapshot 只能来自已有异步 provider 的 generation/source-stamp 路径；路径不匹配、future 失败/取消、snapshot invalid 都不进入 waveform draw，避免 stale resource 内容显示在别的 AudioSource 上。
+- peak columns 受 snapshot size 和 track width 双重上限约束，paint 只读取共享只读内存并提交有限 line commands；没有每帧 IO、decoder、临时 PCM 缓冲或额外 voice。
+- scrubber waveform 使用既有 flat surface/accent/muted 语义色和 DPI-safe logical geometry；capture 仍只证明宿主壳层，真实 AudioSource waveform 需要专用选中对象 fixture 后再做截图验收。
+
+### 失败状态与回滚路径
+
+- snapshot 不可用时保留 4.34 progress marker，AudioScene transport 不受影响；对象/资源选择切换会通过 Model pointer 清除旧 waveform。
+- 回滚只移除 `audioTransportPreview` pointer 和 waveform branch，保留 4.34 continuous scrubber、absolute parser、duration metadata 和相对控制。
+
+### 未解决风险与下一轮
+
+- 当前 EditorInteraction fixture 的 `preview.wav` 是不可解码占位文件，因此本轮没有真实 AudioSource waveform screenshot；下一轮建立可解码音频 fixture并做专用 capture。
+- streaming buffer、loop/end-of-file、播放头刷新频率和真实设备输出仍未完成；metadata inspection 的同步尖峰仍待 derived cache 化。
+- rename/import migration、完整模型 PBR/material/texture/depth/animation preview 仍未完成，项目尚不能宣称 Unity 级完整能力。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

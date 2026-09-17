@@ -267,6 +267,7 @@ class EditorUiModel {
     bool audioTransportCursorSupported_{false};
     double audioTransportDuration_{0.0};
     bool audioTransportDurationKnown_{false};
+    std::shared_ptr<const EditorAudioPreviewSnapshot> audioTransportPreview_{};
     EditorBuildUiState buildState_{};
     EditorAssetPreviewUiState assetPreview_{};
     EditorMediaUiState mediaState_{};
@@ -303,6 +304,7 @@ public:
     void set_audio_transport_state(ComponentId component, std::string state);
     void set_audio_transport_cursor(ComponentId component, double seconds, bool supported,
                                     double durationSeconds = 0.0, bool durationKnown = false);
+    void set_audio_transport_preview(std::shared_ptr<const EditorAudioPreviewSnapshot> preview);
     void execute(EditorCommand command) noexcept;
     const std::vector<EditorInspectorField>& inspector_fields() const noexcept { return inspectorFields_; }
     const std::vector<std::string>& component_types() const noexcept { return componentTypes_; }
@@ -323,6 +325,9 @@ public:
     double audio_transport_duration() const noexcept { return audioTransportDuration_; }
     bool audio_transport_cursor_supported() const noexcept { return audioTransportCursorSupported_; }
     bool audio_transport_duration_known() const noexcept { return audioTransportDurationKnown_; }
+    const std::shared_ptr<const EditorAudioPreviewSnapshot>& audio_transport_preview() const noexcept {
+        return audioTransportPreview_;
+    }
     std::uint64_t revision() const noexcept { return revision_; }
 };
 
