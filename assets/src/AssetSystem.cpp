@@ -205,6 +205,10 @@ std::string source_extension(std::string_view uri) {
     return extension;
 }
 
+bool is_editor_metadata_path(std::string_view relative) noexcept {
+    return relative == ".shinkou" || relative.rfind(".shinkou/", 0) == 0;
+}
+
 bool describe_png(const std::vector<std::uint8_t>& bytes, std::string& metadata) {
     static constexpr std::uint8_t signature[] = {0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
     if (bytes.size() < 33 || !std::equal(std::begin(signature), std::end(signature), bytes.begin()) ||
@@ -1423,9 +1427,13 @@ std::vector<AssetManifestEntry> AssetSystem::scan_sources() const {
         if (!std::filesystem::exists(mount.physicalRoot, error)) continue;
         for (std::filesystem::recursive_directory_iterator iterator(mount.physicalRoot, error), end;
              iterator != end && !error; iterator.increment(error)) {
-            if (error || !iterator->is_regular_file(error)) continue;
             const auto relative = std::filesystem::relative(iterator->path(), mount.physicalRoot, error).generic_string();
             if (error) continue;
+            if (is_editor_metadata_path(relative)) {
+                if (iterator->is_directory(error)) iterator.disable_recursion_pending();
+                continue;
+            }
+            if (error || !iterator->is_regular_file(error)) continue;
             const auto found = extensions.find(extension_of(relative));
             if (found == extensions.end()) continue;
             const AssetKey key{normalize_uri(mount.virtualRoot + "://" + relative), found->second};

@@ -1959,6 +1959,42 @@
 - 文件 rename/delete 尚未拥有跨 filesystem + World 的可恢复事务 history；批量操作报告、失败重试和用户确认语义仍需设计。
 - streaming buffer/loop/end-of-file、播放头刷新预算、异步 duration cache、多 DPI/主题视觉矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成，项目仍不能宣称最终 Unity 级能力已完成。
 
+## 第 4.41 子阶段：可恢复的项目文件事务历史
+
+### 实现与范围
+
+- `EditorLayer` 增加 `EditHistoryKind::File` marker，与原有 World `EditorDocument` snapshot 共用 Undo/Redo 顺序；文件事务不会被误当成场景快照，也不会在回放时重复入栈。
+- Rename 记录 source/destination；Delete 改为通过 `FileSystemService::rename` 移到 `.shinkou/recycle/<serial>/<filename>`，保留操作、选中资源和 Asset Browser 目录上下文。Undo 将其移回原路径，Redo 再次移入回收区。
+- 文件回放重新执行 live reference invalidation/remap、未加载 scene/prefab migration、selection/asset-directory 更新和 AssetSystem manifest refresh；`replayingFileOperation_` 防止内部迁移清空当前 history。
+- `AssetSystem::scan_sources` 遇到 `.shinkou` 目录时禁用递归，回收文件、缓存、manifest 和 build profile 不会成为 manifest 资源。
+- EditorInteraction 增加回收区、manifest 隔离、文件 Undo 恢复并 rebind、文件 Redo 再删除的真实断言；测试中重新获取当前 World reference，避免场景快照 restore 后使用失效对象指针。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug --target shinkou_editor_interaction_tests -j 2` 通过。
+- 聚焦 CTest：`shinkou_editor_interaction_tests` `1/1 passed`，总计 `42.90 sec`；覆盖资源浏览器 Delete、recycle entry、AssetSystem metadata isolation、Undo restore/rebind、Redo recycle/invalidate、未加载 prefab migration 和现有 UI/音频/模型/构建集成回归。
+- 最终全量构建 `cmake --build out/build/mingw-debug -j 2` 通过；全量 CTest `57/57 passed`、0 failures，总计 `40.00 sec`。本轮工作区并行 Physics 增加了第 57 个测试，但未被本轮提交吸收。
+- AssetSystem 直接重扫验证 `assets/Folder-extra.txt` 恢复后仍产生稳定原始 AssetId；EditorLayer immutable manifest snapshot 同样公开并匹配 canonical source path，排除了“清零后随机恢复”误判。
+- 视觉/渲染链路没有改动；状态通过 retained Project Browser、状态栏和 Console 现有路径承载，D3D11 4.37 baseline 继续有效。
+
+### 安全、性能与视觉审计
+
+- 回收路径由编辑器生成在项目根内，仍经过 canonical boundary；用户输入只决定已验证 source path，不能把目标写到项目外或执行进程命令。
+- Delete 变成可逆 rename，原始数据不在当前会话的历史窗口内被直接销毁；旧 file history 被新文件事务清空时才移除其回收项，Undo/Redo 分支失效语义明确。
+- `.shinkou` 在 AssetSystem 源扫描中被隔离，防止回收/缓存污染资源类型和 AssetId；Editor asset browser 默认从 `assets` 目录扫描，布局与命中区域不变。
+- 文件事务回放只在命令边界进行 IO、World pass 和 manifest refresh；paint、renderer、preview decoder、audio voice 不承担文件历史工作。
+
+### 失败状态与回滚路径
+
+- 回收移动、恢复或重做失败时 operation 留在原 history 栈，引用迁移不会继续伪装成功；资产文档写入失败保留原内容并记录审计错误。
+- 新的场景编辑清理 file redo branch，避免用户在新编辑后恢复旧文件状态；`.shinkou/recycle` 中的孤立内容尚未做跨会话治理，但不会进入 AssetSystem manifest。
+- 回滚可删除 File history/recycle 逻辑并回到物理删除，但这会重新引入不可恢复风险，因此只作为应急兼容方案，不是目标状态。
+
+### 未解决风险与下一轮
+
+- history 目前是进程内的线性栈，尚未跨会话持久化；回收项需要启动时治理、空间上限和用户可见的恢复/永久清理面板。
+- 批量文件操作、并发外部修改冲突、streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题矩阵和完整模型 PBR/material/texture/depth/animation 仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

@@ -1121,3 +1121,25 @@
 - 视觉/交互：成功恢复/无法恢复均通过既有状态栏和 Inspector identity 文案呈现，不改变 retained layout、DPI geometry 或 backend seam。
 - 失败状态与回滚：manifest 不可用时保持 0 并等待；路径不存在时保留 missing-reference path；回滚可移除 rebind 调用，4.39 的安全清零和结构化路径迁移仍成立。
 - 下一入口：加入文件操作 history 的事务模型和可恢复报告，再推进 streaming buffer/loop/end-of-file、播放头预算、视觉矩阵以及模型导入材质/纹理/动画能力。
+
+### 第 4.41 子阶段：可恢复的项目文件事务历史
+
+目标：让 Project Browser 的 Rename/Delete 与场景编辑共享一条有顺序的 Undo/Redo 历史；删除必须可恢复，回收内容不能污染 AssetSystem manifest。
+
+实现范围：
+
+- 新增 File history marker，与既有 World `EditorDocument` snapshot 共同维护线性 Undo/Redo 顺序；Ctrl+Z/Ctrl+Y 根据最近事务类型恢复场景或文件。
+- Rename 记录 source/destination；Delete 不再物理删除，而是把资源原子移动到 `.shinkou/recycle/<operation>/<filename>`，记录原路径、回收路径、选中资源和目录状态，Undo 恢复、Redo 再次回收。
+- 文件 Undo/Redo 重新执行 live reference migration、未加载文档 migration、manifest refresh 和 selection/asset-directory 更新；内部回放不会把自己再次压入历史。
+- AssetSystem 扫描跳过 `.shinkou` 编辑器元数据目录，避免回收文件、缓存、manifest 和 build profile 变成用户资源；删除仍保留 missing-reference path，恢复后由 manifest canonical path 重新绑定 ID。
+- 非目标：本轮不实现跨进程持久化 history、不把任意外部文件移入项目、不在用户未确认时永久清理 recycle 内容；持久化操作日志和跨会话恢复另行规划。
+
+审计与验证安排：
+
+- 集成：EditorInteraction 通过真实资源 Delete，断言原文件消失、recycle entry 存在、`.shinkou` 不进入 AssetSystem manifest；真实 Undo 断言文件恢复和 AssetId rebind，Redo 断言再次回收和 ID 失效。
+- 场景历史：保留文件事务前后的 scene Undo/Redo 语义，验证新场景编辑会清理 file redo 分支，避免恢复已被新编辑覆盖的文件状态。
+- 安全：回收路径由 editor 生成且仍通过 FileSystemService project-root boundary；只允许项目内 rename，不使用 shell、不执行任意删除；回收目录与资源扫描隔离。
+- 性能：Rename/Delete 仍只做一次 bounded World/document pass；Undo/Redo 不在 paint 中做 IO，manifest/preview 继续走既有异步边界。
+- 视觉/交互：状态栏和 Console 明确显示 `Undo to restore`/`recoverable`；不改变 Project Browser retained layout、快捷键路由、DPI geometry 或 renderer seam。
+- 失败状态与回滚：回收移动或恢复失败时保留历史项、报告错误且不修改引用；迁移失败不覆盖文档；回滚可退回物理删除实现，但将明确失去可恢复性，不作为长期目标。
+- 下一入口：跨会话操作日志/回收区治理，然后推进 streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题矩阵与完整模型材质/纹理/动画预览。

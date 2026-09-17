@@ -142,6 +142,17 @@ class EditorLayer {
         std::string firstError;
     };
 
+    enum class EditHistoryKind : std::uint8_t { Scene, File };
+    struct FileOperation {
+        enum class Kind : std::uint8_t { Rename, RecycleDelete };
+        Kind kind{Kind::Rename};
+        std::string sourcePath;
+        std::string destinationPath;
+        std::string recyclePath;
+        std::string selectedAssetBefore;
+        std::filesystem::path assetDirectoryBefore;
+    };
+
     struct AsyncModelSceneAsset {
         std::uint64_t generation{0};
         std::uint64_t sourceStamp{0};
@@ -308,11 +319,19 @@ class EditorLayer {
     float orbitDistance_{5.0f};
     void navigate_viewport(ViewportNavigation action, math::Vec2 delta);
     std::vector<EditorDocument> undo_, redo_;
+    std::vector<FileOperation> fileUndo_, fileRedo_;
+    std::vector<EditHistoryKind> undoHistory_, redoHistory_;
+    std::uint64_t fileOperationSerial_{0};
+    bool replayingFileOperation_{false};
     bool sceneDirty_{false};
     bool stepPending_{false};
     bool quitRequested_{false};
     std::string scenePath_{"assets/Scenes/Untitled.scene"};
     bool checkpoint(World& world);
+    void reset_edit_history_for_file_operation();
+    void record_file_operation(FileOperation operation);
+    std::filesystem::path make_recycle_path(std::string_view source);
+    bool apply_file_operation(FileOperation& operation, bool forward, std::string& error);
     bool edit_field(std::string_view id, std::string_view value);
     bool dispatch_audio_source_transport(EditorCommand command, std::string_view target, World& world);
     void document_changed(bool preserveRedo = false);
@@ -522,6 +541,10 @@ public:
     const EditorAssetPreviewUiState& asset_preview() const noexcept { return assetPreviewState_; }
     std::size_t asset_system_manifest_count() const noexcept {
         return assetManifest_ ? assetManifest_->size() : 0;
+    }
+    const std::vector<assets::AssetManifestEntry>& asset_system_manifest() const noexcept {
+        static const std::vector<assets::AssetManifestEntry> empty;
+        return assetManifest_ ? *assetManifest_ : empty;
     }
     const std::string& asset_system_manifest_status() const noexcept { return assetManifestStatus_; }
 };

@@ -854,7 +854,62 @@ int main() {
         });
         require(!std::filesystem::exists(project / "assets/Folder-extra.txt") && deletedReferenceInvalidated,
                 "asset delete did not invalidate the live reference identity");
+        bool recycledDeleteFound = false;
+        if (std::filesystem::exists(project / ".shinkou" / "recycle")) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(project / ".shinkou" / "recycle")) {
+                if (entry.path().filename() == "Folder-extra.txt") recycledDeleteFound = true;
+            }
+        }
+        require(recycledDeleteFound, "asset delete did not retain a recoverable recycle entry");
+        for (const auto& entry : resourceSystem.scan_sources()) {
+            const auto relative = std::filesystem::relative(entry.sourcePath, project).generic_string();
+            require(relative.rfind(".shinkou/", 0) != 0,
+                    "editor recycle metadata leaked into the AssetSystem manifest");
+        }
         require_unloaded_reference("assets/Folder-extra.txt");
+        AssetReferenceComponent* currentDeletedReference = nullptr;
+        world.each_object([&](GameObject& object) {
+            auto* reference = object.get_component<AssetReferenceComponent>();
+            if (reference && reference->path() == "assets/Folder-extra.txt") currentDeletedReference = reference;
+        });
+        require(currentDeletedReference != nullptr, "live delete reference disappeared before file Undo");
+        editor.execute_command(EditorCommand::Undo, {}, world);
+        require(std::filesystem::exists(project / "assets/Folder-extra.txt"),
+                "file Undo did not restore the deleted resource");
+        for (int i = 0; i < 400 &&
+                    (currentDeletedReference->asset_id() == 0 || editor.asset_system_manifest_count() == 0); ++i) {
+            tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        assets::AssetId restoredManifestId = 0;
+        for (const auto& entry : resourceSystem.scan_sources()) {
+            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
+                "assets/Folder-extra.txt") restoredManifestId = entry.id;
+        }
+        assets::AssetId editorManifestId = 0;
+        std::string editorManifestUri;
+        std::string editorManifestType;
+        for (const auto& entry : editor.asset_system_manifest()) {
+            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
+                "assets/Folder-extra.txt") {
+                editorManifestId = entry.id;
+                editorManifestUri = entry.key.uri;
+                editorManifestType = entry.key.type;
+            }
+        }
+        require(currentDeletedReference->asset_id() == folderExtraAssetId,
+                ("file Undo did not rebind the restored resource identity: id=" +
+                 std::to_string(currentDeletedReference->asset_id()) +
+                 " expected=" + std::to_string(folderExtraAssetId) +
+                 " rescanned=" + std::to_string(restoredManifestId) +
+                 " editor=" + std::to_string(editorManifestId) +
+                 " uri=" + editorManifestUri + " type=" + editorManifestType +
+                 " manifest=" + std::to_string(editor.asset_system_manifest_count()) +
+                 " status=" + editor.asset_system_manifest_status()).c_str());
+        editor.execute_command(EditorCommand::Redo, {}, world);
+        require(!std::filesystem::exists(project / "assets/Folder-extra.txt") &&
+                    currentDeletedReference->asset_id() == 0,
+                "file Redo did not reapply the recoverable delete");
         for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
             tick();
             std::this_thread::sleep_for(std::chrono::milliseconds(2));

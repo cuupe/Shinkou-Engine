@@ -1230,12 +1230,112 @@ bool EditorLayer::checkpoint(World& world) {
     EditorDocument document; std::string error;
     if (!EditorDocument::capture(world, layout_.selectedObject, document, error)) { lastStatus_ = error; return false; }
     undo_.push_back(std::move(document));
-    if (undo_.size() > 64) undo_.erase(undo_.begin());
+    undoHistory_.push_back(EditHistoryKind::Scene);
+    if (undo_.size() > 64) {
+        undo_.erase(undo_.begin());
+        const auto marker = std::find(undoHistory_.begin(), undoHistory_.end(), EditHistoryKind::Scene);
+        if (marker != undoHistory_.end()) undoHistory_.erase(marker);
+    }
+    return true;
+}
+
+void EditorLayer::reset_edit_history_for_file_operation() {
+    for (const auto& operation : fileUndo_) {
+        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
+            fileSystem_.remove(operation.recyclePath);
+    }
+    for (const auto& operation : fileRedo_) {
+        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
+            fileSystem_.remove(operation.recyclePath);
+    }
+    undo_.clear();
+    redo_.clear();
+    fileUndo_.clear();
+    fileRedo_.clear();
+    undoHistory_.clear();
+    redoHistory_.clear();
+}
+
+void EditorLayer::record_file_operation(FileOperation operation) {
+    // A new filesystem transaction starts a new linear edit branch. Old
+    // recycle entries are removed with the discarded branch; the active
+    // operation is recorded only after its filesystem move has succeeded.
+    reset_edit_history_for_file_operation();
+    fileUndo_.push_back(std::move(operation));
+    undoHistory_.push_back(EditHistoryKind::File);
+}
+
+std::filesystem::path EditorLayer::make_recycle_path(std::string_view source) {
+    const auto normalized = normalized_project_path(source);
+    const auto filename = std::filesystem::u8path(normalized).filename().generic_string();
+    const auto serial = std::to_string(++fileOperationSerial_);
+    return std::filesystem::u8path(".shinkou/recycle/" + serial + "/" + filename);
+}
+
+bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, std::string& error) {
+    replayingFileOperation_ = true;
+    bool applied = false;
+    if (operation.kind == FileOperation::Kind::Rename) {
+        const auto from = forward ? operation.sourcePath : operation.destinationPath;
+        const auto to = forward ? operation.destinationPath : operation.sourcePath;
+        if (fileSystem_.rename(from, to, &error)) {
+            const auto fromPath = normalized_project_path(from);
+            const auto toPath = normalized_project_path(to);
+            remap_live_asset_references(fromPath, toPath);
+            migrate_asset_documents(fromPath, toPath, false);
+            if (path_is_or_below(selectedAsset_, fromPath))
+                set_selected_asset(remap_project_path(selectedAsset_, fromPath, toPath));
+            if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), fromPath)) {
+                assetDirectory_ = std::filesystem::u8path(remap_project_path(
+                    assetDirectory_.generic_string(), fromPath, toPath));
+                editorUi_.set_asset_directory(assetDirectory_);
+            }
+            applied = true;
+        }
+    } else if (forward) {
+        if (fileSystem_.rename(operation.sourcePath, operation.recyclePath, &error)) {
+            invalidate_live_asset_references(operation.sourcePath);
+            migrate_asset_documents(operation.sourcePath, {}, true);
+            if (path_is_or_below(selectedAsset_, operation.sourcePath)) set_selected_asset({});
+            if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), operation.sourcePath)) {
+                assetDirectory_.clear();
+                editorUi_.set_asset_directory(assetDirectory_);
+            }
+            applied = true;
+        }
+    } else {
+        if (fileSystem_.rename(operation.recyclePath, operation.sourcePath, &error)) {
+            invalidate_live_asset_references(operation.sourcePath);
+            migrate_asset_documents(operation.sourcePath, {}, true);
+            if (!operation.selectedAssetBefore.empty()) set_selected_asset(operation.selectedAssetBefore);
+            if (!operation.assetDirectoryBefore.empty()) {
+                assetDirectory_ = operation.assetDirectoryBefore;
+                editorUi_.set_asset_directory(assetDirectory_);
+            }
+            applied = true;
+        }
+    }
+    replayingFileOperation_ = false;
+    if (!applied) return false;
+    reset_asset_manifest("AssetSystem manifest refresh requested");
+    ++fileScanGeneration_;
+    assetsDirty_ = true;
+    sceneDirty_ = true;
+    uiModel_.invalidate();
+    editorUi_.invalidate_layout();
     return true;
 }
 
 void EditorLayer::document_changed(bool preserveRedo) {
-    if (!preserveRedo) redo_.clear();
+    if (!preserveRedo) {
+        redo_.clear();
+        for (const auto& operation : fileRedo_) {
+            if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
+                fileSystem_.remove(operation.recyclePath);
+        }
+        fileRedo_.clear();
+        redoHistory_.clear();
+    }
     sceneDirty_ = true;
     selectedAsset_.clear(); editorUi_.select_asset({});
     uiModel_.select_object(layout_.selectedObject); uiModel_.invalidate();
@@ -1297,7 +1397,12 @@ bool EditorLayer::edit_field(std::string_view id, std::string_view value) {
         }
     }
     if (!apply || !checkpoint(*activeWorld_)) return false;
-    if (!apply()) { undo_.pop_back(); lastStatus_ = "Invalid property value or range"; return false; }
+    if (!apply()) {
+        undo_.pop_back();
+        if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
+        lastStatus_ = "Invalid property value or range";
+        return false;
+    }
     document_changed(); lastStatus_ = "Property updated"; return true;
 }
 
@@ -1604,14 +1709,45 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::Step: stepPending_ = true; lastStatus_ = "Advance one simulation frame"; break;
     case EditorCommand::Undo:
     case EditorCommand::Redo: {
-        auto& source = command == EditorCommand::Undo ? undo_ : redo_;
-        auto& destination = command == EditorCommand::Undo ? redo_ : undo_;
-        if (source.empty()) { lastStatus_ = "No edit history"; break; }
-        EditorDocument current; std::string error;
-        if (!EditorDocument::capture(world, layout_.selectedObject, current, error) ||
-            !source.back().restore(world, layout_.selectedObject, error)) { lastStatus_ = error; break; }
-        destination.push_back(std::move(current)); source.pop_back();
-        document_changed(true); lastStatus_ = command == EditorCommand::Undo ? "Edit undone" : "Edit redone"; break;
+        const bool undo = command == EditorCommand::Undo;
+        auto& sourceHistory = undo ? undoHistory_ : redoHistory_;
+        auto& destinationHistory = undo ? redoHistory_ : undoHistory_;
+        if (sourceHistory.empty()) { lastStatus_ = "No edit history"; break; }
+        const auto kind = sourceHistory.back();
+        if (kind == EditHistoryKind::Scene) {
+            auto& source = undo ? undo_ : redo_;
+            auto& destination = undo ? redo_ : undo_;
+            if (source.empty()) { lastStatus_ = "Scene edit history is unavailable"; break; }
+            EditorDocument current; std::string error;
+            if (!EditorDocument::capture(world, layout_.selectedObject, current, error) ||
+                !source.back().restore(world, layout_.selectedObject, error)) {
+                lastStatus_ = error;
+                break;
+            }
+            destination.push_back(std::move(current));
+            source.pop_back();
+            sourceHistory.pop_back();
+            destinationHistory.push_back(EditHistoryKind::Scene);
+            document_changed(true);
+            lastStatus_ = undo ? "Edit undone" : "Edit redone";
+        } else {
+            auto& source = undo ? fileUndo_ : fileRedo_;
+            auto& destination = undo ? fileRedo_ : fileUndo_;
+            if (source.empty()) { lastStatus_ = "File edit history is unavailable"; break; }
+            auto operation = std::move(source.back());
+            std::string error;
+            if (!apply_file_operation(operation, !undo, error)) {
+                lastStatus_ = (undo ? "File undo failed: " : "File redo failed: ") + error;
+                break;
+            }
+            source.pop_back();
+            destination.push_back(std::move(operation));
+            sourceHistory.pop_back();
+            destinationHistory.push_back(EditHistoryKind::File);
+            lastStatus_ = undo ? "File operation undone" : "File operation redone";
+            push_console(lastStatus_);
+        }
+        break;
     }
     case EditorCommand::NewScene: {
         if (!checkpoint(world)) break;
@@ -1625,7 +1761,12 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         std::string json, error; EditorDocument next;
         if (!fileSystem_.read_text(path, json, &error) || !EditorDocument::from_json(json, next, error)) { lastStatus_ = "Open failed: " + error; break; }
         if (!checkpoint(world)) break;
-        if (!next.restore(world, layout_.selectedObject, error)) { undo_.pop_back(); lastStatus_ = "Open failed: " + error; break; }
+        if (!next.restore(world, layout_.selectedObject, error)) {
+            undo_.pop_back();
+            if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
+            lastStatus_ = "Open failed: " + error;
+            break;
+        }
         scenePath_ = path;
         document_changed();
         sceneDirty_ = false;
@@ -1667,7 +1808,12 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         if (!object) { lastStatus_ = "Select an object first"; break; }
         if (target.empty()) { set_panel_visible("inspector", true); lastStatus_ = "Choose a component in Inspector"; break; }
         if (!checkpoint(world)) break;
-        if (!object->add_component(target)) { undo_.pop_back(); lastStatus_ = "Component is unknown or already attached"; break; }
+        if (!object->add_component(target)) {
+            undo_.pop_back();
+            if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
+            lastStatus_ = "Component is unknown or already attached";
+            break;
+        }
         document_changed(); lastStatus_ = "Added " + std::string(target); break;
     }
     case EditorCommand::DeleteObject: {
@@ -1776,8 +1922,7 @@ std::size_t EditorLayer::remap_live_asset_references(std::string_view from,
     // A filesystem transaction cannot be represented by EditorDocument's
     // world-only snapshots. Discard snapshots that still contain the old
     // path instead of allowing Undo to restore broken references.
-    undo_.clear();
-    redo_.clear();
+    if (!replayingFileOperation_) reset_edit_history_for_file_operation();
     sceneDirty_ = true;
     uiModel_.invalidate();
     editorUi_.invalidate_layout();
@@ -1806,8 +1951,7 @@ std::size_t EditorLayer::invalidate_live_asset_references(std::string_view path)
     });
     if (changed == 0) return 0;
 
-    undo_.clear();
-    redo_.clear();
+    if (!replayingFileOperation_) reset_edit_history_for_file_operation();
     sceneDirty_ = true;
     uiModel_.invalidate();
     editorUi_.invalidate_layout();
@@ -3457,6 +3601,10 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         }
         const auto oldPath = normalized_project_path(path);
         const auto newPath = normalized_project_path(target.generic_string());
+        FileOperation operation;
+        operation.kind = FileOperation::Kind::Rename;
+        operation.sourcePath = oldPath;
+        operation.destinationPath = newPath;
         const auto remappedReferences = remap_live_asset_references(oldPath, newPath);
         const auto migratedDocuments = migrate_asset_documents(oldPath, newPath, false);
         if (path_is_or_below(selectedAsset_, oldPath))
@@ -3481,6 +3629,8 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
             if (!migratedDocuments.firstError.empty()) push_console(
                 "Unloaded document migration audit: " + migratedDocuments.firstError);
         }
+        record_file_operation(std::move(operation));
+        lastStatus_ += " (Undo to restore)";
         break;
     }
     case EditorAssetAction::NewFolder: {
@@ -3502,12 +3652,20 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         break;
     }
     case EditorAssetAction::Delete:
-        if (!fileSystem_.remove(path, &error)) {
+        {
+        const auto normalizedPath = normalized_project_path(path);
+        FileOperation operation;
+        operation.kind = FileOperation::Kind::RecycleDelete;
+        operation.sourcePath = normalizedPath;
+        operation.recyclePath = make_recycle_path(normalizedPath).generic_string();
+        operation.selectedAssetBefore = selectedAsset_;
+        operation.assetDirectoryBefore = assetDirectory_;
+        if (!fileSystem_.ensure_directory(std::filesystem::path(operation.recyclePath).parent_path(), &error) ||
+            !fileSystem_.rename(normalizedPath, operation.recyclePath, &error)) {
             lastStatus_ = "Delete failed: " + error;
             push_console(lastStatus_);
             return;
         }
-        const auto normalizedPath = normalized_project_path(path);
         const auto invalidatedReferences = invalidate_live_asset_references(path);
         const auto migratedDocuments = migrate_asset_documents(normalizedPath, {}, true);
         if (path_is_or_below(selectedAsset_, normalizedPath)) set_selected_asset({});
@@ -3530,7 +3688,10 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
             if (!migratedDocuments.firstError.empty()) push_console(
                 "Unloaded document migration audit: " + migratedDocuments.firstError);
         }
+        record_file_operation(std::move(operation));
+        lastStatus_ += " (recoverable; Undo to restore)";
         break;
+        }
     }
     push_console(lastStatus_);
 }
@@ -3626,6 +3787,7 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
     auto* transform = object.get_component<components::TransformComponent>();
     if (!reference || !transform) {
         undo_.pop_back();
+        if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
         object.destroy();
         lastStatus_ = "Drop failed: could not create the asset reference object";
         push_console(lastStatus_);
