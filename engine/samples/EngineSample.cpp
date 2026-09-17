@@ -1,6 +1,8 @@
 #include "shinkou/Engine.h"
 #include "shinkou/physics/SimplePhysicsWorld.h"
 #include "shinkou/render/RenderScene.h"
+#include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -34,6 +36,61 @@ struct DemoObject final : shinkou::SceneObject {
     float angle{0};
     void update(shinkou::Seconds dt) override { angle += dt; }
 };
+
+void append_wav_u16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
+    bytes.push_back(static_cast<std::uint8_t>(value & 0xffu));
+    bytes.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xffu));
+}
+
+void append_wav_u32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+    for (unsigned shift = 0; shift < 32; shift += 8)
+        bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffu));
+}
+
+bool write_audio_fixture(const std::filesystem::path& path) {
+    constexpr std::uint32_t sampleRate = 8000;
+    constexpr std::uint16_t channels = 1;
+    constexpr std::uint16_t bits = 16;
+    constexpr std::uint32_t sampleCount = 8000;
+    constexpr std::uint32_t dataBytes = sampleCount * channels * bits / 8u;
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(44u + dataBytes);
+    const auto chunk = [&bytes](const char* text) {
+        for (int index = 0; index < 4; ++index)
+            bytes.push_back(static_cast<std::uint8_t>(text[index]));
+    };
+    chunk("RIFF");
+    append_wav_u32(bytes, 36u + dataBytes);
+    chunk("WAVE");
+    chunk("fmt ");
+    append_wav_u32(bytes, 16u);
+    append_wav_u16(bytes, 1u);
+    append_wav_u16(bytes, channels);
+    append_wav_u32(bytes, sampleRate);
+    append_wav_u32(bytes, sampleRate * channels * bits / 8u);
+    append_wav_u16(bytes, channels * bits / 8u);
+    append_wav_u16(bytes, bits);
+    chunk("data");
+    append_wav_u32(bytes, dataBytes);
+    for (std::uint32_t index = 0; index < sampleCount; ++index) {
+        const auto section = index / 1000u;
+        const auto sample = section % 2u == 0u ? 26000 : -26000;
+        append_wav_u16(bytes, static_cast<std::uint16_t>(sample));
+    }
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) return false;
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return file.good();
+}
+
+struct AudioFixtureCleanup final {
+    std::filesystem::path root;
+    ~AudioFixtureCleanup() {
+        if (root.empty()) return;
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+};
 }
 
 int main(int argc, char** argv) {
@@ -44,6 +101,7 @@ int main(int argc, char** argv) {
     bool framesRequested = false;
     bool explicitBackend = false;
     bool themeRequested = false;
+    bool audioFixtureRequested = false;
     std::string editorTheme = "dark";
     shinkou::editor::EditorAssetView assetView = shinkou::editor::EditorAssetView::Tree;
     bool assetViewRequested = false;
@@ -54,6 +112,7 @@ int main(int argc, char** argv) {
         recoverRequested |= argument == "recover";
         editorRequested |= argument == "--editor";
         if (argument == "--sample" || argument == "--no-editor") editorRequested = false;
+        if (argument == "--audio-fixture") audioFixtureRequested = true;
         if (argument == "--project" && i + 1 < argc) projectRoot = argv[++i];
         if (argument == "--theme" && i + 1 < argc) { editorTheme = argv[++i]; themeRequested = true; }
         if (argument == "--asset-view" && i + 1 < argc) {
@@ -80,6 +139,21 @@ int main(int argc, char** argv) {
             requestedFrames = std::strtoull(argv[i + 1], nullptr, 10);
         }
     }
+    AudioFixtureCleanup audioFixtureCleanup;
+    if (audioFixtureRequested) {
+        editorRequested = true;
+        const auto suffix = std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        audioFixtureCleanup.root = std::filesystem::temp_directory_path() /
+            ("shinkou-editor-audio-visual-" + suffix);
+        std::error_code fixtureError;
+        std::filesystem::create_directories(audioFixtureCleanup.root / "assets", fixtureError);
+        if (fixtureError || !write_audio_fixture(audioFixtureCleanup.root / "assets/preview.wav")) {
+            std::cerr << "audio visual fixture creation failed\n";
+            return 2;
+        }
+        projectRoot = audioFixtureCleanup.root.string();
+    }
     // The retained UIKit renderer currently has a native Windows compositor
     // only on D3D11. Keep the sample convenient: editor mode shows UI on a
     // normal double-click/"--editor" launch while explicit backend arguments
@@ -89,6 +163,7 @@ int main(int argc, char** argv) {
         if (projectRoot.empty()) projectRoot = std::filesystem::current_path().string();
         config.editorProjectRoot = projectRoot;
     }
+    if (audioFixtureRequested) config.audio.startDevice = false;
     if (editorRequested && !framesRequested) requestedFrames = 0;
     config.editor = editorRequested;
     if (config.editor) config.window.title = "ShinkouEngine Editor";
@@ -96,6 +171,39 @@ int main(int argc, char** argv) {
     if (!engine.initialize()) return 1;
     if (editorRequested && themeRequested) engine.editor().set_theme(editorTheme);
     if (editorRequested && assetViewRequested) engine.editor().set_asset_view(assetView);
+
+    if (audioFixtureRequested) {
+        std::uint64_t fixtureAssetId = 0;
+        for (const auto& entry : engine.assets().scan_sources()) {
+            if (entry.key.type == "audio" && entry.sourcePath.filename() == "preview.wav") {
+                fixtureAssetId = entry.id;
+                break;
+            }
+        }
+        if (fixtureAssetId == 0) {
+            std::cerr << "audio visual fixture was not indexed\n";
+            engine.shutdown();
+            return 2;
+        }
+        engine.editor().execute_command(shinkou::editor::EditorCommand::CreateEmpty, {}, engine.world());
+        auto* fixtureObject = engine.world().find_object(engine.editor().layout().selectedObject);
+        auto* audioSource = fixtureObject
+            ? fixtureObject->add_component<shinkou::components::AudioSourceComponent>() : nullptr;
+        if (!fixtureObject || !audioSource) {
+            std::cerr << "audio visual fixture object creation failed\n";
+            engine.shutdown();
+            return 2;
+        }
+        fixtureObject->set_name("Audio Source Fixture");
+        audioSource->clipPath = "assets/preview.wav";
+        audioSource->assetId = fixtureAssetId;
+        audioSource->playOnStart = true;
+        audioSource->loop = true;
+        engine.editor().execute_command(
+            shinkou::editor::EditorCommand::SaveScene, "AudioSourceFixture.scene", engine.world());
+        std::cerr << "editor-audio-fixture=1 object=" << fixtureObject->id()
+                  << " asset=" << fixtureAssetId << " path=assets/preview.wav\n";
+    }
 
     engine.world().add_object<DemoObject>();
     // Seed the editor's World Outliner with a small real hierarchy so the

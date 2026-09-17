@@ -1041,3 +1041,23 @@
 - 视觉：Inspector 继续使用 flat surface/accent/muted token、现有 76 logical px Timeline 行和 DPI-safe region；专用截图下一轮再补，当前先用 retained command 证据避免把 Media/host 截图误称为 AudioSource 波形截图。
 - 失败状态与回滚：decoder 不可用、path 缺失、future 取消或 snapshot 失配时回退 4.34 的 marker/filled track；回滚只需移除组件路径请求和 waveform branch，保留 duration/seek contract。
 - 下一入口：专用可选中 AudioSource 的 D3D11 visual fixture；其后定义 streaming buffer/loop/end-of-file 与 playback-head refresh contract，再进入资源 rename/import migration 和模型预览完整性阶段。
+
+### 第 4.37 子阶段：AudioSource D3D11 visual fixture 与窗口证据
+
+目标：建立不污染默认样例、可由 capture 工具重复启动的 AudioSource 视觉 fixture，把真实 PCM 文件、AssetSystem identity、AudioScene duration、EditorLayer 异步 waveform 和最终 D3D11 窗口像素放进同一条可审计流程。
+
+实现范围：
+
+- `shinkou_engine_sample --audio-fixture` 在临时 project root 生成 1 秒 16-bit mono PCM WAV，扫描 AssetSystem 获得 AssetId，创建并选中 `Audio Source Fixture`，绑定 `assets/preview.wav`，保存临时 scene 以避免关闭时出现未保存确认框。
+- `docs/AudioSourceVisualCapture.script` 只通过现有 targeted Win32 input route 滚动 Inspector 并触发 capture；不注入 editor command、不绕过 SDL/InputSystem，也不改变默认 sample 启动行为。
+- capture 使用绝对 output/script 路径，要求 `EngineGpuReadback` 和 1280×720 client surface；fixture 结束后正常析构并清理临时 project root。
+- 非目标：本轮不把测试 fixture 固化为用户项目内容，不加入默认场景，不修改 renderer backend presentation contract，不实现 streaming buffer/loop/end-of-file 状态机。
+
+审计与验证安排：
+
+- 运行证据：记录 fixture object/AssetId、AssetSystem manifest ready、GPU surface dimensions、capture script steps 和最终 BMP；视觉检查必须能同时看到 Hierarchy 选中对象、Asset Browser 的 WAV、Inspector Timeline 波形以及 `0.00 / 1.00 s` duration。
+- 安全：fixture path 固定在临时目录并由 RAII 清理；capture 子进程只接收显式 sample flags；脚本操作经过现有 window/input bridge，不读写用户项目。
+- 性能：WAV 仅 1 秒且峰值采样仍走现有异步 provider；capture 运行 186 frames 后退出，未新增每帧解码或场景 voice。
+- 视觉：验证 dark Windows-first shell、1280×720、DPI 144 / logical scale 1.5、Inspector 滚动后的 Timeline、accent/muted waveform 和 asset icon。
+- 失败状态与回滚：fixture 创建/索引失败则 sample 返回非零；GPU capture 或脚本失败不被 GDI fallback 冒充；回滚只删除 `--audio-fixture` 与脚本，不影响常规编辑器和 4.36 command evidence。
+- 下一入口：补 1600、1024/窄窗口、light/high-contrast 和 DPI matrix；之后进入 streaming buffer/loop/end-of-file 语义、播放头刷新预算和资源 rename/import migration。

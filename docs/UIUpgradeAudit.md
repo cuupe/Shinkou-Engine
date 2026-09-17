@@ -1826,6 +1826,38 @@
 - 目前已有 retained waveform command 证据，但尚未有样例场景自动选中 AudioSource 的 D3D11 screenshot；下一轮建立专用 visual fixture 并覆盖 1280/1600/窄窗口与 DPI matrix。
 - streaming buffer、loop/end-of-file、播放头刷新频率、异步 duration derived cache、rename/import migration 和完整 PBR/material/texture/depth/animation model preview 仍未完成；项目仍不能宣称 Unity 级完整能力。
 
+## 第 4.37 子阶段：AudioSource D3D11 visual fixture 与窗口证据
+
+### 实现与范围
+
+- `EngineSample.cpp` 增加显式 `--audio-fixture` 模式：临时目录生成 1 秒 PCM WAV，启动后通过真实 `AssetSystem::scan_sources()` 获得 AssetId，创建/选中 `Audio Source Fixture`，绑定 `assets/preview.wav` 并保存临时 scene 清除 dirty close prompt。
+- 新增 [AudioSourceVisualCapture.script](C:/Users/Lenovo/Desktop/Shinkou/Shinkou%20Engine/docs/AudioSourceVisualCapture.script)，通过 targeted Win32 message -> SDL/InputSystem -> EditorLayer -> retained UI 滚动 Inspector，然后触发 GPU capture；默认样例路径和默认项目根不受影响。
+- fixture 使用 RAII 清理临时 project root；第一次 capture 发现相对路径传给子进程会导致 QA state/GPU output 无法定位，改用绝对 output/script 路径后复跑成功，未修改工具以掩盖该证据问题。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug --target shinkou_engine_sample -j 2` 通过；fixture 直接运行 `--audio-fixture --frames 10 dx11` 退出码 0，并输出 `editor-ui-assets=1`、`editor-ui-first-asset=assets/preview.wav`。
+- 视觉 capture 命令要求 `--require-gpu --client-size 1280x720`，最终返回码 0：`mode=EngineGpuReadback`、`surface=1280x720`、`client=1280x720`、`dpi=144`、186 frames；sample 输出 `object=1 asset=7442611027655595716 path=assets/preview.wav`。
+- 脚本 steps 全部成功：wait、hover Inspector、wheel、capture 共 `5/5 ok`；state snapshot 显示 `AssetSystem manifest ready: 1 resources`、`audio-timeline:1` region 和 Inspector scroll 后的可见轨道。
+- 最终截图：[editor-audio-source-4-37.bmp](C:/Users/Lenovo/Desktop/Shinkou/Shinkou%20Engine/out/qa/editor-audio-source-4-37.bmp) 已检查：Hierarchy 选中 Audio Source Fixture、Asset Browser 显示 preview.wav、Inspector 显示 waveform 与 `0.00 / 1.00 s`。
+
+### 安全、性能与视觉审计
+
+- fixture 所有文件位于唯一临时目录，正常退出后 RAII 删除；capture 子进程只接收 `--audio-fixture`、`dx11` 和绝对 capture/script 路径，不访问用户项目文件。
+- waveform 仍由 EditorLayer 异步 provider 生成，AudioScene 使用真实 AssetId/path/duration；sample 运行 186 frames 未在 paint 中增加 IO、decoder 或额外 voice。
+- `EngineGpuReadback` 证明截图来自 D3D11 presented surface，而不是 GDI fallback；1280×720 client、DPI 144、logical scale 1.5 下 dark shell、Timeline、waveform、asset icon 和层级布局可读。
+- capture 关闭时若 fixture 场景 dirty 会出现系统保存确认框；本轮通过保存临时 scene 消除了该交互阻塞，并在最终运行确认临时目录清理无新增残留。
+
+### 失败状态与回滚路径
+
+- fixture 创建/AssetSystem indexing 失败时 sample 返回非零；capture 要求 GPU readback，首次相对路径错误和脚本 timeout 均被记录为失败，不计入成功证据。
+- decoder/preview 失败仍回退 4.34 marker/filled track；移除 sample flag、capture script 和 fixture-only save 即可回滚，不影响常规 EditorLayer 或 4.36 waveform contract。
+
+### 未解决风险与下一轮
+
+- 当前已完成 1280×720 dark/DPI 1.5 的真实窗口证据，尚未完成 1600、1024/窄窗口、light/high-contrast 和多 DPI matrix。
+- streaming buffer、loop/end-of-file、播放头刷新预算、异步 duration derived cache、rename/import migration 与完整 PBR/material/texture/depth/animation model preview 仍未完成；不能宣称最终 Unity 级能力已完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

@@ -1,0 +1,7 @@
+# 4.37 deterministic visual fixture: the sample has already selected the
+# AudioSource object and supplied a project-relative PCM WAV asset.
+wait 1200
+hover "inspector.background"
+wheel -30
+wait 800
+capture audio-source-waveform
