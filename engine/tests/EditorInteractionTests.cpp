@@ -3,6 +3,7 @@
 #include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/World.h"
 #include "shinkou/render/RenderScene.h"
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 using namespace shinkou;
@@ -37,6 +39,7 @@ class TestAudioBackend final : public audio::IAudioBackend {
         audio::AudioVoiceState state{audio::AudioVoiceState::Invalid};
     };
     std::vector<Voice> voices_;
+    std::unordered_map<audio::AudioVoiceId, double> cursors_;
 
     Voice* find(audio::AudioVoiceId id) noexcept {
         for (auto& voice : voices_) if (voice.id == id) return &voice;
@@ -49,16 +52,23 @@ class TestAudioBackend final : public audio::IAudioBackend {
 
 public:
     bool initialize(const audio::AudioConfig&) override { return true; }
-    void shutdown() override { voices_.clear(); }
+    void shutdown() override { voices_.clear(); cursors_.clear(); }
     void update(Seconds) override {}
     audio::AudioVoiceId play(const audio::AudioAssetDesc&, const audio::AudioPlayParams& params) override {
         const auto id = audio::make_audio_handle(static_cast<std::uint32_t>(voices_.size()), 1);
         voices_.push_back({id, params.bus, params.startPaused ? audio::AudioVoiceState::Paused : audio::AudioVoiceState::Playing});
+        cursors_[id] = 0.0;
         return id;
     }
     void stop(audio::AudioVoiceId id, Seconds) override { if (auto* voice = find(id)) voice->state = audio::AudioVoiceState::Stopped; }
     void pause(audio::AudioVoiceId id) override { if (auto* voice = find(id); voice && voice->state == audio::AudioVoiceState::Playing) voice->state = audio::AudioVoiceState::Paused; }
     void resume(audio::AudioVoiceId id) override { if (auto* voice = find(id); voice && voice->state == audio::AudioVoiceState::Paused) voice->state = audio::AudioVoiceState::Playing; }
+    void seek(audio::AudioVoiceId id, double seconds) override { if (find(id)) cursors_[id] = std::max(0.0, seconds); }
+    double cursor_seconds(audio::AudioVoiceId id) const override {
+        const auto found = cursors_.find(id);
+        return found == cursors_.end() ? 0.0 : found->second;
+    }
+    bool supports_cursor() const noexcept override { return true; }
     void set_volume(audio::AudioVoiceId, float) override {}
     void set_pitch(audio::AudioVoiceId, float) override {}
     void set_pan(audio::AudioVoiceId, float) override {}
@@ -481,12 +491,25 @@ int main() {
         const auto audioPlayControl = "command:media-play:" + audioTarget;
         const auto audioPauseControl = "command:media-pause:" + audioTarget;
         const auto audioStopControl = "command:media-stop:" + audioTarget;
+        const auto audioSeekBackControl = "command:media-seek:" + audioTarget + ":relative:-5";
+        const auto audioSeekForwardControl = "command:media-seek:" + audioTarget + ":relative:5";
         require(region(audioPlayControl).width > 0 && region(audioPauseControl).width > 0 &&
                 region(audioStopControl).width > 0,
                 "AudioSource playback transport controls were not registered");
         click(audioPlayControl);
         require(audioScene.transport_state(created, audioSystem) == "Playing",
                 "AudioSource Play did not start the scene voice");
+        gesture.delta.y = -30.0f;
+        fake->queue.push_back(gesture);
+        tick();
+        require(region(audioSeekBackControl).width > 0 && region(audioSeekForwardControl).width > 0,
+                "AudioSource timeline seek controls were not registered");
+        click(audioSeekForwardControl);
+        require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 5.0) < 0.001,
+                "AudioSource timeline seek did not move the scene voice cursor");
+        gesture.delta.y = 1000.0f;
+        fake->queue.push_back(gesture);
+        tick();
         click(audioPauseControl);
         require(audioScene.transport_state(created, audioSystem) == "Paused",
                 "AudioSource Pause did not pause the scene voice");

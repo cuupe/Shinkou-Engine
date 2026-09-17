@@ -5,6 +5,9 @@
 #include "shinkou/editor/EditorDocument.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 
 namespace shinkou::editor {
 namespace {
@@ -313,6 +316,15 @@ void EditorUiModel::sync(World& world) {
                 if (audioSource && p.name == "bus") field.choices = audio_bus_choices();
                 fields.push_back(std::move(field));
             }
+            if (audioSource) {
+                std::string cursor = "Unavailable";
+                if (audioTransportComponent_ == component.id() && audioTransportCursorSupported_) {
+                    std::ostringstream out;
+                    out << std::fixed << std::setprecision(2) << audioTransportCursor_ << " s";
+                    cursor = out.str();
+                }
+                fields.push_back({std::to_string(component.id()) + ":audioTimeline", "Timeline", std::move(cursor), false, false});
+            }
         });
     }
     std::string signature;
@@ -394,6 +406,16 @@ void EditorUiModel::set_audio_transport_state(ComponentId component, std::string
     if (audioTransportComponent_ == component && audioTransportState_ == state) return;
     audioTransportComponent_ = component;
     audioTransportState_ = std::move(state);
+    ++revision_;
+}
+
+void EditorUiModel::set_audio_transport_cursor(ComponentId component, double seconds, bool supported) {
+    const auto bounded = std::isfinite(seconds) ? std::clamp(seconds, 0.0, 7.0 * 24.0 * 60.0 * 60.0) : 0.0;
+    if (audioTransportComponent_ == component && audioTransportCursor_ == bounded &&
+        audioTransportCursorSupported_ == supported) return;
+    audioTransportComponent_ = component;
+    audioTransportCursor_ = bounded;
+    audioTransportCursorSupported_ = supported;
     ++revision_;
 }
 

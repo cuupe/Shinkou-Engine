@@ -1809,6 +1809,8 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
             const ui::Rect input{bounds.x,y+20,bounds.width,26};
             const bool audioTransport = field.id.size() >= 15 &&
                 field.id.compare(field.id.size() - 15, 15, ":audioTransport") == 0;
+            const bool audioTimeline = field.id.size() >= 14 &&
+                field.id.compare(field.id.size() - 14, 14, ":audioTimeline") == 0;
             if (audioTransport) {
                 renderList_.text({bounds.x + bounds.width - 88.0f, y, 88.0f, 18.0f}, field.value,
                                   color(layout.theme == "light" ? "#2E6FBE" : "#8DBBFF"), 10.0f,
@@ -1828,6 +1830,19 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                             field.value == "Paused");
                 draw_button({input.x + (buttonWidth + gap) * 2.0f, input.y, buttonWidth, input.height}, stop, "Stop", layout,
                             false);
+            } else if (audioTimeline) {
+                renderList_.text({bounds.x + bounds.width - 108.0f, y, 108.0f, 18.0f}, field.value,
+                                  color(layout.theme == "light" ? "#2E6FBE" : "#8DBBFF"), 10.0f,
+                                  {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
+                const float gap = 6.0f;
+                const float buttonWidth = std::max(0.0f, (input.width - gap) * 0.5f);
+                const std::string targetBase = "audio-source:" + std::to_string(model.selected_object()) + ":relative:";
+                const auto back = command_key("media-seek", targetBase + "-5");
+                const auto forward = command_key("media-seek", targetBase + "5");
+                commandActions_[back] = {EditorCommand::MediaSeek, targetBase + "-5"};
+                commandActions_[forward] = {EditorCommand::MediaSeek, targetBase + "5"};
+                draw_button({input.x, input.y, buttonWidth, input.height}, back, "-5 s", layout, false);
+                draw_button({input.x + buttonWidth + gap, input.y, buttonWidth, input.height}, forward, "+5 s", layout, false);
             } else if (field.boolean && field.editable) draw_button(input,id,field.value == "true" ? "On" : "Off",layout,field.value == "true");
             else if (field.editable && field.choices && !field.choices->empty()) {
                 std::string label = field.value.empty() ? "None" : field.value;

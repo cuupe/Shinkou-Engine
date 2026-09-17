@@ -16,6 +16,7 @@ constexpr std::uint32_t kLastBus = static_cast<std::uint32_t>(AudioBus::Count) -
 constexpr float kMinSpatialDistance = 0.01f;
 constexpr float kMaxSpatialDistance = 100000.0f;
 constexpr float kMaxRolloff = 10.0f;
+constexpr double kMaxTransportSeconds = 7.0 * 24.0 * 60.0 * 60.0;
 
 enum class AssetIdentityState : std::uint8_t { Valid, Pending, Invalid };
 
@@ -360,6 +361,27 @@ std::string AudioSceneSystem::transport_state(ObjectId objectId, const AudioSyst
     case AudioVoiceState::Invalid: return "Unavailable";
     }
     return "Unavailable";
+}
+
+bool AudioSceneSystem::supports_cursor(ObjectId objectId, const AudioSystem& audio) const {
+    const auto found = sources_.find(objectId);
+    if (!audio.initialized() || !audio.supports_cursor() || found == sources_.end() ||
+        found->second.voice == 0) return false;
+    const auto state = audio.state(found->second.voice);
+    return state == AudioVoiceState::Playing || state == AudioVoiceState::Paused;
+}
+
+double AudioSceneSystem::cursor_seconds(ObjectId objectId, const AudioSystem& audio) const {
+    if (!supports_cursor(objectId, audio)) return 0.0;
+    return std::clamp(audio.cursor_seconds(sources_.at(objectId).voice), 0.0, kMaxTransportSeconds);
+}
+
+bool AudioSceneSystem::seek(ObjectId objectId, double seconds, AudioSystem& audio) {
+    if (!std::isfinite(seconds) || seconds < 0.0 || !supports_cursor(objectId, audio)) return false;
+    const auto found = sources_.find(objectId);
+    if (found == sources_.end() || found->second.voice == 0) return false;
+    audio.seek(found->second.voice, std::clamp(seconds, 0.0, kMaxTransportSeconds));
+    return true;
 }
 
 void AudioSceneSystem::shutdown(AudioSystem& audio) {

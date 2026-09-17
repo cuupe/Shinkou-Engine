@@ -86,6 +86,9 @@ public:
     // private to this bridge; the editor only receives a bounded semantic
     // state string for the selected source.
     std::string transport_state(ObjectId object, const AudioSystem& audio) const;
+    bool supports_cursor(ObjectId object, const AudioSystem& audio) const;
+    double cursor_seconds(ObjectId object, const AudioSystem& audio) const;
+    bool seek(ObjectId object, double seconds, AudioSystem& audio);
 
     const AudioSceneDiagnostics& diagnostics() const noexcept { return diagnostics_; }
     std::size_t source_count() const noexcept { return sources_.size(); }

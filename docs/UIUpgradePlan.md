@@ -941,3 +941,23 @@
 - 视觉：继续使用 Windows-first flat Inspector 行、现有 DPI logical coordinates 和语义文本标签；不增加仅图标控件，窄面板保持可读/可编辑。
 - 失败状态与回滚：无 Camera 使用稳定默认 Listener；无效数值不会传递到 backend；回滚只移除新增字段与 listener sync，保留 4.30 transport 和 4.29 picker。
 - 下一入口：定义 cursor/seek capability 与场景 voice 时间轴，再推进 streaming 策略；模型侧继续做材质/纹理/深度预览，资源侧定义 rename/import migration。
+
+### 第 4.32 子阶段：AudioSource 场景 voice cursor/seek 时间轴
+
+目标：将已有 AudioSystem backend cursor 能力扩展到场景 AudioSource，让 Inspector 可以观察真实场景 voice 的解码游标并进行受控的相对定位；Media Preview 与 Scene Audio 继续使用不同的 target 和句柄生命周期。
+
+实现范围：
+
+- `AudioSceneSystem` 暴露 `supports_cursor`、`cursor_seconds` 和有界 absolute `seek`；只对当前 Playing/Paused 的 scene voice 生效，backend 不支持时明确返回 unavailable。
+- AudioSource Inspector 新增 Timeline 行，显示真实 cursor 秒数；使用 `-5 s` / `+5 s` retained controls 产生 `audio-source:<ObjectId>:relative:<delta>` 命令，主线程上转换为有界 absolute seek。
+- EditorLayer 严格区分 scene seek target 与 Media Preview 的归一化 timeline target；非法 ID、非法 delta、未绑定 voice、未初始化 AudioSystem 和无 cursor backend 都不创建额外句柄或伪造时间。
+- 非目标：本轮不宣称 AudioSource 已知 duration，不做连续播放时间轴、波形重绘、音视频同步、streaming prefetch 或多源混音面板；duration/seek 到文件末尾的精确语义留给后续 decoder capability 阶段。
+
+审计与验证安排：
+
+- 单元：fake backend 验证 scene cursor 能力声明、Playing/Paused seek、负数拒绝、停止后不可 seek，以及 AudioScene 仍回收 voice/clip。
+- 集成：EditorInteraction 真实点击 Play 后滚动到 Timeline，点击 `+5 s`，断言 fake scene voice cursor 变为 5 秒，再验证 Pause/Resume/Stop 与旧 picker/spatial/Undo 回归。
+- 安全/性能：delta 限制在 ±3600 秒，absolute cursor 限制在 7 天；paint 不读取文件、不解码、不启动进程、不访问网络；cursor 查询只读现有 voice 状态。
+- 视觉：Timeline 作为 AudioSource 属性组末尾行，避免改变既有 clip/bus 默认命中位置；按钮沿用 flat hierarchy、focus/pressed/accent 和 DPI-safe logical coordinates。
+- 失败状态与回滚：unsupported cursor 显示 Unavailable；回滚可移除 Timeline metadata、seek dispatch 和 AudioScene cursor API，保留 4.31 spatial listener 与 4.30 transport。
+- 下一入口：定义 AudioAsset duration/capability contract 与 streaming policy，随后补真正时间轴/波形和资源 rename/import migration；模型侧继续完成更完整的材质/纹理/深度预览。

@@ -1654,6 +1654,41 @@
 - 当前距离参数已进入 backend，但没有 Inspector 衰减曲线和空间调试 gizmo；模型深度/material/texture GPU 预览与资源 rename/import migration 仍是独立阶段。
 - 下一轮进入 cursor/seek capability 与场景 voice 时间轴，随后推进 streaming 策略和真实设备/媒体平台 QA。
 
+## 第 4.32 子阶段：AudioSource 场景 voice cursor/seek 时间轴
+
+### 实现与范围
+
+- AudioSceneSystem 增加 cursor capability、cursor readback 和有界 absolute seek；只操作其私有 scene voice，不触碰 Media Preview voice。
+- EditorLayer 将 `audio-source:<ObjectId>:relative:<delta>` 与 Media Preview 的归一化 seek target 分流；Inspector Timeline 行使用 `-5 s` / `+5 s` 语义按钮，显示真实 cursor 秒数或明确的 Unavailable。
+- Scene seek 的 delta 限制为 ±3600 秒，absolute cursor 限制为 7 天；AudioSystem/backend 不支持 cursor、voice 未绑定、voice 已停止或目标非法时只报告失败，不伪造 wall-clock 时间。
+- Timeline 放在 AudioSource 属性组末尾，保留已有 clip/bus/spatial 字段的默认可见和命中位置；World/scene JSON 不新增运行时 cursor 或 voice 句柄。
+
+### 契约与证据
+
+- `shinkou_audio_scene_system_tests` fake backend 验证 Playing voice cursor 初值、absolute seek 到 12.5 秒、负数拒绝和现有 transport/资源回收契约。
+- `shinkou_editor_interaction_tests` 验证 Inspector 真实点击 Play 后滚动到 Timeline，点击 `+5 s` 驱动 scene voice cursor 到 5 秒，再验证 Pause/Resume/Stop、空间字段、picker、状态和 Undo/Redo。
+- 最终代码 focused CTest `2/2` passed、总计 `11.53 sec`；全量构建 `cmake --build out/build/mingw-debug -j 2` 通过；全量 CTest `55/55` passed、0 failures、总计 `36.88 sec`。
+- 最终重链 sample `out/build/mingw-debug/shinkou_engine_sample.exe dx11 --frames 10` 退出 `0`，报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=10 passes=40 draws=30`；render graph 含 `editor_scene_present`，UI trace 为 `editor-ui-commands=184 editor-ui-text=41 editor-ui-assets=11 editor-ui-visible-assets=11 editor-ui-dpi=1.5`。
+
+### 安全、性能与视觉审计
+
+- seek 命令只接受严格数字 ObjectId、`relative:` 前缀和有限 delta；不将 UI 字符串交给 shell、文件系统或媒体 decoder。
+- cursor 读取只调用 AudioSystem 已绑定 voice 的 capability/state/cursor API；没有每帧文件 IO、临时资源池、跨线程回调或 manifest 扫描。
+- Timeline 复用 Inspector 行高、扁平按钮、focus/pressed/accent 状态和 logical DPI；新增行位于属性组末尾，避免破坏既有资源选择工作流。
+- UI integration 仍沿 `Engine::tick → EditorLayer → retained UiRenderList → Renderer::submit → D3D11 editor UI` 路径，scene seek 不改变 backend presentation contract。
+
+### 失败状态与回滚路径
+
+- backend capability false、AudioSystem 未初始化、目标不存在、voice 未播放/暂停或 delta 越界均显示明确状态；Media Preview 不受影响。
+- seek 没有持久化场景写入，不进入 Undo；spatial/listener 和 transport 仍由先前阶段保持。
+- 回滚只需删除 cursor fields、Timeline renderer、scene seek dispatch 与 AudioScene cursor API，不影响 AudioSource clip identity、空间参数或 Media cursor/seek。
+
+### 未解决风险与下一轮
+
+- 当前场景 AudioSource 没有 duration contract，seek 不显示总时长，也没有到文件末尾的跨 backend 一致语义；后续需要把 duration/format/streaming capability 纳入 AudioAsset 描述。
+- 目前只提供离散 ±5 秒定位，不是连续波形时间轴；连续播放/streaming prefetch 和性能测量属于下一阶段。
+- 资源 rename/import migration、derived cache 和模型完整 PBR/动画仍未完成，不能宣称最终 Unity 级能力已完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

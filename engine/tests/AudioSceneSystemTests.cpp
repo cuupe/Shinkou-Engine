@@ -23,6 +23,7 @@ class RecordingBackend final : public shinkou::audio::IAudioBackend {
     shinkou::audio::AudioPlayParams lastPlayParams_{};
     shinkou::audio::AudioPlayParams lastSpatialParams_{};
     shinkou::audio::AudioListener lastListener_{};
+    std::unordered_map<shinkou::audio::AudioVoiceId, double> cursors_;
     std::size_t spatialCalls_{0};
     std::size_t listenerCalls_{0};
 
@@ -38,7 +39,7 @@ public:
     std::size_t listener_calls() const noexcept { return listenerCalls_; }
 
     bool initialize(const shinkou::audio::AudioConfig&) override { return true; }
-    void shutdown() override { voices_.clear(); }
+    void shutdown() override { voices_.clear(); cursors_.clear(); }
     void update(shinkou::Seconds) override {}
     shinkou::audio::AudioVoiceId play(const shinkou::audio::AudioAssetDesc&,
                                       const shinkou::audio::AudioPlayParams& params) override {
@@ -46,6 +47,7 @@ public:
         const auto voice = nextVoice_++;
         voices_[voice] = params.startPaused ? shinkou::audio::AudioVoiceState::Paused
                                              : shinkou::audio::AudioVoiceState::Playing;
+        cursors_[voice] = 0.0;
         return voice;
     }
     void stop(shinkou::audio::AudioVoiceId voice, shinkou::Seconds) override {
@@ -58,6 +60,14 @@ public:
     void resume(shinkou::audio::AudioVoiceId voice) override {
         if (voices_.find(voice) != voices_.end()) voices_[voice] = shinkou::audio::AudioVoiceState::Playing;
     }
+    void seek(shinkou::audio::AudioVoiceId voice, double seconds) override {
+        if (voices_.find(voice) != voices_.end()) cursors_[voice] = std::max(0.0, seconds);
+    }
+    double cursor_seconds(shinkou::audio::AudioVoiceId voice) const override {
+        const auto found = cursors_.find(voice);
+        return found == cursors_.end() ? 0.0 : found->second;
+    }
+    bool supports_cursor() const noexcept override { return true; }
     void set_volume(shinkou::audio::AudioVoiceId, float) override {}
     void set_pitch(shinkou::audio::AudioVoiceId, float) override {}
     void set_pan(shinkou::audio::AudioVoiceId, float) override {}
@@ -290,6 +300,11 @@ int main() {
     assert(scene.play(world, first.id(), audio, &assetSystem));
     assert(scene.clip_count() == 1 && audio.asset_count() == 1);
     assert(scene.transport_state(first.id(), audio) == "Playing");
+    assert(scene.supports_cursor(first.id(), audio));
+    assert(scene.cursor_seconds(first.id(), audio) == 0.0);
+    assert(scene.seek(first.id(), 12.5, audio));
+    assert(std::abs(scene.cursor_seconds(first.id(), audio) - 12.5) < 0.001);
+    assert(!scene.seek(first.id(), -1.0, audio));
     assert(scene.pause(first.id(), audio));
     assert(scene.transport_state(first.id(), audio) == "Paused");
     assert(scene.resume(first.id(), audio));

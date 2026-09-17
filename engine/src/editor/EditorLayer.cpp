@@ -1277,9 +1277,14 @@ bool EditorLayer::edit_field(std::string_view id, std::string_view value) {
 bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::string_view target, World& world) {
     constexpr std::string_view prefix{"audio-source:"};
     if (target.rfind(prefix, 0) != 0) return false;
+    const std::string payload(target.substr(prefix.size()));
+    const auto separator = payload.find(':');
+    const auto idText = payload.substr(0, separator);
     ObjectId objectId = 0;
     try {
-        objectId = static_cast<ObjectId>(std::stoull(std::string(target.substr(prefix.size()))));
+        std::size_t consumed = 0;
+        objectId = static_cast<ObjectId>(std::stoull(idText, &consumed));
+        if (consumed != idText.size()) throw std::invalid_argument("object id");
     } catch (...) {
         lastStatus_ = "Audio source target is invalid";
         return true;
@@ -1292,6 +1297,35 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
 
     bool changed = false;
     switch (command) {
+    case EditorCommand::MediaSeek: {
+        if (separator == std::string::npos || payload.substr(separator + 1).rfind("relative:", 0) != 0) {
+            lastStatus_ = "Audio source seek target is invalid";
+            break;
+        }
+        double delta = 0.0;
+        try {
+            const auto value = payload.substr(separator + 1 + std::string_view{"relative:"}.size());
+            std::size_t consumed = 0;
+            delta = std::stod(value, &consumed);
+            if (consumed != value.size() || !std::isfinite(delta) || std::abs(delta) > 3600.0)
+                throw std::invalid_argument("seek delta");
+        } catch (...) {
+            lastStatus_ = "Audio source seek target is invalid";
+            break;
+        }
+        if (!audioSceneSystem_->supports_cursor(objectId, *audioSystem_)) {
+            lastStatus_ = "Audio source cursor is unavailable";
+            break;
+        }
+        const auto next = std::clamp(
+            audioSceneSystem_->cursor_seconds(objectId, *audioSystem_) + delta,
+            0.0, 7.0 * 24.0 * 60.0 * 60.0);
+        changed = audioSceneSystem_->seek(objectId, next, *audioSystem_);
+        std::ostringstream status;
+        status << "Audio source seeked to " << std::fixed << std::setprecision(2) << next << " s";
+        lastStatus_ = changed ? status.str() : "Audio source seek failed";
+        break;
+    }
     case EditorCommand::MediaPlay:
         changed = audioSceneSystem_->transport_state(objectId, *audioSystem_) == "Paused"
             ? audioSceneSystem_->resume(objectId, *audioSystem_)
@@ -1490,6 +1524,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         sync_media_preview_state();
         break;
     case EditorCommand::MediaSeek: {
+        if (dispatch_audio_source_transport(command, target, world)) break;
         try {
             const auto normalized = std::stod(std::string(target));
             if (!std::isfinite(normalized) || normalized < 0.0 || normalized > 1.0 ||
@@ -4015,6 +4050,8 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     uiModel_.set_audio_asset_status(assetManifestStatus_);
     ComponentId audioTransportComponent = 0;
     std::string audioTransportState = "Unavailable";
+    double audioTransportCursor = 0.0;
+    bool audioTransportCursorSupported = false;
     if (auto* selected = world.find_object(layout_.selectedObject)) {
         selected->each_component([&](Component& component) {
             if (audioTransportComponent != 0) return;
@@ -4023,10 +4060,16 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                 audioTransportState = audioSceneSystem_ && audioSystem_
                     ? audioSceneSystem_->transport_state(selected->id(), *audioSystem_)
                     : "Unavailable";
+                audioTransportCursorSupported = audioSceneSystem_ && audioSystem_ &&
+                    audioSceneSystem_->supports_cursor(selected->id(), *audioSystem_);
+                if (audioTransportCursorSupported)
+                    audioTransportCursor = audioSceneSystem_->cursor_seconds(selected->id(), *audioSystem_);
             }
         });
     }
     uiModel_.set_audio_transport_state(audioTransportComponent, std::move(audioTransportState));
+    uiModel_.set_audio_transport_cursor(audioTransportComponent, audioTransportCursor,
+                                        audioTransportCursorSupported);
     { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
     mediaPanel_.update(dt);
     // Asset enumeration is asynchronous and on-demand. Never recursively
