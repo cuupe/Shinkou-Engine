@@ -320,7 +320,10 @@ void EditorUiModel::sync(World& world) {
                 std::string cursor = "Unavailable";
                 if (audioTransportComponent_ == component.id() && audioTransportCursorSupported_) {
                     std::ostringstream out;
-                    out << std::fixed << std::setprecision(2) << audioTransportCursor_ << " s";
+                    out << std::fixed << std::setprecision(2) << audioTransportCursor_;
+                    if (audioTransportDurationKnown_ && audioTransportDuration_ > 0.0)
+                        out << " / " << audioTransportDuration_;
+                    out << " s";
                     cursor = out.str();
                 }
                 fields.push_back({std::to_string(component.id()) + ":audioTimeline", "Timeline", std::move(cursor), false, false});
@@ -409,13 +412,23 @@ void EditorUiModel::set_audio_transport_state(ComponentId component, std::string
     ++revision_;
 }
 
-void EditorUiModel::set_audio_transport_cursor(ComponentId component, double seconds, bool supported) {
-    const auto bounded = std::isfinite(seconds) ? std::clamp(seconds, 0.0, 7.0 * 24.0 * 60.0 * 60.0) : 0.0;
+void EditorUiModel::set_audio_transport_cursor(ComponentId component, double seconds, bool supported,
+                                               double durationSeconds, bool durationKnown) {
+    const auto boundedDuration = durationKnown && std::isfinite(durationSeconds) && durationSeconds > 0.0
+        ? durationSeconds : 0.0;
+    const auto bounded = std::isfinite(seconds)
+        ? std::clamp(seconds, 0.0, boundedDuration > 0.0 ? boundedDuration : 7.0 * 24.0 * 60.0 * 60.0)
+        : 0.0;
+    const auto normalizedDurationKnown = boundedDuration > 0.0;
     if (audioTransportComponent_ == component && audioTransportCursor_ == bounded &&
-        audioTransportCursorSupported_ == supported) return;
+        audioTransportCursorSupported_ == supported &&
+        audioTransportDuration_ == boundedDuration &&
+        audioTransportDurationKnown_ == normalizedDurationKnown) return;
     audioTransportComponent_ = component;
     audioTransportCursor_ = bounded;
     audioTransportCursorSupported_ = supported;
+    audioTransportDuration_ = boundedDuration;
+    audioTransportDurationKnown_ = normalizedDurationKnown;
     ++revision_;
 }
 

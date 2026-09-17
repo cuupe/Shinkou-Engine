@@ -1689,6 +1689,42 @@
 - 目前只提供离散 ±5 秒定位，不是连续波形时间轴；连续播放/streaming prefetch 和性能测量属于下一阶段。
 - 资源 rename/import migration、derived cache 和模型完整 PBR/动画仍未完成，不能宣称最终 Unity 级能力已完成。
 
+## 第 4.33 子阶段：AudioAsset duration/capability contract 与场景时间轴边界
+
+### 实现与范围
+
+- `AudioAssetInfo` 将 `streaming`、`durationKnown`、`durationSeconds` 和 `seekable` 作为后端能力快照；`IAudioBackend::inspect_asset` 默认保守返回 unknown，`AudioSystem::AssetSlot` 缓存 metadata，并在 unload/shutdown 时清零。
+- Miniaudio 对文件 decoder 查询 PCM format/length，并报告可证明的 duration 与 file-backed seek seam；Null/fake backend 不凭空声明时长。duration 查询失败不会阻止 asset 注册，后续 UI 仍明确显示 unavailable。
+- `AudioSceneSystem::SourceBinding` 缓存 asset info；已知 duration 时 cursor/seek 的上限为文件末尾，未知 duration 时保留 7 天 transport 安全上限。stop、play failure 和 binding 重建会清掉缓存，避免 stale metadata。
+- Inspector Timeline 仍是末尾的 retained row；cursor 可用且时长已知时显示 `current / duration s`，本轮仍只提供 `-5 s` / `+5 s` 离散控制，不宣称连续 waveform、streaming prefetch 或音视频同步。
+
+### 契约与证据
+
+- `shinkou_audio_tests` 增加 metadata cache 断言：30 秒、seekable 资源可读，streaming 意图保持 descriptor 语义。
+- `shinkou_audio_scene_system_tests` 通过：30 秒 scene source 的 duration 可读，seek 到 60 秒被夹到 30 秒；现有 manifest identity、共享 clip、listener/spatial、transport 和资源回收契约保持通过。
+- `shinkou_editor_interaction_tests` 通过：真实 Inspector Play 后点击 `+5 s`，scene cursor 到 5 秒，Timeline 文本显示 `5.00 / 30.00 s`，picker、空间字段、Pause/Resume/Stop 与 Undo/Redo 保持通过。
+- 当前聚焦 CTest：`3/3` passed（AudioSystem、AudioSceneSystem、EditorInteraction），总计 `15.53 sec`；增量全目标构建通过。最终全量 CTest `55/55` passed、0 failures、总计 `41.15 sec`。
+- 最终 D3D11 sample：`out/build/mingw-debug/shinkou_engine_sample.exe dx11 --frames 10` 退出码 `0`，报告 `device-ready=1 bindless=0 native-ui=1 viewport-scissor=1 frames=10 passes=40 draws=30`；UI trace 为 `editor-ui-commands=184 editor-ui-text=41 editor-ui-assets=11 editor-ui-visible-assets=11`，render graph 含 `editor_scene_present` 与 `ui_overlay_present`。
+
+### 安全、性能与视觉审计
+
+- metadata 只在唯一 asset load 时检查；paint、cursor readback 和 retained draw 不做文件 IO、网络、进程启动或 shell 解析。AudioSystem 的已有 path resolution 和 AssetSystem project-relative identity 校验仍是资源边界。
+- duration 只有在 finite 且大于 0 时才标记 known；非法值归一化为 unknown。scene seek 仍拒绝非有限/负数输入，已知文件末尾优先于通用 7 天上限。
+- Miniaudio 某些格式的 length 查询可能触发 decoder 扫描，当前为每个 unique asset 一次而非每帧；这是真实的性能风险，下一轮迁移到异步 derived metadata cache，并在 cache hit/miss 上做测量。
+- 视觉继续沿用 Windows-first flat Inspector 行、语义文本和 DPI-safe logical coordinates；能力不足时显示 Unavailable，而不是绘制没有依据的进度比例。UI integration 仍沿 `Engine::tick → EditorLayer → retained UiRenderList → Renderer::submit → backend` 链路。
+
+### 失败状态与回滚路径
+
+- decoder 打开失败、duration unknown、backend 没有 inspect 或 seek seam 时，资源仍可注册/播放，但 Timeline 不提供虚假总时长，scene cursor 仅按 capability 和安全上限工作。
+- scene voice 停止、播放失败、manifest revision invalidation 和 unload 都清除 binding metadata；不会把旧 duration 带到新 path/AssetId。
+- 回滚可移除 `AudioAssetInfo`、backend inspect、scene duration clamp 和 Timeline value 扩展，回到 4.32 的 cursor-only presentation，不影响 AudioSource path/AssetId、空间 listener 或 Media Preview voice 分层。
+
+### 未解决风险与下一轮
+
+- Miniaudio metadata inspection 仍同步发生在 asset load 边界，超大 MP3/复杂格式可能造成加载尖峰；下一轮做异步 metadata/derived cache 与可观测耗时。
+- 当前时间轴依旧是离散按钮，没有连续 slider、波形、播放头刷新策略或 streaming buffer 状态；这些需要先定义帧预算和缓存失效契约。
+- rename/import migration、derived artifact identity、完整 PBR/material/texture/depth/animation model preview 仍未完成，项目尚不能宣称 Unity 级完整能力。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

@@ -41,6 +41,9 @@ public:
     bool initialize(const shinkou::audio::AudioConfig&) override { return true; }
     void shutdown() override { voices_.clear(); cursors_.clear(); }
     void update(shinkou::Seconds) override {}
+    shinkou::audio::AudioAssetInfo inspect_asset(const shinkou::audio::AudioAssetDesc& asset) const override {
+        return {asset.streaming, true, 30.0, true};
+    }
     shinkou::audio::AudioVoiceId play(const shinkou::audio::AudioAssetDesc&,
                                       const shinkou::audio::AudioPlayParams& params) override {
         lastPlayParams_ = params;
@@ -301,9 +304,12 @@ int main() {
     assert(scene.clip_count() == 1 && audio.asset_count() == 1);
     assert(scene.transport_state(first.id(), audio) == "Playing");
     assert(scene.supports_cursor(first.id(), audio));
+    assert(scene.has_duration(first.id()) && std::abs(scene.duration_seconds(first.id()) - 30.0) < 0.001);
     assert(scene.cursor_seconds(first.id(), audio) == 0.0);
     assert(scene.seek(first.id(), 12.5, audio));
     assert(std::abs(scene.cursor_seconds(first.id(), audio) - 12.5) < 0.001);
+    assert(scene.seek(first.id(), 60.0, audio));
+    assert(std::abs(scene.cursor_seconds(first.id(), audio) - 30.0) < 0.001);
     assert(!scene.seek(first.id(), -1.0, audio));
     assert(scene.pause(first.id(), audio));
     assert(scene.transport_state(first.id(), audio) == "Paused");

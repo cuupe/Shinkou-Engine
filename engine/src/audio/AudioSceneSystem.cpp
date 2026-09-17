@@ -140,6 +140,7 @@ void AudioSceneSystem::release_clip(AudioSystem& audio, const std::string& path,
 void AudioSceneSystem::stop_source(AudioSystem& audio, SourceBinding& binding) {
     if (binding.voice != 0) audio.stop(binding.voice);
     binding.voice = 0;
+    binding.info = {};
     if (binding.asset != 0) release_clip(audio, binding.path, binding.asset);
     binding.asset = 0;
     binding.pending = false;
@@ -209,11 +210,13 @@ bool AudioSceneSystem::start_source(GameObject& object, components::AudioSourceC
         binding.started = true;
         return false;
     }
+    binding.info = audio.asset_info(binding.asset);
     const auto voice = audio.play(binding.asset, play_params(source, object));
     if (voice == 0) {
         diagnostics_.lastError = audio.last_error().empty() ? "AudioSource voice could not be created" : audio.last_error();
         release_clip(audio, binding.path, binding.asset);
         binding.asset = 0;
+        binding.info = {};
         ++diagnostics_.failedSources;
         binding.started = true;
         return false;
@@ -366,21 +369,35 @@ std::string AudioSceneSystem::transport_state(ObjectId objectId, const AudioSyst
 bool AudioSceneSystem::supports_cursor(ObjectId objectId, const AudioSystem& audio) const {
     const auto found = sources_.find(objectId);
     if (!audio.initialized() || !audio.supports_cursor() || found == sources_.end() ||
-        found->second.voice == 0) return false;
+        found->second.voice == 0 || !found->second.info.seekable) return false;
     const auto state = audio.state(found->second.voice);
     return state == AudioVoiceState::Playing || state == AudioVoiceState::Paused;
 }
 
 double AudioSceneSystem::cursor_seconds(ObjectId objectId, const AudioSystem& audio) const {
     if (!supports_cursor(objectId, audio)) return 0.0;
-    return std::clamp(audio.cursor_seconds(sources_.at(objectId).voice), 0.0, kMaxTransportSeconds);
+    const auto& binding = sources_.at(objectId);
+    const auto limit = binding.info.durationKnown ? binding.info.durationSeconds : kMaxTransportSeconds;
+    return std::clamp(audio.cursor_seconds(binding.voice), 0.0, limit);
+}
+
+bool AudioSceneSystem::has_duration(ObjectId objectId) const {
+    const auto found = sources_.find(objectId);
+    return found != sources_.end() && found->second.info.durationKnown;
+}
+
+double AudioSceneSystem::duration_seconds(ObjectId objectId) const {
+    const auto found = sources_.find(objectId);
+    return found == sources_.end() || !found->second.info.durationKnown
+        ? 0.0 : found->second.info.durationSeconds;
 }
 
 bool AudioSceneSystem::seek(ObjectId objectId, double seconds, AudioSystem& audio) {
     if (!std::isfinite(seconds) || seconds < 0.0 || !supports_cursor(objectId, audio)) return false;
     const auto found = sources_.find(objectId);
     if (found == sources_.end() || found->second.voice == 0) return false;
-    audio.seek(found->second.voice, std::clamp(seconds, 0.0, kMaxTransportSeconds));
+    const auto limit = found->second.info.durationKnown ? found->second.info.durationSeconds : kMaxTransportSeconds;
+    audio.seek(found->second.voice, std::clamp(seconds, 0.0, limit));
     return true;
 }
 

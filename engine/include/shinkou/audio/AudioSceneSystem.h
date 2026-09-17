@@ -49,6 +49,7 @@ class AudioSceneSystem final {
         float rolloff{1.0f};
         std::uint64_t assetId{0};
         AudioAssetId asset{0};
+        AudioAssetInfo info{};
         AudioVoiceId voice{0};
         bool started{false};
         bool pending{false};
@@ -88,6 +89,8 @@ public:
     std::string transport_state(ObjectId object, const AudioSystem& audio) const;
     bool supports_cursor(ObjectId object, const AudioSystem& audio) const;
     double cursor_seconds(ObjectId object, const AudioSystem& audio) const;
+    bool has_duration(ObjectId object) const;
+    double duration_seconds(ObjectId object) const;
     bool seek(ObjectId object, double seconds, AudioSystem& audio);
 
     const AudioSceneDiagnostics& diagnostics() const noexcept { return diagnostics_; }

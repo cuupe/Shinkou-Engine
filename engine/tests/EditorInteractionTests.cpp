@@ -54,6 +54,9 @@ public:
     bool initialize(const audio::AudioConfig&) override { return true; }
     void shutdown() override { voices_.clear(); cursors_.clear(); }
     void update(Seconds) override {}
+    audio::AudioAssetInfo inspect_asset(const audio::AudioAssetDesc& asset) const override {
+        return {asset.streaming, true, 30.0, true};
+    }
     audio::AudioVoiceId play(const audio::AudioAssetDesc&, const audio::AudioPlayParams& params) override {
         const auto id = audio::make_audio_handle(static_cast<std::uint32_t>(voices_.size()), 1);
         voices_.push_back({id, params.bus, params.startPaused ? audio::AudioVoiceState::Paused : audio::AudioVoiceState::Playing});
@@ -507,6 +510,14 @@ int main() {
         click(audioSeekForwardControl);
         require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 5.0) < 0.001,
                 "AudioSource timeline seek did not move the scene voice cursor");
+        bool audioTimelineShowsDuration = false;
+        for (const auto& command : editor.editor_ui().render_list().commands()) {
+            if (command.type == ui::DrawCommandType::Text && command.text.find("5.00 / 30.00 s") != std::string::npos) {
+                audioTimelineShowsDuration = true;
+                break;
+            }
+        }
+        require(audioTimelineShowsDuration, "AudioSource timeline did not show the resource duration");
         gesture.delta.y = 1000.0f;
         fake->queue.push_back(gesture);
         tick();

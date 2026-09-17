@@ -265,6 +265,8 @@ class EditorUiModel {
     std::string audioTransportState_{"Unavailable"};
     double audioTransportCursor_{0.0};
     bool audioTransportCursorSupported_{false};
+    double audioTransportDuration_{0.0};
+    bool audioTransportDurationKnown_{false};
     EditorBuildUiState buildState_{};
     EditorAssetPreviewUiState assetPreview_{};
     EditorMediaUiState mediaState_{};
@@ -299,7 +301,8 @@ public:
     void set_audio_asset_choices(std::vector<EditorInspectorChoice> choices);
     void set_audio_asset_status(std::string status);
     void set_audio_transport_state(ComponentId component, std::string state);
-    void set_audio_transport_cursor(ComponentId component, double seconds, bool supported);
+    void set_audio_transport_cursor(ComponentId component, double seconds, bool supported,
+                                    double durationSeconds = 0.0, bool durationKnown = false);
     void execute(EditorCommand command) noexcept;
     const std::vector<EditorInspectorField>& inspector_fields() const noexcept { return inspectorFields_; }
     const std::vector<std::string>& component_types() const noexcept { return componentTypes_; }

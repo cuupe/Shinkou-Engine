@@ -51,6 +51,9 @@ public:
                 slot.cursorSeconds += std::max(0.0, static_cast<double>(dt));
         }
     }
+    shinkou::audio::AudioAssetInfo inspect_asset(const shinkou::audio::AudioAssetDesc& asset) const override {
+        return {asset.streaming, true, 30.0, true};
+    }
     shinkou::audio::AudioVoiceId play(const shinkou::audio::AudioAssetDesc&, const shinkou::audio::AudioPlayParams& params) override {
         if (freeVoices_.empty()) return 0;
         const auto index = freeVoices_.back();
@@ -169,6 +172,9 @@ int main() {
     assert(asset != 0);
     assert(audio.load("ui/click.wav") == asset);
     assert(audio.asset_count() == 1);
+    const auto assetInfo = audio.asset_info(asset);
+    assert(assetInfo.durationKnown && std::abs(assetInfo.durationSeconds - 30.0) < 0.00001);
+    assert(assetInfo.seekable && !assetInfo.streaming);
     shinkou::audio::AudioPlayParams params;
     params.bus = shinkou::audio::AudioBus::UI;
     const auto voice = audio.play(asset, params);

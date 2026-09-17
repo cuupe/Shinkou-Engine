@@ -961,3 +961,23 @@
 - 视觉：Timeline 作为 AudioSource 属性组末尾行，避免改变既有 clip/bus 默认命中位置；按钮沿用 flat hierarchy、focus/pressed/accent 和 DPI-safe logical coordinates。
 - 失败状态与回滚：unsupported cursor 显示 Unavailable；回滚可移除 Timeline metadata、seek dispatch 和 AudioScene cursor API，保留 4.31 spatial listener 与 4.30 transport。
 - 下一入口：定义 AudioAsset duration/capability contract 与 streaming policy，随后补真正时间轴/波形和资源 rename/import migration；模型侧继续完成更完整的材质/纹理/深度预览。
+
+### 第 4.33 子阶段：AudioAsset duration/capability contract 与场景时间轴边界
+
+目标：把“文件时长、是否可 seek、是否按 streaming 意图载入”从后端隐式行为提升为可审计的 `AudioAssetInfo`，让 AudioSystem、AudioSceneSystem 和 Inspector 使用同一份资源事实；未知信息必须显式显示为未知，不能用 wall-clock 或猜测值替代。
+
+实现范围：
+
+- `IAudioBackend::inspect_asset` 为资源提供 bounded capability snapshot；`AudioSystem::asset_info` 在 asset slot 中缓存 `streaming`、`durationKnown`、`durationSeconds` 和 `seekable`，并清理/失效随 asset handle 生命周期传播。
+- Null/fake backend 默认保守返回 unknown；Miniaudio 对文件 decoder 做一次元数据检查，报告可证明的 PCM 时长和 file-backed seek seam。元数据失败不会阻断资源注册，但会让 Inspector 保持明确的 Unknown/Unavailable 状态。
+- `AudioSceneSystem` 在 source binding 上保存 asset info：已知时长将 scene cursor 和相对 seek 限制到文件末尾；未知时长保留 7 天安全上限；停止、失败和 manifest 重绑都会清除缓存。
+- Inspector Timeline 在 cursor 可用且时长已知时显示 `current / duration s`，否则只显示已知部分或 `Unavailable`；仍保留离散 `-5 s` / `+5 s`，连续 waveform/slider、streaming prefetch、音视频同步和跨资源 cache 迁移不在本轮伪装完成。
+
+审计与验证安排：
+
+- 单元：AudioSystem 验证 metadata cache、未知值归一化和 asset unload；AudioSceneSystem 验证 30 秒资源的 seek 末尾夹紧、停止后的 metadata 清理和未知 capability 回退。
+- 集成：EditorInteraction 通过真实 Inspector Play/seek 路径断言 Timeline 显示 `5.00 / 30.00 s`，并保留 picker、空间参数、transport、Undo/Redo 回归。
+- 安全/性能：metadata 只在唯一 asset load 时检查，不在 paint/cursor 查询中读文件；路径仍由 AudioSystem/AssetSystem 的既有 project-relative 边界约束；NaN、非有限 duration 和非法 seek 输入归一化为 unknown/拒绝。Miniaudio 某些格式的 duration 查询可能触发 decoder 扫描，记录为下一轮异步 metadata cache 的性能入口。
+- 视觉：复用现有 Inspector 行、flat text hierarchy、DPI-safe logical coordinates；信息不足时使用明确语义文本而非空白或虚构的时间轴比例。
+- 失败状态与回滚：后端不支持 inspect、资源缺失、duration 未知或 seek seam 不可证明时不创建额外句柄，Timeline 显示 Unavailable；回滚可删除 `AudioAssetInfo` 元数据层并退回 4.32 的有界 cursor，保留资源/场景/编辑器 target 分层。
+- 下一入口：将 metadata 检查迁移到异步 derived cache，再实现连续 timeline/waveform；并行推进资源 rename/import migration 与模型完整 material/texture/depth/animation preview。

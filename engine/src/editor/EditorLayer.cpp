@@ -1317,9 +1317,12 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
             lastStatus_ = "Audio source cursor is unavailable";
             break;
         }
+        const auto duration = audioSceneSystem_->has_duration(objectId)
+            ? audioSceneSystem_->duration_seconds(objectId)
+            : 7.0 * 24.0 * 60.0 * 60.0;
         const auto next = std::clamp(
             audioSceneSystem_->cursor_seconds(objectId, *audioSystem_) + delta,
-            0.0, 7.0 * 24.0 * 60.0 * 60.0);
+            0.0, duration);
         changed = audioSceneSystem_->seek(objectId, next, *audioSystem_);
         std::ostringstream status;
         status << "Audio source seeked to " << std::fixed << std::setprecision(2) << next << " s";
@@ -4052,6 +4055,8 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     std::string audioTransportState = "Unavailable";
     double audioTransportCursor = 0.0;
     bool audioTransportCursorSupported = false;
+    double audioTransportDuration = 0.0;
+    bool audioTransportDurationKnown = false;
     if (auto* selected = world.find_object(layout_.selectedObject)) {
         selected->each_component([&](Component& component) {
             if (audioTransportComponent != 0) return;
@@ -4064,12 +4069,17 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                     audioSceneSystem_->supports_cursor(selected->id(), *audioSystem_);
                 if (audioTransportCursorSupported)
                     audioTransportCursor = audioSceneSystem_->cursor_seconds(selected->id(), *audioSystem_);
+                audioTransportDurationKnown = audioSceneSystem_ &&
+                    audioSceneSystem_->has_duration(selected->id());
+                if (audioTransportDurationKnown)
+                    audioTransportDuration = audioSceneSystem_->duration_seconds(selected->id());
             }
         });
     }
     uiModel_.set_audio_transport_state(audioTransportComponent, std::move(audioTransportState));
     uiModel_.set_audio_transport_cursor(audioTransportComponent, audioTransportCursor,
-                                        audioTransportCursorSupported);
+                                        audioTransportCursorSupported, audioTransportDuration,
+                                        audioTransportDurationKnown);
     { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
     mediaPanel_.update(dt);
     // Asset enumeration is asynchronous and on-demand. Never recursively

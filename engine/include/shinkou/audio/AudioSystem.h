@@ -69,6 +69,17 @@ struct AudioAssetDesc {
     AudioFormat preferredFormat{};
 };
 
+// Runtime capability snapshot for one loaded audio resource. Metadata is
+// deliberately separate from AudioAssetDesc: the descriptor expresses the
+// caller's loading intent, while this value records what the active backend
+// can actually prove about the resource.
+struct AudioAssetInfo {
+    bool streaming{false};
+    bool durationKnown{false};
+    double durationSeconds{0.0};
+    bool seekable{false};
+};
+
 struct AudioPlayParams {
     AudioBus bus{AudioBus::Sfx};
     AudioTrackId track{0};
@@ -132,6 +143,14 @@ public:
     virtual bool initialize(const AudioConfig& config) = 0;
     virtual void shutdown() = 0;
     virtual void update(Seconds dt) = 0;
+    // Backends may inspect a resource before a voice is created. Returning
+    // unknown metadata is valid and is preferable to fabricating duration or
+    // seek support for a decoder that cannot prove it.
+    virtual AudioAssetInfo inspect_asset(const AudioAssetDesc& asset) const {
+        AudioAssetInfo info;
+        info.streaming = asset.streaming;
+        return info;
+    }
     virtual AudioVoiceId play(const AudioAssetDesc& asset, const AudioPlayParams& params) = 0;
     virtual void stop(AudioVoiceId voice, Seconds fadeOutSeconds) = 0;
     virtual void pause(AudioVoiceId voice) = 0;
@@ -165,6 +184,7 @@ class AudioSystem final {
     struct AssetSlot {
         AudioAssetId id{0};
         AudioAssetDesc desc{};
+        AudioAssetInfo info{};
         std::uint32_t generation{1};
         bool active{false};
     };
@@ -207,6 +227,7 @@ public:
     AudioAssetId load(std::filesystem::path path, bool streaming = false);
     void unload(AudioAssetId asset);
     bool is_loaded(AudioAssetId asset) const noexcept;
+    AudioAssetInfo asset_info(AudioAssetId asset) const noexcept;
     std::size_t asset_count() const noexcept { return assetCount_; }
 
     AudioVoiceId play(AudioAssetId asset, const AudioPlayParams& params = {});

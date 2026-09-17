@@ -22,6 +22,15 @@ std::uint32_t clamp_pool_size(std::uint32_t value) {
     return std::clamp(value, 1u, AudioHandleIndexMask);
 }
 
+AudioAssetInfo normalize_asset_info(AudioAssetInfo info, const AudioAssetDesc& desc) noexcept {
+    info.streaming = desc.streaming;
+    if (!info.durationKnown || !std::isfinite(info.durationSeconds) || info.durationSeconds <= 0.0) {
+        info.durationKnown = false;
+        info.durationSeconds = 0.0;
+    }
+    return info;
+}
+
 class NullAudioBackend final : public IAudioBackend {
     struct VoiceSlot {
         AudioVoiceState state{AudioVoiceState::Invalid};
@@ -84,6 +93,11 @@ public:
         freeTracks_.clear();
     }
     void update(Seconds) override {}
+    AudioAssetInfo inspect_asset(const AudioAssetDesc& asset) const override {
+        AudioAssetInfo info;
+        info.streaming = asset.streaming;
+        return info;
+    }
 
     AudioVoiceId play(const AudioAssetDesc&, const AudioPlayParams& params) override {
         if (freeVoices_.empty()) return 0;
@@ -283,6 +297,27 @@ public:
         initialized_ = false;
     }
     void update(Seconds) override {}
+    AudioAssetInfo inspect_asset(const AudioAssetDesc& asset) const override {
+        AudioAssetInfo info;
+        info.streaming = asset.streaming;
+        ma_decoder decoder{};
+        if (ma_decoder_init_file(asset.path.string().c_str(), nullptr, &decoder) != MA_SUCCESS)
+            return info;
+
+        ma_uint32 sampleRate = 0;
+        ma_uint64 frames = 0;
+        const auto formatResult = ma_decoder_get_data_format(&decoder, nullptr, nullptr, &sampleRate, nullptr, 0);
+        const auto lengthResult = ma_decoder_get_length_in_pcm_frames(&decoder, &frames);
+        if (formatResult == MA_SUCCESS && lengthResult == MA_SUCCESS && sampleRate != 0 && frames != 0) {
+            info.durationSeconds = static_cast<double>(frames) / static_cast<double>(sampleRate);
+            info.durationKnown = std::isfinite(info.durationSeconds) && info.durationSeconds > 0.0;
+        }
+        // File-backed miniaudio decoders expose the PCM seek seam even when
+        // their total duration is unknown for a particular codec.
+        info.seekable = true;
+        ma_decoder_uninit(&decoder);
+        return info;
+    }
     AudioVoiceId play(const AudioAssetDesc& asset, const AudioPlayParams& params) override {
         if (!initialized_ || freeVoices_.empty()) return 0;
         const auto index = freeVoices_.back();
@@ -406,7 +441,7 @@ AudioAssetId AudioSystem::find_asset(const std::filesystem::path& path) const { 
 bool AudioSystem::initialize() { if (initialized_) return true; if (!backend_ || !backend_->initialize(config_)) { lastError_ = backend_ ? backend_->last_error() : "audio backend is missing"; return false; } initialized_ = true; return true; }
 void AudioSystem::shutdown() {
     if (backend_) backend_->shutdown();
-    for (auto& asset : assets_) { asset.active = false; asset.id = 0; asset.desc = {}; }
+    for (auto& asset : assets_) { asset.active = false; asset.id = 0; asset.desc = {}; asset.info = {}; }
     freeAssets_.clear();
     for (std::uint32_t i = 0; i < assets_.size(); ++i) freeAssets_.push_back(static_cast<std::uint32_t>(assets_.size() - i - 1u));
     for (auto& handle : voiceHandles_) handle = 0;
@@ -418,10 +453,11 @@ void AudioSystem::shutdown() {
 }
 void AudioSystem::update(Seconds dt) { if (!initialized_ || !backend_) return; backend_->update(std::max(dt, 0.0f)); forget_finished_voices(); diagnostics_ = backend_->diagnostics(); if (lastError_.empty()) lastError_ = backend_->last_error(); }
 void AudioSystem::forget_finished_voices() { const auto count = backend_->collect_finished(finishedVoices_.data(), static_cast<std::uint32_t>(finishedVoices_.size())); for (std::uint32_t i = 0; i < count; ++i) { const auto index = audio_handle_index(finishedVoices_[i]); if (index < voiceHandles_.size() && voiceHandles_[index] == finishedVoices_[i]) { voiceHandles_[index] = 0; voiceAssets_[index] = 0; } } }
-AudioAssetId AudioSystem::load(const AudioAssetDesc& asset) { const auto resolved = resolve_path(asset.path); if (resolved.empty()) { lastError_ = "audio asset path is empty"; return 0; } if (const auto existing = find_asset(asset.path); existing != 0) return existing; if (freeAssets_.empty()) { lastError_ = "audio asset pool exhausted"; return 0; } const auto index = freeAssets_.back(); freeAssets_.pop_back(); auto& slot = assets_[index]; slot.desc = asset; slot.desc.path = resolved; slot.active = true; ++assetCount_; slot.id = make_audio_handle(index, slot.generation); return slot.id; }
+AudioAssetId AudioSystem::load(const AudioAssetDesc& asset) { const auto resolved = resolve_path(asset.path); if (resolved.empty()) { lastError_ = "audio asset path is empty"; return 0; } if (const auto existing = find_asset(asset.path); existing != 0) return existing; if (freeAssets_.empty()) { lastError_ = "audio asset pool exhausted"; return 0; } const auto index = freeAssets_.back(); freeAssets_.pop_back(); auto& slot = assets_[index]; slot.desc = asset; slot.desc.path = resolved; slot.info = backend_ ? normalize_asset_info(backend_->inspect_asset(slot.desc), slot.desc) : AudioAssetInfo{slot.desc.streaming, false, 0.0, false}; slot.active = true; ++assetCount_; slot.id = make_audio_handle(index, slot.generation); return slot.id; }
 AudioAssetId AudioSystem::load(std::filesystem::path path, bool streaming) { return load({std::move(path), streaming}); }
-void AudioSystem::unload(AudioAssetId asset) { const auto index = audio_handle_index(asset); if (index >= assets_.size() || !assets_[index].active || assets_[index].id != asset) return; for (const auto handle : voiceHandles_) { if (handle == 0 || !backend_) continue; const auto voiceIndex = audio_handle_index(handle); if (voiceIndex < voiceAssets_.size() && voiceAssets_[voiceIndex] == asset) backend_->stop(handle, 0.0f); } assets_[index].active = false; assets_[index].id = 0; assets_[index].desc = {}; assets_[index].generation = (assets_[index].generation + 1u) & AudioHandleGenerationMask; if (assets_[index].generation == 0) assets_[index].generation = 1; freeAssets_.push_back(index); --assetCount_; }
+void AudioSystem::unload(AudioAssetId asset) { const auto index = audio_handle_index(asset); if (index >= assets_.size() || !assets_[index].active || assets_[index].id != asset) return; for (const auto handle : voiceHandles_) { if (handle == 0 || !backend_) continue; const auto voiceIndex = audio_handle_index(handle); if (voiceIndex < voiceAssets_.size() && voiceAssets_[voiceIndex] == asset) backend_->stop(handle, 0.0f); } assets_[index].active = false; assets_[index].id = 0; assets_[index].desc = {}; assets_[index].info = {}; assets_[index].generation = (assets_[index].generation + 1u) & AudioHandleGenerationMask; if (assets_[index].generation == 0) assets_[index].generation = 1; freeAssets_.push_back(index); --assetCount_; }
 bool AudioSystem::is_loaded(AudioAssetId asset) const noexcept { const auto index = audio_handle_index(asset); return index < assets_.size() && assets_[index].active && assets_[index].id == asset; }
+AudioAssetInfo AudioSystem::asset_info(AudioAssetId asset) const noexcept { const auto index = audio_handle_index(asset); return index < assets_.size() && assets_[index].active && assets_[index].id == asset ? assets_[index].info : AudioAssetInfo{}; }
 AudioVoiceId AudioSystem::play(AudioAssetId asset, const AudioPlayParams& params) { if (!initialized_ || !backend_ || !is_loaded(asset)) { lastError_ = "audio asset is not loaded"; return 0; } const auto voice = backend_->play(assets_[audio_handle_index(asset)].desc, params); if (voice == 0) { lastError_ = backend_->last_error(); return 0; } const auto index = audio_handle_index(voice); if (index < voiceHandles_.size()) { voiceHandles_[index] = voice; voiceAssets_[index] = asset; } return voice; }
 AudioVoiceId AudioSystem::play(std::filesystem::path path, const AudioPlayParams& params) { const auto asset = load(std::move(path), params.streaming); return asset == 0 ? 0 : play(asset, params); }
 void AudioSystem::stop(AudioVoiceId voice, Seconds fadeOutSeconds) { if (backend_) backend_->stop(voice, std::max(fadeOutSeconds, 0.0f)); }
