@@ -1792,6 +1792,40 @@
 - streaming buffer、loop/end-of-file、播放头刷新频率和真实设备输出仍未完成；metadata inspection 的同步尖峰仍待 derived cache 化。
 - rename/import migration、完整模型 PBR/material/texture/depth/animation preview 仍未完成，项目尚不能宣称 Unity 级完整能力。
 
+## 第 4.36 子阶段：AudioSource 组件绑定的真实 waveform 端到端证据
+
+### 实现与范围
+
+- EditorLayer 新增 `audioPreviewSourcePath_` identity，并把异步 audio preview 请求抽象为任意已索引的 project-relative audio path；资源浏览器选择仍可驱动 Media Preview，但 Inspector waveform 现在由选中 AudioSource 的 `clipPath` 驱动。
+- AudioSource 选中时，EditorLayer 在 model sync 前按 clip path 查找 asset index 并启动/复用现有 worker；`poll_audio_preview` 校验 generation、result path、当前 source path 和 audio descriptor，旧 future 的取消结果不会进入新组件。
+- EditorInteraction fixture 的 `preview.wav` 改为确定性 16-bit mono PCM WAV（256 frames、8 kHz），并在时间轴上等待至少 8 个 bounded vertical waveform line commands；fallback 的单个 playhead line 不足以通过该断言。
+- 未改变 scene JSON、Undo 栈、AudioScene voice ownership 或 UI renderer/backend contract；没有新增同步 decoder、设备播放或 shell/file command。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug --target shinkou_editor_interaction_tests -j 2` 通过；该目标同时重链当前 `shinkou_physics` 静态库。
+- 聚焦 CTest：`shinkou_editor_audio_preview_tests`、`shinkou_dock_layout_tests`、`shinkou_ui_render_tests`、`shinkou_editor_interaction_tests` 为 `4/4` passed，累计 `6.68 sec`。
+- `shinkou_editor_interaction_tests` 单独重复执行 3 次均通过；覆盖真实 PCM fixture 解码、AudioSource Inspector waveform command、连续 scrub 到 15 秒、非法 `absolute:nan`、Pause/Resume/Stop、空间参数及 Undo/Redo。
+- 全目标增量构建 `cmake --build out/build/mingw-debug -j 2` 在先产出当前工作区的 `shinkou_physics` 静态库后通过；早先并行构建时的 `cannot find shinkou_physics/libshinkou_physics.a` 是依赖产出顺序问题，已通过完整重跑复核。
+- 最终全量 CTest：`56/56` passed、0 failures，总计 `25.57 sec`；Physics 的额外测试来自工作区中与本轮 UI 无关的并行改动，未被本轮提交范围吸收。
+
+### 安全、性能与视觉审计
+
+- preview provider 继续通过 `FileSystemService::resolve_existing` 的 project-relative boundary、256 MiB 文件上限、miniaudio decoder 和 cancellation token；UI path 不进入 shell/进程启动路径。
+- source path 切换会增加 preview generation、取消旧 future，并要求 result path 与当前 path 一致；shared immutable snapshot 只在 render/model bridge 中传递，paint 不做文件 IO 或解码。
+- Inspector waveform 列数由 `min(peaks.size(), track.width * 0.5)` 限制；本轮使用 retained command 证据验证真实 waveform，尚未宣称有 AudioSource 专用 D3D11 截图。宿主 UI capture 仍只作为 shell/backend visibility baseline。
+- Windows-first flat Inspector、accent/muted waveform、76 logical px timeline row 和已有 logical DPI region 未改变；AudioSource clip/bus/spatial/transport 命中位置由交互测试保留覆盖。
+
+### 失败状态与回滚路径
+
+- decoder 不可用、fixture/资源损坏、source path 不在 index、future 取消或 stamp 失配时，Inspector 保留 4.34 marker/filled-track fallback；不会伪造波形或影响 scene transport。
+- 回滚可删除 `audioPreviewSourcePath_`、组件路径触发器和 waveform line branch，保留 duration/capability、absolute seek 和既有 Media Preview provider。
+
+### 未解决风险与下一轮
+
+- 目前已有 retained waveform command 证据，但尚未有样例场景自动选中 AudioSource 的 D3D11 screenshot；下一轮建立专用 visual fixture 并覆盖 1280/1600/窄窗口与 DPI matrix。
+- streaming buffer、loop/end-of-file、播放头刷新频率、异步 duration derived cache、rename/import migration 和完整 PBR/material/texture/depth/animation model preview 仍未完成；项目仍不能宣称 Unity 级完整能力。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

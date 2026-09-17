@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -19,6 +20,49 @@ using namespace shinkou;
 using namespace shinkou::editor;
 namespace {
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+
+void append_wav_u16(std::vector<unsigned char>& bytes, std::uint16_t value) {
+    bytes.push_back(static_cast<unsigned char>(value & 0xffu));
+    bytes.push_back(static_cast<unsigned char>((value >> 8u) & 0xffu));
+}
+
+void append_wav_u32(std::vector<unsigned char>& bytes, std::uint32_t value) {
+    for (unsigned shift = 0; shift < 32; shift += 8)
+        bytes.push_back(static_cast<unsigned char>((value >> shift) & 0xffu));
+}
+
+std::vector<unsigned char> make_audio_fixture_wav() {
+    constexpr std::uint32_t sampleRate = 8000;
+    constexpr std::uint16_t channels = 1;
+    constexpr std::uint16_t bits = 16;
+    constexpr std::uint32_t sampleCount = 256;
+    constexpr std::uint32_t dataBytes = sampleCount * channels * bits / 8u;
+    std::vector<unsigned char> bytes;
+    bytes.reserve(44u + dataBytes);
+    const auto chunk = [&bytes](const char* text) {
+        for (int index = 0; index < 4; ++index)
+            bytes.push_back(static_cast<unsigned char>(text[index]));
+    };
+    chunk("RIFF");
+    append_wav_u32(bytes, 36u + dataBytes);
+    chunk("WAVE");
+    chunk("fmt ");
+    append_wav_u32(bytes, 16u);
+    append_wav_u16(bytes, 1u);
+    append_wav_u16(bytes, channels);
+    append_wav_u32(bytes, sampleRate);
+    append_wav_u32(bytes, sampleRate * channels * bits / 8u);
+    append_wav_u16(bytes, channels * bits / 8u);
+    append_wav_u16(bytes, bits);
+    chunk("data");
+    append_wav_u32(bytes, dataBytes);
+    for (std::uint32_t index = 0; index < sampleCount; ++index) {
+        const auto sample = (index / 32u) % 2u == 0u ? 26000 : -26000;
+        append_wav_u16(bytes, static_cast<std::uint16_t>(sample));
+    }
+    return bytes;
+}
+
 class TestInput final : public input::IInputBackend {
 public:
     std::vector<input::InputEvent> queue, frame;
@@ -174,7 +218,12 @@ int main() {
         const auto project = std::filesystem::temp_directory_path()/ ("shinkou-ui-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(project/"assets/Folder/Nested");
         std::ofstream(project/"assets/Folder/Nested/needle.txt") << "fixture";
-        std::ofstream(project/"assets/preview.wav", std::ios::binary) << "not a decoded fixture";
+        const auto previewWav = make_audio_fixture_wav();
+        {
+            std::ofstream file(project/"assets/preview.wav", std::ios::binary);
+            file.write(reinterpret_cast<const char*>(previewWav.data()),
+                       static_cast<std::streamsize>(previewWav.size()));
+        }
         std::ofstream(project/"assets/preview.avi", std::ios::binary) << "not a decoded video fixture";
         std::ofstream(project/"assets/preview.obj") <<
             "o Triangle\n"
@@ -507,11 +556,30 @@ int main() {
         tick();
         require(region(audioSeekBackControl).width > 0 && region(audioSeekForwardControl).width > 0,
                 "AudioSource timeline seek controls were not registered");
+        const auto audioTimelineRegion = "audio-timeline:" + std::to_string(created);
+        require(region(audioTimelineRegion).width > 0, "AudioSource continuous timeline was not registered");
+        bool audioWaveformRendered = false;
+        for (int index = 0; index < 160 && !audioWaveformRendered; ++index) {
+            tick();
+            const auto timeline = region(audioTimelineRegion);
+            std::size_t waveformColumns = 0;
+            for (const auto& command : editor.editor_ui().render_list().commands()) {
+                if (command.type != ui::DrawCommandType::Line ||
+                    command.from.x <= timeline.x || command.from.x >= timeline.x + timeline.width ||
+                    command.to.x != command.from.x ||
+                    command.from.y < timeline.y - 2.0f ||
+                    command.to.y > timeline.y + timeline.height + 2.0f) continue;
+                ++waveformColumns;
+            }
+            audioWaveformRendered = waveformColumns >= 8;
+            if (!audioWaveformRendered)
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        require(audioWaveformRendered,
+                "AudioSource inspector did not render the decoded waveform snapshot");
         click(audioSeekForwardControl);
         require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 5.0) < 0.001,
                 "AudioSource timeline seek did not move the scene voice cursor");
-        const auto audioTimelineRegion = "audio-timeline:" + std::to_string(created);
-        require(region(audioTimelineRegion).width > 0, "AudioSource continuous timeline was not registered");
         click(audioTimelineRegion);
         require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 15.0) < 0.001,
                 "AudioSource continuous timeline seek did not target the clicked position");

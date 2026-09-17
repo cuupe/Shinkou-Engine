@@ -214,6 +214,7 @@ class EditorLayer {
     std::uint64_t audioPreviewStamp_{0};
     std::shared_ptr<std::atomic_bool> audioPreviewCancel_{};
     std::shared_ptr<const EditorAudioPreviewSnapshot> audioPreviewSnapshot_{};
+    std::string audioPreviewSourcePath_{};
     std::string audioPreviewStatus_{"Audio preview not loaded"};
     std::future<EditorVideoPreviewResult> videoPreviewFuture_{};
     std::future<EditorVideoPreviewResult> videoFrameFuture_{};
@@ -320,6 +321,7 @@ class EditorLayer {
     void request_image_preview(const EditorAssetIndexEntry& indexed);
     void poll_image_preview();
     void request_audio_preview(const EditorAssetIndexEntry& indexed);
+    void request_audio_preview_for_path(std::string path, const EditorAssetIndexEntry& indexed);
     void poll_audio_preview();
     void request_video_preview(const EditorAssetIndexEntry& indexed);
     void poll_video_preview();

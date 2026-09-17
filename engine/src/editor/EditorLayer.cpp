@@ -773,6 +773,7 @@ void EditorLayer::set_project_root(std::string path) {
     if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
     audioPreviewCancel_.reset();
     audioPreviewSnapshot_.reset();
+    audioPreviewSourcePath_.clear();
     audioPreviewStatus_ = "Audio preview not loaded";
     ++videoPreviewGeneration_;
     videoPreviewStamp_ = 0;
@@ -1071,6 +1072,7 @@ bool EditorLayer::load_layout() {
     if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
     audioPreviewCancel_.reset();
     audioPreviewSnapshot_.reset();
+    audioPreviewSourcePath_.clear();
     audioPreviewStatus_ = "Audio preview not loaded";
     ++videoPreviewGeneration_;
     videoPreviewStamp_ = 0;
@@ -1136,6 +1138,7 @@ void EditorLayer::reset_layout() {
     if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
     audioPreviewCancel_.reset();
     audioPreviewSnapshot_.reset();
+    audioPreviewSourcePath_.clear();
     audioPreviewStatus_ = "Audio preview not loaded";
     ++videoPreviewGeneration_;
     videoPreviewStamp_ = 0;
@@ -1847,6 +1850,7 @@ void EditorLayer::set_selected_asset(std::string path) {
     if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
     audioPreviewCancel_.reset();
     audioPreviewSnapshot_.reset();
+    audioPreviewSourcePath_.clear();
     audioPreviewStatus_ = "Audio preview not loaded";
     ++videoPreviewGeneration_;
     videoPreviewStamp_ = 0;
@@ -2468,8 +2472,19 @@ void EditorLayer::poll_image_preview() {
 }
 
 void EditorLayer::request_audio_preview(const EditorAssetIndexEntry& indexed) {
-    if (selectedAsset_.empty() || indexed.descriptor.kind != AssetPreviewKind::Audio) return;
-    if (audioPreviewSnapshot_ && audioPreviewStamp_ == indexed.writeStamp) {
+    if (selectedAsset_.empty()) return;
+    request_audio_preview_for_path(selectedAsset_, indexed);
+}
+
+void EditorLayer::request_audio_preview_for_path(std::string path, const EditorAssetIndexEntry& indexed) {
+    if (path.empty() || indexed.descriptor.kind != AssetPreviewKind::Audio) return;
+    if (audioPreviewSourcePath_ != path) {
+        ++audioPreviewGeneration_;
+        if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
+        audioPreviewSourcePath_ = path;
+    }
+    if (audioPreviewSnapshot_ && audioPreviewSourcePath_ == path &&
+        audioPreviewStamp_ == indexed.writeStamp) {
         audioPreviewStatus_ = "Waveform ready";
         return;
     }
@@ -2477,7 +2492,8 @@ void EditorLayer::request_audio_preview(const EditorAssetIndexEntry& indexed) {
         if (audioPreviewFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
             poll_audio_preview();
         if (audioPreviewFuture_.valid()) return;
-        if (audioPreviewSnapshot_ && audioPreviewStamp_ == indexed.writeStamp) return;
+        if (audioPreviewSnapshot_ && audioPreviewSourcePath_ == path &&
+            audioPreviewStamp_ == indexed.writeStamp) return;
     }
     audioPreviewSnapshot_.reset();
     audioPreviewStamp_ = 0;
@@ -2487,7 +2503,6 @@ void EditorLayer::request_audio_preview(const EditorAssetIndexEntry& indexed) {
     sync_media_preview_state();
     const auto generation = audioPreviewGeneration_;
     const auto sourceStamp = indexed.writeStamp;
-    const auto path = selectedAsset_;
     audioPreviewCancel_ = std::make_shared<std::atomic_bool>(false);
     const auto cancel = audioPreviewCancel_;
     auto scanner = fileSystem_;
@@ -2503,18 +2518,22 @@ void EditorLayer::poll_audio_preview() {
     EditorAudioPreviewResult result;
     try { result = audioPreviewFuture_.get(); }
     catch (const std::exception& error) {
-        result.path = selectedAsset_;
+        result.path = audioPreviewSourcePath_;
         result.generation = audioPreviewGeneration_;
         result.error = error.what();
     } catch (...) {
-        result.path = selectedAsset_;
+        result.path = audioPreviewSourcePath_;
         result.generation = audioPreviewGeneration_;
         result.error = "unknown audio preview worker failure";
     }
-    const auto* indexed = assetIndex_ ? assetIndex_->find(selectedAsset_) : nullptr;
-    if (result.generation != audioPreviewGeneration_ || result.path != selectedAsset_ ||
+    const auto requestedPath = audioPreviewSourcePath_;
+    const auto* indexed = assetIndex_ ? assetIndex_->find(requestedPath) : nullptr;
+    if (result.generation != audioPreviewGeneration_ || result.path != requestedPath ||
         !indexed || indexed->descriptor.kind != AssetPreviewKind::Audio) {
-        request_asset_preview();
+        if (indexed && indexed->descriptor.kind == AssetPreviewKind::Audio)
+            request_audio_preview_for_path(requestedPath, *indexed);
+        else
+            request_asset_preview();
         return;
     }
     audioPreviewStamp_ = result.sourceStamp;
@@ -4083,8 +4102,12 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                     audioSceneSystem_->has_duration(selected->id());
                 if (audioTransportDurationKnown)
                     audioTransportDuration = audioSceneSystem_->duration_seconds(selected->id());
+                if (!audioSource->clipPath.empty() && assetIndex_) {
+                    if (const auto* indexed = assetIndex_->find(audioSource->clipPath))
+                        request_audio_preview_for_path(audioSource->clipPath, *indexed);
+                }
                 if (audioPreviewSnapshot_ && audioPreviewSnapshot_->valid() &&
-                    selectedAsset_ == audioSource->clipPath)
+                    audioPreviewSourcePath_ == audioSource->clipPath)
                     audioTransportPreview = audioPreviewSnapshot_;
             }
         });

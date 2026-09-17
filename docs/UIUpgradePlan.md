@@ -1021,3 +1021,23 @@
 - 视觉：waveform 使用现有 accent/muted tokens，marker 与文本在 dark/light/DPI logical coordinates 下保持层次；capture 只作为宿主链路证据，音频场景截图需要后续专用 fixture。
 - 失败状态与回滚：snapshot future 失败或取消不影响 AudioScene transport；回滚可移除 preview pointer 和 waveform draw，保留 4.34 scrubber marker。
 - 下一入口：构建专用 AudioSource visual fixture，验证真实波形捕获；随后做 streaming buffer/loop/end-of-file 契约，再进入资源 rename/import migration 和模型预览完整性阶段。
+
+### 第 4.36 子阶段：AudioSource 组件绑定的真实 waveform 端到端证据
+
+目标：将 AudioSource Inspector 的波形来源从“资源浏览器当前选择”提升为组件 `clipPath` 绑定，使用可解码音频 fixture 验证 `PCM WAV -> 异步 preview snapshot -> EditorLayer -> EditorUiModel -> retained waveform commands` 的完整链路。
+
+实现范围：
+
+- EditorLayer 为 AudioSource 的非空 `clipPath` 查找已建立的 editor asset index，并复用现有异步 audio preview provider；媒体面板选择变化不再决定 Inspector 是否能看到组件自己的 waveform。
+- 增加 source-path identity，与 generation/source-stamp 一起丢弃旧的异步结果；组件资源切换、项目重载和资源浏览器选择变化都会清除旧 snapshot 或触发有界替换。
+- EditorInteraction 使用小型、确定性的 16-bit PCM WAV fixture，不依赖设备输出；时间轴 retained render 必须产生一组 bounded waveform line commands，而非只产生进度填充和单个 marker。
+- 非目标：本轮不引入新的 AudioVoice、同步解码、场景 JSON peaks、streaming buffer、loop/end-of-file 状态机或真实设备录音/播放质量声明。
+
+审计与验证安排：
+
+- 单元/集成：保留 EditorAudioPreview provider 的格式、时长、峰值和取消测试；EditorInteraction 真实点击 AudioSource clip picker、启动 scene transport、等待异步 snapshot 并检查时间轴波形命令，然后继续验证 scrub、pause/resume/stop、spatial、Undo/Redo。
+- 安全：preview path 仍必须来自 project-relative FileSystemService 和 asset index；future 结果同时校验 generation、path、source stamp 与 audio descriptor，不将 UI 文本交给 shell 或任意文件路径。
+- 性能：fixture/preview 解码只在 worker future 中执行；paint 只读取 immutable shared snapshot，waveform columns 受 snapshot size 和 track width 双重上限约束；组件选中不会创建额外 voice。
+- 视觉：Inspector 继续使用 flat surface/accent/muted token、现有 76 logical px Timeline 行和 DPI-safe region；专用截图下一轮再补，当前先用 retained command 证据避免把 Media/host 截图误称为 AudioSource 波形截图。
+- 失败状态与回滚：decoder 不可用、path 缺失、future 取消或 snapshot 失配时回退 4.34 的 marker/filled track；回滚只需移除组件路径请求和 waveform branch，保留 duration/seek contract。
+- 下一入口：专用可选中 AudioSource 的 D3D11 visual fixture；其后定义 streaming buffer/loop/end-of-file 与 playback-head refresh contract，再进入资源 rename/import migration 和模型预览完整性阶段。
