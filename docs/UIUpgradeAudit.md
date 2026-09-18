@@ -2160,6 +2160,39 @@
 - 内容相同大小且写入时间未改变的替换仍不能由 metadata-only fingerprint 识别；逐项 Review 仍不是冲突解决。
 - 仍需完成内容 diff/三方 resolve 的权限和预算设计、多 DPI/主题 capture matrix、真实 backend offscreen 证据，以及模型动画/深度预览。
 
+## 第 4.47 子阶段：多 DPI/主题 retained layout 矩阵
+
+### 实现与范围
+
+- `EditorInteractionTests` 新增三组矩阵：`1280x720@100% dark`、`1600x900@125% light`、`1024x768@125% high-contrast`。
+- 每组场景在同一完整资源/模型预览会话中重新设置 display/DPI/theme，检查 `viewport.surface` 的 logical 坐标、正尺寸、client bounds 内边界，并要求 retained render list 与 text commands 非空。
+- 本轮只扩展 headless/retained geometry evidence，不改变 Windows chrome、UIKit/ImGui backend 或文件/媒体 worker；没有把无截图的命令证据当作最终像素验收。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug --target shinkou_editor_interaction_tests -j 2` 通过；聚焦 CTest `1/1 passed`，总计 `21.67 sec`。
+- 交互矩阵的三场景均通过：`1280x720@100% dark`、`1600x900@125% light`、`1024x768@125% high-contrast`。每场景的 viewport 均为正尺寸且落在 logical client bounds 内，retained render list 与 text commands 均非空。
+- `cmake --build out/build/mingw-debug -j 2` 通过；全量 CTest `57/57 passed`，总计 `25.98 sec`。
+- 首次矩阵运行发现测试会话在前序 Media/模型步骤后仍激活 Media tab，导致 viewport region 不存在；已在矩阵前显式激活 viewport tab，再运行通过。该失败作为审计记录保留，未通过放宽断言掩盖。
+
+### 安全、性能与视觉审计
+
+- 场景矩阵只调用现有 `EditorLayer::set_display_size`/`set_theme`，没有新增路径、shell、网络或外部进程入口。
+- 每场景只做一次完整 tick/build；断言只读取 retained snapshot/interaction region，不触发文件扫描、解码或 renderer wait。
+- 断言以 logical client bounds 检查 DPI 换算与视口可用性；最终窗口像素仍需 D3D11/GPU capture 与 `UIAcceptance` 证据。
+- 使用 `Tools/UiCapture/RunUiMatrix.ps1` 生成 `ui-capture-matrix-447/matrix.manifest.json`，5 个 GPU 场景均为 `captureStatus=captured`、`mode=EngineGpuReadback`、`surface-kind=GpuClientSurface`；其中 dark `1280x720`、light `1280x720`、high-contrast `1280x720` 的 BMP 已人工检查，shell、viewport、Asset Browser、Inspector、按钮和主题对比均可见。
+- 当前主机实际 Windows DPI 为 150%（child log `dpi=144`，画面 footer `DPI 1.50`），而不是脚本请求的 100%/125%；因此 capture matrix 的 `qaStatus` 为 `inconclusive`，不能把这次像素证据宣称为 100%/125% DPI 通过。逻辑尺寸和主题证据仍分别通过；GDI fallback 仅作为 backend 对照，不替代 GPU 证据。
+
+### 失败状态与回滚路径
+
+- 若窄窗口无法容纳现有 dock 最小尺寸，保留失败证据并调整 splitter/visibility 的产品规则；不通过降低测试到“只要有 command”。
+- 本轮可回滚新增矩阵测试/文档，既有 EditorUi layout、资源预览和 Recovery 功能不受影响；capture 输出为审计工件，不纳入运行时资产。
+
+### 未解决风险与下一轮
+
+- 已取得 GPU readback 和三种主题截图，但尚未在实际 100%/125% OS DPI 环境分别取得像素矩阵；需要在对应显示缩放或隔离测试机复跑，当前 150% 主机证据只支持“GPU capture 成功 + logical layout 合约通过”。
+- 内容 diff/三方 resolve、模型动画/深度/offscreen backend 以及 UI 帧时间/分配实测仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

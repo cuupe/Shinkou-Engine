@@ -1154,6 +1154,45 @@ int main() {
                 editor.asset_preview().modelMaterialLabel.find("MaterialB") != std::string::npos &&
                 editor.asset_preview().modelTextureLabel.find("TextureB") != std::string::npos,
                 "GLTF material selection did not follow its base-color texture reference");
+        struct UiScenario {
+            float width;
+            float height;
+            float dpi;
+            const char* theme;
+        };
+        for (const auto scenario : {
+                 UiScenario{1280.0f, 720.0f, 1.0f, "dark"},
+                 UiScenario{1600.0f, 900.0f, 1.25f, "light"},
+                 UiScenario{1024.0f, 768.0f, 1.25f, "high-contrast"}}) {
+            editor.set_panel_visible("viewport", true);
+            editor.dock_workspace().activate_tab("viewport");
+            editor.set_display_size(scenario.width, scenario.height, scenario.dpi);
+            editor.set_theme(scenario.theme);
+            tick();
+            const auto& scenarioRegions = editor.editor_ui().interaction_regions();
+            const auto viewportIt = scenarioRegions.find("viewport.surface");
+            if (viewportIt == scenarioRegions.end() || viewportIt->second.width <= 0.0f ||
+                viewportIt->second.height <= 0.0f) {
+                throw std::runtime_error("responsive UI scenario lost viewport: " +
+                    std::to_string(static_cast<int>(scenario.width)) + "x" +
+                    std::to_string(static_cast<int>(scenario.height)) + "@" +
+                    std::to_string(scenario.dpi) + " " + scenario.theme +
+                    " show=" + (editor.layout().showViewport ? "1" : "0") +
+                    " panel=" + (editor.panel_visible("viewport") ? "1" : "0") +
+                    " rect=" + std::to_string(editor.editor_ui().viewport_rect().width) + "x" +
+                    std::to_string(editor.editor_ui().viewport_rect().height));
+            }
+            const auto viewportRegion = viewportIt->second;
+            const auto logicalWidth = scenario.width / scenario.dpi;
+            const auto logicalHeight = scenario.height / scenario.dpi;
+            require(viewportRegion.width > 0.0f && viewportRegion.height > 0.0f &&
+                        viewportRegion.x >= 0.0f && viewportRegion.y >= 0.0f &&
+                        viewportRegion.right() <= logicalWidth + 0.5f &&
+                        viewportRegion.bottom() <= logicalHeight + 0.5f,
+                    "responsive UI scenario produced an invalid viewport region");
+            require(editor.editor_ui().render_list().size() > 0 && editor.ui_text_command_count() > 0,
+                    "responsive UI scenario produced an empty retained render list");
+        }
         editor.shutdown();
         audioScene.shutdown(audioSystem);
         audioSystem.shutdown();

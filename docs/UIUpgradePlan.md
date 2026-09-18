@@ -1244,3 +1244,18 @@
 - 集成：扩展 `EditorInteractionTests`，断言外部写入产生非零 batchId、行携带同批次编号、Review action 进入资源选择/Inspector，Dismiss 后保留批次状态并清空待复核列表。
 - 单元：`EditorUiModel` 比较覆盖批次编号、批次状态和行批次字段；保留 64 行截断契约。
 - 安全/性能/视觉：Review 仅接受 project-relative 路径并排除 `.shinkou`；批次格式化发生在模型/paint snapshot 边界，列表和命令路径保持有界；Recovery flat surface、danger token、DPI-safe hit region 和 pointer/keyboard 路由不变。
+
+### 第 4.47 子阶段：多 DPI/主题 retained layout 矩阵
+
+目标：把编辑器 shell 的可用性从单一窗口尺寸提升为可重复的 responsive 契约，覆盖 100%/125% DPI、宽/窄窗口与 dark/light/high-contrast 主题；本轮验证 retained command/interaction geometry，不把无 GPU 像素读取时的 host capture 误报为最终视觉通过。
+
+实现范围：
+
+- `EditorInteractionTests` 增加 `1280x720@100% dark`、`1600x900@125% light`、`1024x768@125% high-contrast` 场景，逐场景重建 retained UI 并检查 viewport 正坐标、正尺寸和 logical client bounds 内边界。
+- 每个场景同时要求 retained render list 与 text command 非空，保证 resize/theme 变化没有通过“空 UI”取得假性能/假通过；已有资源预览、模型选择和 Recovery/Build 路由继续共用同一测试会话。
+- 非目标：本轮不修改窗口 chrome、不替换 UIKit/ImGui backend、不宣称自动颜色对比阈值或 GPU screenshot 已覆盖；真实 D3D11 capture 仍按 `UIAcceptance` 单独记录。
+
+审计与验证安排：
+
+- 集成：交互测试在 GLTF 预览完成后循环三种窗口/DPI/主题矩阵，断言 viewport 与 retained command/text 状态。
+- 视觉/性能：检查 logical 坐标换算、命中区越界和一次 tick 后的 render-list 非空；paint 不增加文件扫描、媒体解码或 renderer wait。
