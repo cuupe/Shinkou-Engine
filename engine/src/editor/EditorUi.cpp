@@ -2771,11 +2771,14 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
         else output << bytes << " B";
         return output.str();
     };
+    std::string externalSummary = "External " + std::to_string(recovery.externalChangeCount);
+    if (recovery.latestExternalBatchId != 0)
+        externalSummary += "  ·  Batch #" + std::to_string(recovery.latestExternalBatchId);
     renderList_.text({bounds.x, bounds.y + 41.0f, bounds.width, 17.0f},
                      "Undo " + std::to_string(recovery.undoCount) +
                          "  ·  Redo " + std::to_string(recovery.redoCount) +
                          "  ·  Recycle " + format_bytes(recovery.totalBytes) +
-                         "  ·  External " + std::to_string(recovery.externalChangeCount),
+                         "  ·  " + externalSummary,
                      muted, 10.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
 
     const float buttonY = bounds.y + 64.0f;
@@ -2825,9 +2828,10 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
     for (std::size_t index = 0; index < rows; ++index) {
         const auto row = ui::Rect{listBounds.x + 5.0f, cursor,
                                   std::max(0.0f, listBounds.width - 10.0f), 38.0f};
-        if (index < recovery.entries.size()) {
-            const auto& entry = recovery.entries[index];
-            const auto rowId = command_key("recovery-entry", std::to_string(index));
+        if (index >= recovery.externalChanges.size()) {
+            const auto entryIndex = index - recovery.externalChanges.size();
+            const auto& entry = recovery.entries[entryIndex];
+            const auto rowId = command_key("recovery-entry", std::to_string(entryIndex));
             if (entry.orphan) set_region(rowId, row);
             if (hotRegion_ == rowId) renderList_.rect(row, color(layout.theme == "light" ? "#E8F1FC" : "#303B4A"), 3.0f);
             const auto rowTitle = entry.orphan ? entry.recyclePath : entry.kind + "  " + entry.sourcePath;
@@ -2841,12 +2845,19 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
                 detail, entry.orphan ? danger : muted, 9.0f,
                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         } else {
-            const auto& change = recovery.externalChanges[index - recovery.entries.size()];
+            const auto& change = recovery.externalChanges[index];
+            const auto rowId = command_key("recovery-review", change.path);
+            set_region(rowId, row);
+            commandActions_[rowId] = {EditorCommand::ReviewFileConflict, change.path};
+            if (hotRegion_ == rowId)
+                renderList_.rect(row, color(layout.theme == "light" ? "#E8F1FC" : "#303B4A"), 3.0f);
+            const auto batch = change.batchId == 0 ? std::string{} :
+                "Batch #" + std::to_string(change.batchId) + "  ·  ";
             renderList_.text({row.x + 6.0f, row.y + 3.0f, std::max(0.0f, row.width - 12.0f), 17.0f},
-                             "External " + change.kind + "  " + change.path, danger, 10.0f,
+                             batch + "External " + change.kind + "  " + change.path, danger, 10.0f,
                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
             renderList_.text({row.x + 6.0f, row.y + 20.0f, std::max(0.0f, row.width - 12.0f), 15.0f},
-                             "Review before reimport or Undo/Redo", muted, 9.0f,
+                             "Click to review; reimport or Undo/Redo remains explicit", muted, 9.0f,
                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         }
         cursor += 42.0f;

@@ -63,6 +63,24 @@ int main() {
     model.set_media_state(media);
     if (model.revision() != mediaRevision || model.media_state().path != "assets/music.wav" ||
         model.media_state().playbackState != "playing") return 10;
+    shinkou::editor::EditorFileRecoveryUiState recovery;
+    recovery.externalChangeCount = 1;
+    recovery.latestExternalBatchId = 7;
+    recovery.externalBatchStatus = "Batch #7: 1 external path(s) require review";
+    recovery.externalChanges.push_back({"assets/external-editor.txt", "Modified", 7});
+    model.set_file_recovery_state(recovery);
+    const auto recoveryRevision = model.revision();
+    model.set_file_recovery_state(recovery);
+    if (model.revision() != recoveryRevision || model.file_recovery_state().latestExternalBatchId != 7 ||
+        model.file_recovery_state().externalChanges.front().batchId != 7) return 11;
+    auto boundedRecovery = recovery;
+    boundedRecovery.externalChanges.clear();
+    for (std::size_t index = 0; index < 65; ++index)
+        boundedRecovery.externalChanges.push_back({"assets/external-" + std::to_string(index) + ".txt", "Added", 8});
+    boundedRecovery.externalChangeCount = boundedRecovery.externalChanges.size();
+    boundedRecovery.latestExternalBatchId = 8;
+    model.set_file_recovery_state(std::move(boundedRecovery));
+    if (model.file_recovery_state().externalChanges.size() != 64) return 12;
     player.set_name("Renamed externally"); player.set_active(false); model.sync(world);
     if (model.object_roots().front().name != "Renamed externally" || model.object_roots().front().active) return 6;
 

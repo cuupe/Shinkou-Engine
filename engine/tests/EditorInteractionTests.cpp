@@ -893,7 +893,10 @@ int main() {
         }
         if (editor.file_recovery_state().externalChangeCount != 1 ||
             editor.file_recovery_state().externalChanges.empty() ||
-            editor.file_recovery_state().externalChanges.front().path != "assets/external-editor.txt") {
+            editor.file_recovery_state().externalChanges.front().path != "assets/external-editor.txt" ||
+            editor.file_recovery_state().latestExternalBatchId == 0 ||
+            editor.file_recovery_state().externalChanges.front().batchId !=
+                editor.file_recovery_state().latestExternalBatchId) {
             throw std::runtime_error("external project file change was not published to the recovery audit state: " +
                 editor.file_recovery_state().status + " / " + editor.last_status());
         }
@@ -911,6 +914,12 @@ int main() {
                 "file recovery panel did not expose the Undo action");
         require(region("command:recovery-clear-conflicts").width > 0,
                 "file recovery panel did not expose the external change acknowledgement action");
+        require(region("command:recovery-review:assets/external-editor.txt").width > 0,
+                "file recovery panel did not expose a per-path external change review action");
+        click("command:recovery-review:assets/external-editor.txt");
+        require(editor.editor_ui().selected_asset() == "assets/external-editor.txt" &&
+                    editor.last_status().find("Reviewing external change") != std::string::npos,
+                "external change review did not route through the asset preview selection");
         click("command:recovery-clear-conflicts");
         require(editor.file_recovery_state().externalChangeCount == 0,
                 "external change acknowledgement did not clear the bounded audit report");

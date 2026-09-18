@@ -120,6 +120,8 @@ bool same_file_recovery_state(const EditorFileRecoveryUiState& left,
         left.redoCount != right.redoCount || left.orphanCount != right.orphanCount ||
         left.totalBytes != right.totalBytes || left.entries.size() != right.entries.size() ||
         left.externalChangeCount != right.externalChangeCount ||
+        left.latestExternalBatchId != right.latestExternalBatchId ||
+        left.externalBatchStatus != right.externalBatchStatus ||
         left.externalChanges.size() != right.externalChanges.size()) return false;
     for (std::size_t index = 0; index < left.entries.size(); ++index) {
         const auto& a = left.entries[index];
@@ -131,7 +133,7 @@ bool same_file_recovery_state(const EditorFileRecoveryUiState& left,
     for (std::size_t index = 0; index < left.externalChanges.size(); ++index) {
         const auto& a = left.externalChanges[index];
         const auto& b = right.externalChanges[index];
-        if (a.path != b.path || a.kind != b.kind) return false;
+        if (a.path != b.path || a.kind != b.kind || a.batchId != b.batchId) return false;
     }
     return true;
 }

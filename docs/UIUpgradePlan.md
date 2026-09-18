@@ -1227,3 +1227,20 @@
 - 视觉/交互：复用现有 Recovery flat surface、danger token、button/focus region 和 DPI geometry；外部变化以只读 rows 呈现，编辑器事务不会污染冲突报告。
 - 失败状态与回滚：scan scope 初次切换只建立基线；扫描失败沿用既有 asset status；Dismiss 不改变磁盘；可回滚 conflict fields、expectation 过滤和 size-aware snapshot 而保留原有 FileSystem/Recovery 功能。
 - 下一入口：批量文件事务报告、外部 diff/resolve UX、多 DPI/主题 capture matrix，以及模型预览的动画/深度和真实 offscreen backend 证据。
+
+### 第 4.46 子阶段：外部变化批次报告与逐项审阅
+
+目标：把一次异步扫描发现的多条外部变化作为可追踪批次呈现，并允许用户逐项进入现有资源 Inspector/预览链；审阅动作只能改变选择和停靠焦点，不能隐式重载、覆盖、删除或执行外部命令。
+
+实现范围：
+
+- `EditorFileConflictEntryModel` 记录 `batchId`，`EditorFileRecoveryUiState` 发布最新批次编号与批次状态；同一 worker scan 发现的 Added/Modified/Removed 共享一个单调批次编号，待复核列表仍最多 64 条。
+- Recovery 面板显示 `Batch #N`，外部变化行变成 retained 可点击区域，使用统一 `ReviewFileConflict` 命令路由；现有文件进入 Inspector/资源预览，已删除文件保留 Recovery 上下文并给出不可用状态。
+- `Dismiss changes` 只清空待复核 snapshot，并保留“最近批次已 dismiss”的审计状态；项目切换/布局重载重置批次基线，`.shinkou` 仍不会进入用户报告。
+- 非目标：本轮不做内容 diff、三方 merge、自动 reimport/overwrite、跨进程锁或操作系统 watcher；冲突解决策略必须在有内容快照/权限模型后单独实现。
+
+审计与验证安排：
+
+- 集成：扩展 `EditorInteractionTests`，断言外部写入产生非零 batchId、行携带同批次编号、Review action 进入资源选择/Inspector，Dismiss 后保留批次状态并清空待复核列表。
+- 单元：`EditorUiModel` 比较覆盖批次编号、批次状态和行批次字段；保留 64 行截断契约。
+- 安全/性能/视觉：Review 仅接受 project-relative 路径并排除 `.shinkou`；批次格式化发生在模型/paint snapshot 边界，列表和命令路径保持有界；Recovery flat surface、danger token、DPI-safe hit region 和 pointer/keyboard 路由不变。

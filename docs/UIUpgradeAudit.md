@@ -2129,6 +2129,37 @@
 - 同大小且写入时间未变化的外部内容替换仍无法由 metadata-only fingerprint 证明；需要显式 diff/hash budget 或 watcher 设计，不能在本轮宣称完整并发冲突解决。
 - 尚未完成批量事务报告、三方 merge/resolve、多 DPI/主题 capture matrix、真实 backend 性能测量和模型动画/深度/offscreen 证据。
 
+## 第 4.46 子阶段：外部变化批次报告与逐项审阅
+
+### 实现与范围
+
+- 外部 scan 发现的 Added/Modified/Removed 路径现在携带单调 `batchId`；`EditorFileRecoveryUiState` 同时发布最新批次编号与批次状态，列表上限仍为 64。
+- Recovery 外部行接入 retained hit region 和 `ReviewFileConflict` 命令：存在的 project-relative 文件进入现有 Inspector/预览选择链，已删除路径留在 Recovery 上下文并报告不可用；没有自动 reload、overwrite、delete 或 shell/IDE 执行。
+- Dismiss 清空待复核行但保留最近批次的 dismissed 状态；项目切换/布局重载重置批次基线；`.shinkou` 仍被过滤。
+
+### 契约与证据
+
+- `EditorInteractionTests` 聚焦验证通过：外部写入产生非零 `batchId`，Recovery 行携带同批次编号，点击 Review 进入资源选择/Inspector 链，Dismiss 后待复核 snapshot 清空；目标 `1/1 passed`，`26.46 sec`。
+- `EditorUiModelTests` 与 `FileSystemTests` 聚焦回归通过；合并聚焦 CTest 为 `3/3 passed`，总计 `19.90 sec`，覆盖批次字段稳定比较、64 行截断、metadata fingerprint 和既有文件边界。
+- 全量构建 `cmake --build out/build/mingw-debug -j 2` 通过；全量 CTest `57/57 passed`，总计 `51.41 sec`，包含媒体/模型预览、UI、渲染和 Physics targets。
+
+### 安全、性能与视觉审计
+
+- Review 入口复用 project-root 约束，拒绝空路径、绝对路径和 `.shinkou`；只改变编辑器选择/停靠状态，不把外部路径交给命令解释器或写回磁盘。
+- 批次号和行状态在 scan 消费与 model snapshot 边界生成，paint 只消费快照；外部行最多 64 条，单行命令 target 为已归一化的项目相对路径。
+- Recovery 行复用 flat surface、danger token、hover/focus region 和现有 DPI geometry；本轮没有真实窗口截图，因此视觉证据限于 retained command/interaction assertions，不能等同于多 DPI 像素验收。
+
+### 失败状态与回滚路径
+
+- 未存在的 Review 路径不会触发预览 worker，Recovery 面板保留并发布不可用状态；Dismiss 不改变文件内容和 manifest。
+- 首次聚焦运行发现外部行排在恢复条目之后，在窄 Recovery 面板中没有可达 hit region；已调整为外部批次优先呈现，并由交互测试复核 Review/Undo/Dismiss 路由。
+- 若批次模型字段造成旧布局/序列化不兼容，可回滚为外部路径/类型字段；4.45 的检测、过滤、Recovery 状态和 FileSystem fingerprint 可独立保留。
+
+### 未解决风险与下一轮
+
+- 内容相同大小且写入时间未改变的替换仍不能由 metadata-only fingerprint 识别；逐项 Review 仍不是冲突解决。
+- 仍需完成内容 diff/三方 resolve 的权限和预算设计、多 DPI/主题 capture matrix、真实 backend offscreen 证据，以及模型动画/深度预览。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

@@ -794,6 +794,8 @@ void EditorLayer::set_project_root(std::string path) {
     reset_edit_history_for_file_operation();
     expectedFileChanges_.clear();
     externalFileChanges_.clear();
+    externalFileBatchId_ = 0;
+    externalFileBatchStatus_ = "No external change batch";
     fileScanBaselineReady_ = false;
     fileScanBaselineScope_.clear();
     fileRecoveryUiDirty_ = true;
@@ -1102,6 +1104,8 @@ bool EditorLayer::load_layout() {
     reset_edit_history_for_file_operation();
     expectedFileChanges_.clear();
     externalFileChanges_.clear();
+    externalFileBatchId_ = 0;
+    externalFileBatchStatus_ = "No external change batch";
     fileScanBaselineReady_ = false;
     fileScanBaselineScope_.clear();
     fileRecoveryUiDirty_ = true;
@@ -1390,6 +1394,8 @@ void EditorLayer::sync_file_recovery_ui_state() {
     state.undoCount = fileUndo_.size();
     state.redoCount = fileRedo_.size();
     state.externalChangeCount = externalFileChanges_.size();
+    state.latestExternalBatchId = externalFileBatchId_;
+    state.externalBatchStatus = externalFileBatchStatus_;
     state.externalChanges = externalFileChanges_;
 
     constexpr std::size_t kMaxRecycleEntries = 512;
@@ -1849,6 +1855,9 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::ClearFileConflicts:
         clear_file_conflict_report();
         break;
+    case EditorCommand::ReviewFileConflict:
+        review_file_conflict(target);
+        break;
     case EditorCommand::OpenAsset: {
         const auto path = std::filesystem::path(target).lexically_normal();
         bool directory = false;
@@ -2155,6 +2164,8 @@ void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& c
     const auto expected = std::move(expectedFileChanges_);
     expectedFileChanges_.clear();
     bool discovered = false;
+    std::size_t batchChanges = 0;
+    std::uint64_t batchId = 0;
     const auto change_name = [](FileChangeType type) {
         switch (type) {
         case FileChangeType::Added: return std::string{"Added"};
@@ -2171,16 +2182,24 @@ void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& c
         if (owned != expected.end()) continue;
 
         discovered = true;
+        if (batchId == 0) {
+            batchId = ++externalFileBatchId_;
+            if (batchId == 0) batchId = ++externalFileBatchId_;
+        }
         const auto kind = change_name(change.type);
         const auto existing = std::find_if(externalFileChanges_.begin(), externalFileChanges_.end(),
             [&](const auto& entry) { return entry.path == path; });
         if (existing != externalFileChanges_.end()) {
             existing->kind = kind;
+            existing->batchId = batchId;
         } else if (externalFileChanges_.size() < 64) {
-            externalFileChanges_.push_back({path, kind});
+            externalFileChanges_.push_back({path, kind, batchId});
         }
+        ++batchChanges;
     }
     if (!discovered) return;
+    externalFileBatchStatus_ = "Batch #" + std::to_string(batchId) + ": " +
+        std::to_string(batchChanges) + " external path(s) require review";
     fileRecoveryUiDirty_ = true;
     assetsDirty_ = true;
     lastStatus_ = "External project changes detected: " +
@@ -2193,10 +2212,33 @@ void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& c
 void EditorLayer::clear_file_conflict_report() {
     if (externalFileChanges_.empty()) return;
     externalFileChanges_.clear();
+    externalFileBatchStatus_ = externalFileBatchId_ == 0
+        ? "No external change batch"
+        : "Batch #" + std::to_string(externalFileBatchId_) + " dismissed";
     fileRecoveryUiDirty_ = true;
     lastStatus_ = "External file change report cleared";
     push_console(lastStatus_);
     sync_file_recovery_ui_state();
+}
+
+void EditorLayer::review_file_conflict(std::string_view path) {
+    const auto normalized = normalized_project_path(path);
+    if (normalized.empty() || normalized == "." || path_is_or_below(normalized, ".shinkou")) {
+        lastStatus_ = "External change path is not reviewable";
+        return;
+    }
+    bool directory = false;
+    if (fileSystem_.exists(std::filesystem::u8path(normalized), &directory) && !directory) {
+        set_selected_asset(normalized);
+        set_panel_visible("inspector", true);
+        dockWorkspace_.activate_tab("inspector");
+        lastStatus_ = "Reviewing external change: " + normalized;
+    } else {
+        set_panel_visible("recovery", true);
+        dockWorkspace_.activate_tab("recovery");
+        lastStatus_ = "External change is no longer available: " + normalized;
+    }
+    push_console(lastStatus_);
 }
 
 void EditorLayer::request_file_scan() {

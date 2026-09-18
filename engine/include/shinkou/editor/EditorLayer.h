@@ -220,6 +220,8 @@ class EditorLayer {
     float editorFilePollAccumulator_{0.0f};
     std::vector<ExpectedFileChange> expectedFileChanges_{};
     std::vector<EditorFileConflictEntryModel> externalFileChanges_{};
+    std::uint64_t externalFileBatchId_{0};
+    std::string externalFileBatchStatus_{"No external change batch"};
     bool fileScanBaselineReady_{false};
     std::string fileScanBaselineScope_{};
     std::uint64_t fileScanGeneration_{0};
@@ -364,6 +366,7 @@ class EditorLayer {
     void expect_editor_file_change(std::string_view path, bool recursive = false);
     void collect_external_file_changes(const std::vector<FileChange>& changes);
     void clear_file_conflict_report();
+    void review_file_conflict(std::string_view path);
     void reset_asset_manifest(std::string status);
     void request_asset_manifest_scan();
     void poll_asset_manifest_scan();

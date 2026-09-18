@@ -61,6 +61,7 @@ enum class EditorCommand : std::uint8_t {
     OpenDiagnosticInIde,
     PruneFileRecovery,
     ClearFileConflicts,
+    ReviewFileConflict,
     MediaPlay,
     MediaPause,
     MediaStop,
@@ -256,6 +257,7 @@ struct EditorFileRecoveryEntryModel {
 struct EditorFileConflictEntryModel {
     std::string path;
     std::string kind;
+    std::uint64_t batchId{0};
 };
 
 struct EditorFileRecoveryUiState {
@@ -266,6 +268,8 @@ struct EditorFileRecoveryUiState {
     std::uintmax_t totalBytes{0};
     std::vector<EditorFileRecoveryEntryModel> entries;
     std::size_t externalChangeCount{0};
+    std::uint64_t latestExternalBatchId{0};
+    std::string externalBatchStatus{"No external change batch"};
     std::vector<EditorFileConflictEntryModel> externalChanges;
 };
 
