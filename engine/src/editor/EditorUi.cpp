@@ -1786,6 +1786,20 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                                       std::max(0.0f, modelArea.width - 16.0f), 16.0f},
                                      stats, muted, 9.0f, {}, ui::TextAlign::End,
                                      ui::TextOverflow::Ellipsis);
+                    if (modelPreview.animations && !modelPreview.animations->empty()) {
+                        std::string animationSummary = "Animations: ";
+                        const auto visibleAnimations = std::min<std::size_t>(3, modelPreview.animations->size());
+                        for (std::size_t index = 0; index < visibleAnimations; ++index) {
+                            if (index != 0) animationSummary += ", ";
+                            const auto& animation = (*modelPreview.animations)[index];
+                            animationSummary += animation.name.empty() ? "Unnamed" : animation.name;
+                        }
+                        if (visibleAnimations < modelPreview.animations->size()) animationSummary += ", ...";
+                        renderList_.text({modelArea.x + 8.0f, modelArea.bottom() - 66.0f,
+                                          std::max(0.0f, modelArea.width - 16.0f), 14.0f},
+                                         animationSummary, muted, 8.0f, {}, ui::TextAlign::Start,
+                                         ui::TextOverflow::Ellipsis);
+                    }
                     if (!previewState.modelTextureStatus.empty()) {
                         renderList_.text({modelArea.x + 8.0f, modelArea.bottom() - 34.0f,
                                           std::max(0.0f, modelArea.width - 16.0f), 14.0f},

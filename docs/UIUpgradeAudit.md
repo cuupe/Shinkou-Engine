@@ -2287,6 +2287,29 @@
 - 当前没有访问 animation input/output accessor，也没有验证 node/skin/joint inverse bind matrix；因此还不能播放真实骨骼动画。
 - 非 D3D11 backend、重叠几何 depth 像素对照、UI 帧时间/分配实测和内容 diff/hash 预算仍未完成。
 
+## 第 4.51 子阶段：模型动画清单 retained 可见性
+
+### 实现与范围
+
+- 模型预览在底部 stats/status 区增加 `Animations: name1, name2, ...` retained text；最多显示 3 个名称，超出部分使用省略号，空清单不产生额外空行。
+- 复用现有 text command、model-area ellipsis 和主题颜色；没有新的资源读取、解码、GPU pass 或交互命令。
+
+### 契约与证据
+
+- `EditorGltfPreviewTests` 已提供 `Idle` clip metadata；本轮目标构建通过，聚焦 CTest `2/2 passed`（glTF + EditorInteraction），总计 `28.34 sec`，模型预览 retained text command 保持非空。
+- 全量 CTest `57/57 passed`，总计 `28.95 sec`；名称文案改动未影响模型、UI、媒体、渲染和 Physics 回归，不把名称可见性当作动画可播放证明。
+
+### 安全、性能与视觉审计
+
+- 文案最多消费 3 个 immutable animation names，绘制只读取 snapshot；不存在路径、shell、网络、文件 IO 或 renderer wait。
+- 名称由现有 TextOverflow::Ellipsis 再做有界 clip 数量限制，避免恶意 glTF animation table 直接放大 paint 工作。
+- 视觉验收仅覆盖 retained text placement/主题 token；动画时间、骨骼绑定和播放性能仍未覆盖。
+
+### 未解决风险与下一轮
+
+- 仍需实现并审计骨骼节点、skin 权重、inverse bind matrix、clip duration 和播放控制；当前清单只是导入可见性。
+- 内容 diff/hash、非 D3D11 model backend、重叠几何像素对照、UI 帧时间/分配实测仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

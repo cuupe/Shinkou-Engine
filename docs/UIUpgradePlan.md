@@ -1316,3 +1316,18 @@
 - 安全/性能：只解析 bounded JSON metadata，不新增外部路径或 shell 入口，不把动画数据上传 GPU；paint 只格式化 count。
 - 视觉：保留现有 model stats/status retained region；真实窗口截图只证明清单可见，不能证明动画播放。
 - 下一入口：设计骨骼节点/skin 数据模型、时间采样预算与静态/播放状态切换，再实现首个 CPU preview clip；并继续完成内容 diff/hash 与 UI 性能实测。
+
+### 第 4.51 子阶段：模型动画清单 retained 可见性
+
+目标：把 4.50 已解析的动画名称从 snapshot 变成模型预览中的可见信息，让用户无需打开外部工具就能确认导入结果；不新增播放假象。
+
+实现范围：
+
+- 模型预览底部显示最多 3 个 clip 名称，超过部分以 `...` 截断；没有 animation metadata 时不增加空行。
+- 复用现有 model stats/status text command、ellipsis overflow 和 DPI-safe model area，不创建新的 input、文件读取或 GPU pass。
+- 非目标：本轮不改变 animation parser、不实现播放/时间轴/skinning、不宣称 duration 或绑定有效性。
+
+审计与验证安排：
+
+- 交互回归确认带 `Idle` clip 的 glTF 会产生 retained text command；全量 CTest 继续覆盖模型/媒体/UI/Physics。
+- 视觉证据只确认名称在 model area 的 retained text 路径；播放能力继续留在后续独立轮次。
