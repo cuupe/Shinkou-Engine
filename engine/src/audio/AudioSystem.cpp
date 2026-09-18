@@ -355,6 +355,10 @@ public:
         const auto frame = static_cast<ma_uint64>(std::max(0.0, seconds) * static_cast<double>(sampleRate));
         ma_sound_seek_to_pcm_frame(&voices_[audio_handle_index(voice)].sound, frame);
     }
+    void set_loop(AudioVoiceId voice, bool enabled) override {
+        if (valid_voice(voice))
+            ma_sound_set_looping(&voices_[audio_handle_index(voice)].sound, enabled ? MA_TRUE : MA_FALSE);
+    }
     double cursor_seconds(AudioVoiceId voice) const override {
         if (!valid_voice(voice)) return 0.0;
         float cursor = 0.0f;
@@ -474,6 +478,9 @@ double AudioSystem::cursor_seconds(AudioVoiceId voice) const {
 }
 bool AudioSystem::supports_cursor() const noexcept {
     return backend_ && backend_->supports_cursor();
+}
+void AudioSystem::set_loop(AudioVoiceId voice, bool enabled) {
+    if (backend_) backend_->set_loop(voice, enabled);
 }
 void AudioSystem::stop_all(AudioBus bus, Seconds fadeOutSeconds) { if (backend_) backend_->stop_all(bus, std::max(fadeOutSeconds, 0.0f)); }
 AudioVoiceState AudioSystem::state(AudioVoiceId voice) const { return backend_ ? backend_->state(voice) : AudioVoiceState::Invalid; }

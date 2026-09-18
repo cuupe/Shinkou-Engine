@@ -2062,6 +2062,40 @@
 - 当前仍没有跨进程锁、外部编辑器并发冲突的细粒度 diff、批量选择恢复和真正的 Asset dependency graph；下轮应将这些状态纳入批量事务报告。
 - streaming buffer/loop/end-of-file、播放头预算、多 DPI/主题视觉矩阵以及模型 PBR/material/texture/depth/animation 仍未完成。
 
+## 第 4.44 子阶段：音频预览 live-loop 与结束边界契约
+
+### 实现与范围
+
+- `IAudioBackend`/`AudioSystem` 增加可选 `set_loop(AudioVoiceId, bool)` transport seam；Miniaudio 将其映射到活动 `ma_sound` 的 looping 属性，旧/能力不足后端仍可安全采用默认 no-op。
+- `EditorLayer` 的 retained Media 命令和旧 ImGui Media panel 在播放中切换 Loop 时都会更新当前 voice；场景 `audio-source:<id>` transport 不被该预览开关改写。
+- 音频预览 voice 进入 `Finished`、`Stopped` 或 `Invalid` 时，若 asset 是路径型临时加载且仍由 AudioSystem 持有，则先卸载再清理预览 bookkeeping；自然结束仍将 currentTime 保持在 duration，显式 Stop 的清零行为不变。
+- `EditorAudioPreviewTests` 的可控后端模拟 1ms duration、cursor、live loop 和 Finished；测试覆盖 loop 开关后的跨 EOF、关闭 loop 后 EOF、临时 asset 回收和再次播放。
+
+### 契约与证据
+
+- 专项构建：`cmake --build out/build/mingw-debug --target shinkou_editor_audio_preview_tests -j 2` 通过。
+- 专项 CTest：`shinkou_editor_audio_preview_tests` `1/1 passed`，总计约 `3.00 sec`。
+- 联合回归：`shinkou_editor_audio_preview_tests` 与 `shinkou_editor_interaction_tests` 均通过，`2/2 passed`，总计约 `41.42 sec`；Interaction 仍覆盖 retained Media/AudioSource transport、场景 voice 和编辑器 UI 命令总线。
+- 最终全量构建：`cmake --build out/build/mingw-debug -j 2` 通过。
+- 最终全量 CTest：`57/57 passed`、0 failures，总计 `72.90 sec`；覆盖音频系统/AudioScene、Editor Media/AudioSource、图片/视频/模型预览、编译器/项目集成、UI render 和工作区并行 Physics 测试。
+
+### 安全、性能与视觉审计
+
+- voice handle 只从 `AudioSystem` 已创建的预览绑定进入 `set_loop`；结束回收只卸载 `audioPreviewAssetId_ == 0` 的临时路径 asset，manifest-backed binding 保持缓存所有权，不新增任意路径或进程入口。
+- loop/EOF/release 都在命令或 transport 状态边界执行；绘制只消费 `EditorMediaUiState` 和已有音频快照，没有把 filesystem、decoder、future 或回收扫描加入 paint。
+- waveform/timeline/Loop button/状态文字继续使用现有 retained UI 和 logical DPI 几何；新增行为的窗口证据以交互断言为主，未把非专用截图误称为音频窗口证据。
+
+### 失败状态与回滚路径
+
+- 不支持 live loop 的 backend 不崩溃，UI loop 状态继续作用于下一次 voice；无效或已结束 voice 清为 stopped 并释放临时资源。
+- 编译器/渲染/场景音频的并行改动不在本轮文件范围内，保持工作区未暂存；本轮只可独立回滚 AudioSystem seam、EditorLayer 两处接入和 preview fixture。
+- 若全量回归暴露既有并行 Physics/CMake 变更影响，保留专项通过证据并暂停提交，不将失败归因于音频轮次。
+
+### 未解决风险与下一轮
+
+- 尚未完成真实多 backend 设备上的播放头刷新成本、streaming ring buffer/underflow、外部编辑器并发文件冲突和批量事务报告。
+- 多 DPI/主题窗口 capture matrix 与模型 PBR/material/texture/depth/animation 预览仍未完成；项目继续不能宣称最终 Unity 级能力已完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

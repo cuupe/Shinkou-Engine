@@ -161,6 +161,10 @@ public:
     virtual void seek(AudioVoiceId, double) {}
     virtual double cursor_seconds(AudioVoiceId) const { return 0.0; }
     virtual bool supports_cursor() const noexcept { return false; }
+    // Looping is a live transport property for editor previews. Backends that
+    // cannot mutate an active voice may keep the default no-op behavior; the
+    // UI still owns the requested state and will apply it to the next voice.
+    virtual void set_loop(AudioVoiceId, bool) {}
     virtual void set_volume(AudioVoiceId voice, float volume) = 0;
     virtual void set_pitch(AudioVoiceId voice, float pitch) = 0;
     virtual void set_pan(AudioVoiceId voice, float pan) = 0;
@@ -238,6 +242,7 @@ public:
     void seek(AudioVoiceId voice, double seconds);
     double cursor_seconds(AudioVoiceId voice) const;
     bool supports_cursor() const noexcept;
+    void set_loop(AudioVoiceId voice, bool enabled);
     void stop_all(AudioBus bus = AudioBus::Master, Seconds fadeOutSeconds = 0.0f);
     AudioVoiceState state(AudioVoiceId voice) const;
     bool is_playing(AudioVoiceId voice) const;

@@ -53,17 +53,43 @@ class PreviewBackend final : public shinkou::audio::IAudioBackend {
     shinkou::audio::AudioVoiceId voice_{0};
     shinkou::audio::AudioVoiceState state_{shinkou::audio::AudioVoiceState::Invalid};
     double cursorSeconds_{0.0};
+    bool loop_{false};
 
 public:
     bool initialize(const shinkou::audio::AudioConfig&) override { return true; }
-    void shutdown() override { voice_ = 0; state_ = shinkou::audio::AudioVoiceState::Invalid; cursorSeconds_ = 0.0; }
-    void update(shinkou::Seconds) override {}
+    void shutdown() override {
+        voice_ = 0;
+        state_ = shinkou::audio::AudioVoiceState::Invalid;
+        cursorSeconds_ = 0.0;
+        loop_ = false;
+    }
+    void update(shinkou::Seconds dt) override {
+        if (state_ != shinkou::audio::AudioVoiceState::Playing || !std::isfinite(dt) || dt <= 0.0) return;
+        cursorSeconds_ += dt;
+        constexpr double duration = 0.001;
+        if (cursorSeconds_ < duration) return;
+        if (loop_) {
+            cursorSeconds_ = std::fmod(cursorSeconds_, duration);
+        } else {
+            cursorSeconds_ = duration;
+            state_ = shinkou::audio::AudioVoiceState::Finished;
+        }
+    }
+    shinkou::audio::AudioAssetInfo inspect_asset(const shinkou::audio::AudioAssetDesc& asset) const override {
+        shinkou::audio::AudioAssetInfo info;
+        info.streaming = asset.streaming;
+        info.durationKnown = true;
+        info.durationSeconds = 0.001;
+        info.seekable = true;
+        return info;
+    }
     shinkou::audio::AudioVoiceId play(const shinkou::audio::AudioAssetDesc&,
                                       const shinkou::audio::AudioPlayParams& params) override {
         voice_ = shinkou::audio::make_audio_handle(0, 1);
         state_ = params.startPaused ? shinkou::audio::AudioVoiceState::Paused :
             shinkou::audio::AudioVoiceState::Playing;
         cursorSeconds_ = 0.0;
+        loop_ = params.loop;
         return voice_;
     }
     void stop(shinkou::audio::AudioVoiceId voice, shinkou::Seconds) override {
@@ -77,6 +103,9 @@ public:
     }
     void seek(shinkou::audio::AudioVoiceId voice, double seconds) override {
         if (voice == voice_) cursorSeconds_ = std::max(0.0, seconds);
+    }
+    void set_loop(shinkou::audio::AudioVoiceId voice, bool enabled) override {
+        if (voice == voice_) loop_ = enabled;
     }
     double cursor_seconds(shinkou::audio::AudioVoiceId voice) const override {
         return voice == voice_ ? cursorSeconds_ : 0.0;
@@ -182,8 +211,23 @@ int main() {
     editor.execute_command(shinkou::editor::EditorCommand::MediaPlay, {}, world);
     editor.draw(renderer, world, 1.0f / 60.0f, 241);
     assert(editor.media_preview().playbackState == "playing");
-    editor.execute_command(shinkou::editor::EditorCommand::MediaSeek, "0.5", world);
+    editor.execute_command(shinkou::editor::EditorCommand::MediaToggleLoop, {}, world);
+    audio.update(0.002f);
     editor.draw(renderer, world, 1.0f / 60.0f, 2411);
+    assert(editor.media_preview().playbackState == "playing");
+    assert(editor.media_preview().loop);
+    assert(editor.media_preview().currentTime < editor.media_preview().duration);
+    editor.execute_command(shinkou::editor::EditorCommand::MediaToggleLoop, {}, world);
+    audio.update(0.002f);
+    editor.draw(renderer, world, 1.0f / 60.0f, 2412);
+    assert(editor.media_preview().playbackState == "stopped");
+    assert(std::abs(editor.media_preview().currentTime - editor.media_preview().duration) < 0.00001);
+    assert(audio.asset_count() == 0);
+    editor.execute_command(shinkou::editor::EditorCommand::MediaPlay, {}, world);
+    editor.draw(renderer, world, 1.0f / 60.0f, 2413);
+    assert(editor.media_preview().playbackState == "playing");
+    editor.execute_command(shinkou::editor::EditorCommand::MediaSeek, "0.5", world);
+    editor.draw(renderer, world, 1.0f / 60.0f, 2414);
     assert(std::abs(editor.media_preview().currentTime - editor.media_preview().duration * 0.5) < 0.00001);
     editor.execute_command(shinkou::editor::EditorCommand::MediaPause, {}, world);
     editor.draw(renderer, world, 1.0f / 60.0f, 242);

@@ -1183,3 +1183,24 @@
 - 视觉：恢复面板默认隐藏并停靠到既有底部 tab stack；采用与 Build/Media 相同的平面 surface、语义 accent/danger、稳定 42 logical px 行，保留 dark/light/high-contrast 和 DPI 缩放路径。
 - 失败状态与回滚：磁盘状态与历史不匹配时条目显示不可恢复并由 4.42 loader 跳过；Prune 单项失败只记录 Console；可回滚面板和治理命令而保留 4.42 持久化日志。
 - 下一入口：把回收区快照接入更完整的批量文件事务/外部并发冲突报告，然后进入音频 streaming buffer/loop/end-of-file 与播放头刷新预算、多 DPI/主题 capture matrix 和模型材质/纹理/深度/动画预览。
+
+### 第 4.44 子阶段：音频预览 live-loop 与结束边界契约
+
+目标：让编辑器音频预览的 Loop、播放头和自然结束与实际 AudioSystem voice 保持一致；播放中修改循环必须立即作用于活动 voice，结束后路径型临时资源必须在明确边界释放，不能因 UI 状态停留而积累会话资源。
+
+实现范围：
+
+- `IAudioBackend`/`AudioSystem` 增加可选的 `set_loop` transport seam；Miniaudio 对活动 `ma_sound` 更新 looping，能力不足的后端保留安全 no-op，下一次 voice 仍使用 UI 请求的 loop 状态。
+- `EditorLayer::MediaToggleLoop` 与旧版 ImGui Media panel 都把 Loop 状态同步到当前预览 voice；场景 `AudioSource` transport 仍由其组件配置管理，不把预览控制误写回场景资产。
+- `sync_media_preview_state` 在 `Finished`、`Stopped`、`Invalid` 边界释放仅由路径型预览持有的临时 AudioAsset，清理 voice/asset bookkeeping，同时保留自然结束时的 duration/currentTime 语义；显式 Stop 仍沿用从零开始的用户语义。
+- 测试后端提供有界 duration、cursor、loop 和 Finished 模拟，覆盖播放中开关循环、循环跨越 EOF、关闭循环后自然结束、临时资源回收与再次播放。
+- 非目标：本轮不重写 Miniaudio decoder、引入独立 streaming ring buffer、不把 AudioSource 组件 loop 变成编辑器临时状态、不在 paint 中轮询文件或解码；播放头刷新预算与真实多后端设备测量继续单独审计。
+
+审计与验证安排：
+
+- 集成：`EditorAudioPreviewTests` 通过 `EditorLayer -> AudioSystem -> IAudioBackend` 实际命令链断言 live-loop、EOF、Stopped snapshot 和 `asset_count` 回收；`EditorInteractionTests` 回归 retained Media/AudioSource transport。
+- 安全：`set_loop` 只接受已持有的 voice handle；临时资源释放前检查 AudioSystem ownership，manifest-backed cache 不误卸载；没有新增路径、shell 或外部进程入口。
+- 性能：Loop 切换和临时资源释放只发生在命令/voice 状态边界；`sync_media_preview_state` 仍只读取 backend transport 和 immutable preview snapshot，不启动文件 IO、decoder 或额外 future；paint 继续消费 `EditorMediaUiState`。
+- 视觉/交互：保留现有 Media retained surface、waveform、Loop button、timeline 和 DPI-safe regions；自然结束显示 stopped + end position，重新 Play 从新 voice 起点恢复。
+- 失败状态与回滚：后端不支持 live loop 时 UI 状态仍安全生效于下一 voice；无效/缺失 voice 仅转 stopped 并清理临时绑定；可回滚 `set_loop` seam 和结束回收分支而保留已有播放/seek contract。
+- 下一入口：记录实际播放头刷新成本与不同 backend 的 duration/EOF 证据；之后进入多 DPI/主题 capture matrix、批量文件事务/外部冲突报告和模型材质/纹理/深度/动画预览。

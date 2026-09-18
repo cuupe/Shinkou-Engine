@@ -1911,6 +1911,8 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         break;
     case EditorCommand::MediaToggleLoop:
         mediaPanel_.playback().loop = !mediaPanel_.playback().loop;
+        if (audioSystem_ && audioPreviewVoice_ != 0)
+            audioSystem_->set_loop(audioPreviewVoice_, mediaPanel_.playback().loop);
         lastStatus_ = mediaPanel_.playback().loop ? "Audio preview loop enabled" : "Audio preview loop disabled";
         sync_media_preview_state();
         break;
@@ -3065,7 +3067,13 @@ void EditorLayer::sync_media_preview_state() {
             } else if (voiceState == audio::AudioVoiceState::Stopped ||
                        voiceState == audio::AudioVoiceState::Finished ||
                        voiceState == audio::AudioVoiceState::Invalid) {
+                if (audioPreviewAsset_ != 0 && audioPreviewAssetId_ == 0 &&
+                    audioSystem_->is_loaded(audioPreviewAsset_)) {
+                    audioSystem_->unload(audioPreviewAsset_);
+                }
                 audioPreviewVoice_ = 0;
+                audioPreviewAsset_ = 0;
+                audioPreviewAssetId_ = 0;
                 audioPreviewPath_.clear();
                 mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
                 state.playbackState = "stopped";
@@ -5405,7 +5413,11 @@ void EditorLayer::draw_media() {
         if (ImGui::Button("Stop")) mediaPanel_.apply(ui::MediaCommand::stop());
         ImGui::SameLine();
         bool loop = playback.loop;
-        if (ImGui::Checkbox("Loop", &loop)) mediaPanel_.apply(ui::MediaCommand::set_loop(loop));
+        if (ImGui::Checkbox("Loop", &loop)) {
+            mediaPanel_.apply(ui::MediaCommand::set_loop(loop));
+            if (audioSystem_ && audioPreviewVoice_ != 0) audioSystem_->set_loop(audioPreviewVoice_, loop);
+            sync_media_preview_state();
+        }
         if (description.showTimeline) {
             float duration = static_cast<float>(playback.duration);
             if (duration > 0.0f) {
