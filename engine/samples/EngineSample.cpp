@@ -371,14 +371,16 @@ int main(int argc, char** argv) {
     editorPresentFrame.cameraPositionAndFlags[3] = 2.0f;
     std::vector<std::uint8_t> editorPresentSceneBytes(sizeof(editorPresentFrame));
     std::memcpy(editorPresentSceneBytes.data(), &editorPresentFrame, editorPresentSceneBytes.size());
-    const shinkou::render::BufferDesc editorPresentSceneDescription{
+    shinkou::render::BufferDesc editorPresentSceneDescription{
         sizeof(editorPresentFrame), sizeof(float) * 4, false, false, editorPresentSceneBytes};
+    editorPresentSceneDescription.uniformBuffer = true;
     const auto editorPresentScene = engine.renderer().create_buffer(editorPresentSceneDescription);
     shinkou::render::ObjectFrameData editorPresentObjectFrame;
     std::vector<std::uint8_t> editorPresentObjectBytes(sizeof(editorPresentObjectFrame));
     std::memcpy(editorPresentObjectBytes.data(), &editorPresentObjectFrame, editorPresentObjectBytes.size());
-    const shinkou::render::BufferDesc editorPresentObjectDescription{
+    shinkou::render::BufferDesc editorPresentObjectDescription{
         sizeof(editorPresentObjectFrame), sizeof(float) * 4, false, false, editorPresentObjectBytes};
+    editorPresentObjectDescription.uniformBuffer = true;
     const auto editorPresentObject = engine.renderer().create_buffer(editorPresentObjectDescription);
     engine.set_render_callback([&, color, colorDesc, depth, depthDesc, presentMaterial, presentDescription,
                                 editorPresentScene, editorPresentSceneDescription,

@@ -240,6 +240,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
         render::BufferDesc description;
         description.size = sizeof(SceneFrame);
+        description.uniformBuffer = true;
         description.initialData = copy_bytes(&sceneFrame, sizeof(SceneFrame));
         sceneBuffer_ = renderer.create_buffer(description);
         sceneRevision_ = 0;
@@ -345,6 +346,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
             if (objectBuffer) renderer.destroy_resource(objectBuffer);
             render::BufferDesc description;
             description.size = sizeof(ObjectFrame);
+            description.uniformBuffer = true;
             description.initialData = copy_bytes(&objectFrame, sizeof(ObjectFrame));
             objectBuffer = renderer.create_buffer(description);
         } else if (!renderer.update_buffer({objectBuffer, 0, copy_bytes(&objectFrame, sizeof(ObjectFrame))})) {

@@ -369,6 +369,7 @@ ResourceHandle PostProcessPipeline::build(RenderGraph& graph,
             std::vector<std::uint8_t> bytes(sizeof(values));
             std::memcpy(bytes.data(), &values, sizeof(values));
             parameterDescription = {sizeof(values), sizeof(float) * 8, false, false, std::move(bytes)};
+            parameterDescription.uniformBuffer = true;
             parameters = graph.create_buffer(parameterDescription);
             if (!parameters) return {};
             bindings.push_back({"postParameters", parameters, DescriptorType::UniformBuffer,

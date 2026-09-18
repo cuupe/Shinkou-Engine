@@ -225,6 +225,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
     std::memcpy(frameBytes.data(), &frameData, frameBytes.size());
     if (!sceneBuffer_) {
         sceneBufferDescription_ = {sizeof(frameData), sizeof(float) * 4, false, false, frameBytes};
+        sceneBufferDescription_.uniformBuffer = true;
         sceneBuffer_ = renderer.create_buffer(sceneBufferDescription_);
     } else if (!renderer.update_buffer({sceneBuffer_, 0, frameBytes})) {
         return;
@@ -283,6 +284,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
         std::vector<std::uint8_t> objectBytes(sizeof(objectData));
         std::memcpy(objectBytes.data(), &objectData, objectBytes.size());
         identityObjectDescription_ = {sizeof(objectData), sizeof(float) * 4, false, false, objectBytes};
+        identityObjectDescription_.uniformBuffer = true;
         identityObjectBuffer_ = renderer.create_buffer(identityObjectDescription_);
     }
     graph.import_resource(identityObjectBuffer_, identityObjectDescription_);
@@ -297,7 +299,9 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
         const auto existing = objectBuffers_.find(mesh.entity);
         if (existing == objectBuffers_.end()) {
             const auto description = BufferDesc{sizeof(objectData), sizeof(float) * 4, false, false, objectBytes};
-            const auto handle = renderer.create_buffer(description);
+            auto uniformDescription = description;
+            uniformDescription.uniformBuffer = true;
+            const auto handle = renderer.create_buffer(uniformDescription);
             objectBuffers_.emplace(mesh.entity, handle);
             return handle;
         }
@@ -609,6 +613,7 @@ ResourceHandle ForwardRenderer::prepare_present(Renderer& renderer) {
         std::vector<std::uint8_t> objectBytes(sizeof(objectData));
         std::memcpy(objectBytes.data(), &objectData, objectBytes.size());
         identityObjectDescription_ = {sizeof(objectData), sizeof(float) * 4, false, false, objectBytes};
+        identityObjectDescription_.uniformBuffer = true;
         identityObjectBuffer_ = renderer.create_buffer(identityObjectDescription_);
     }
     return identityObjectBuffer_;

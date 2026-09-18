@@ -106,6 +106,9 @@ struct BufferDesc {
     bool structuredBuffer{false};
     bool storageBuffer{false};
     bool retainCpuCopy{true};
+    // Requests a native uniform/constant-buffer binding.  This is kept
+    // explicit because an untyped buffer is still a valid upload buffer.
+    bool uniformBuffer{false};
 };
 
 struct ShaderDesc {

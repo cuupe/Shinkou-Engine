@@ -209,8 +209,10 @@ ClusteredLightingPlan ClusteredForwardScheduler::schedule(RenderGraph& graph, co
         description.grid.logarithmicDepth ? 1u : 0u, static_cast<std::uint32_t>(scene.lights().size())};
     std::vector<std::uint8_t> parameterBytes(sizeof(parameters));
     std::memcpy(parameterBytes.data(), &parameters, sizeof(parameters));
-    plan.parameterBuffer = graph.create_buffer({sizeof(parameters), sizeof(float) * 4u, false, false,
-        std::move(parameterBytes)});
+    BufferDesc parameterDescription{sizeof(parameters), sizeof(float) * 4u, false, false,
+        std::move(parameterBytes)};
+    parameterDescription.uniformBuffer = true;
+    plan.parameterBuffer = graph.create_buffer(parameterDescription);
     if (!plan.clusterBuffer || !plan.clusterIndexBuffer || !plan.parameterBuffer) {
         add_error(plan.validation, "cluster scheduler could not allocate graph resources");
         return plan;

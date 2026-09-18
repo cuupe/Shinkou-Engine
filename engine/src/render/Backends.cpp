@@ -400,6 +400,7 @@ class DirectX11Backend final : public IRenderBackend {
         ID3D11RasterizerState* rasterState{nullptr};
         UINT stride{0};
         bool indexBuffer{false};
+        bool constantBuffer{false};
         std::size_t size{0};
         DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
         std::uint32_t width{1};
@@ -418,7 +419,7 @@ class DirectX11Backend final : public IRenderBackend {
         ResourceRecord(ResourceRecord&& other) noexcept
             : kind(other.kind), resource(other.resource), srv(other.srv), uav(other.uav), rtv(other.rtv), dsv(other.dsv), sampler(other.sampler),
               vertexShader(other.vertexShader), pixelShader(other.pixelShader), computeShader(other.computeShader),
-              inputLayout(other.inputLayout), shaderBytecode(std::move(other.shaderBytecode)), blendState(other.blendState), depthState(other.depthState), rasterState(other.rasterState), stride(other.stride), indexBuffer(other.indexBuffer), size(other.size),
+              inputLayout(other.inputLayout), shaderBytecode(std::move(other.shaderBytecode)), blendState(other.blendState), depthState(other.depthState), rasterState(other.rasterState), stride(other.stride), indexBuffer(other.indexBuffer), constantBuffer(other.constantBuffer), size(other.size),
               format(other.format), width(other.width), height(other.height), mipLevels(other.mipLevels), layers(other.layers), generateMips(other.generateMips), usage(other.usage),
               pipeline(std::move(other.pipeline)), material(std::move(other.material)), shaderBindings(std::move(other.shaderBindings)) {
             other.resource = nullptr; other.srv = nullptr; other.uav = nullptr; other.rtv = nullptr; other.dsv = nullptr;
@@ -1503,6 +1504,8 @@ public:
                 record.stride = static_cast<UINT>(desc.stride);
                 record.indexBuffer = desc.indexBuffer;
                 record.size = desc.size;
+                record.constantBuffer = desc.uniformBuffer && !desc.vertexBuffer && !desc.indexBuffer &&
+                    !desc.indirectBuffer && !desc.structuredBuffer && !desc.storageBuffer;
                 D3D11_BUFFER_DESC buffer{};
                 buffer.ByteWidth = static_cast<UINT>(std::max<std::size_t>(desc.size, 1));
                 buffer.Usage = D3D11_USAGE_DEFAULT;
@@ -1515,14 +1518,13 @@ public:
                     buffer.StructureByteStride = static_cast<UINT>(desc.stride);
                 }
                 if (desc.storageBuffer) buffer.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-                // D3D11 requires an explicit CONSTANT_BUFFER bind flag for
-                // any buffer passed to bind_uniform_buffer(). BufferDesc has
-                // no separate uniform flag; buffers without another typed
-                // binding are the engine's uniform-buffer representation.
-                if (!desc.vertexBuffer && !desc.indexBuffer && !desc.indirectBuffer &&
-                    !desc.structuredBuffer && !desc.storageBuffer) {
+                // D3D11 needs an explicit CONSTANT_BUFFER bind flag for
+                // buffers passed to bind_uniform_buffer(). Keep ordinary
+                // untyped upload buffers as ordinary buffers.
+                if (record.constantBuffer) {
                     buffer.BindFlags |= D3D11_BIND_CONSTANT_BUFFER;
                     buffer.ByteWidth = static_cast<UINT>((buffer.ByteWidth + 15u) & ~15u);
+                    record.size = buffer.ByteWidth;
                 }
                 D3D11_SUBRESOURCE_DATA data{};
                 std::vector<std::uint8_t> alignedInitialData;
@@ -1689,6 +1691,7 @@ public:
         alias.dsv = source->second.dsv;
         alias.stride = source->second.stride;
         alias.indexBuffer = source->second.indexBuffer;
+        alias.constantBuffer = source->second.constantBuffer;
         alias.size = source->second.size;
         alias.format = source->second.format;
         alias.width = source->second.width;
@@ -1714,6 +1717,16 @@ public:
         }
         if (!it->second.resource) { lastError_ = "D3D12 buffer has no native resource"; return false; }
         if (update.data.empty() || update.offset + update.data.size() > it->second.size) { lastError_ = "D3D12 buffer update exceeds resource size"; return false; }
+        if (it->second.constantBuffer) {
+            // D3D11 drops constant-buffer updates that specify a destination
+            // region. Constant buffers must be replaced as one aligned block.
+            if (update.offset != 0 || update.data.size() != it->second.size) {
+                lastError_ = "D3D11 constant-buffer updates must cover the complete aligned buffer";
+                return false;
+            }
+            context_->UpdateSubresource(it->second.resource, 0, nullptr, update.data.data(), 0, 0);
+            return true;
+        }
         D3D11_BOX box{};
         box.left = static_cast<UINT>(update.offset);
         box.right = static_cast<UINT>(update.offset + update.data.size());

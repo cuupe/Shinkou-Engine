@@ -2310,6 +2310,37 @@
 - 仍需实现并审计骨骼节点、skin 权重、inverse bind matrix、clip duration 和播放控制；当前清单只是导入可见性。
 - 内容 diff/hash、非 D3D11 model backend、重叠几何像素对照、UI 帧时间/分配实测仍未完成。
 
+## 第 4.52 子阶段：D3D11 uniform buffer 合同与视觉矩阵回归
+
+### 实现与范围
+
+- `BufferDesc` 增加显式 `uniformBuffer` 标记；普通未类型化上传 buffer 不再隐式绑定 D3D11 constant-buffer。
+- Editor model preview、model scene、ForwardRenderer、clustered lighting 和 post-process 参数 buffer 显式声明 uniform；D3D11 仅对这些资源执行 16-byte 对齐和完整块更新。
+- 本轮修复了首轮视觉审计暴露的启动期回归：示例的普通 16-byte buffer 只更新 4 字节时，不再被错误拒绝为“必须覆盖完整 aligned buffer”。并行 Physics/CMake 工作树改动未被覆盖或混入 UI 提交。
+
+### 契约与证据
+
+- 增量构建 `shinkou_ui_capture`、`shinkou_engine_sample` 通过；样例 D3D11 editor 启动输出恢复 `editor-ui-commands`、`editor-ui-text`、viewport 和 theme 字段。
+- 全量 CTest：`57/57 passed`，总计 `32.46 sec`；其中 `EditorInteractionTests`、model renderer/glTF、媒体、渲染图和 Physics 回归均通过。
+- `out/qa/ui-capture-matrix-fixed/matrix.manifest.json`：5/5 场景 `captureStatus=captured`，均为 `EngineGpuReadback / GpuClientSurface`；客户区通过 `1280x720`、`1600x900`、`1024x768` 尺寸检查，UI 命令为 181–195，文本命令为 41。
+- 暗色、浅色、高对比度 BMP 已人工检查；窗口 shell、viewport、Hierarchy、Asset Browser、Inspector、按钮和主题边界可见且未发生裁切。主机 child log 为 `dpi=144`（150%），所以请求的 100%/125% DPI 像素比例按规则标为 `inconclusive`，不是 DPI 通过。
+
+### 安全、性能与视觉审计
+
+- uniform 语义从调用方显式传入，避免普通上传、vertex/index/structured/storage buffer 因“未设置其他类型”被错误提升为常量缓冲区；没有新增路径、shell、网络或外部进程入口。
+- D3D11 常量 buffer 仍按对齐后的完整块更新，普通 buffer 保留 partial update；uniform 标记只改变资源创建和对应更新合同，不在 paint 中做 IO 或等待 GPU。
+- GPU capture 矩阵的 BMP 来自 engine swapchain readback，`GpuClientSurface` 与 child log 同时存在；GDI fallback 未用于本轮 5 个 GPU 结论。
+
+### 失败状态与回滚路径
+
+- 首次修复前矩阵 5/5 在 HWND 创建前失败，原始日志为 `D3D11 constant-buffer updates must cover the complete aligned buffer`；该失败保留在 `out/qa/ui-capture-matrix-current`，没有用降级截图掩盖。
+- 若其他调用方忘记设置 `uniformBuffer`，D3D11 会把资源当普通 buffer，后续 bind/graph 校验仍会报告明确资源或 shader 合同错误；可回滚显式字段和调用点，保留普通 buffer 原有更新路径。
+- 首次整套 CTest 调度曾在数学并行测试处偶发挂起；中止后单独三次通过并重新执行全量 `57/57 passed`，因此没有把未完成调度当作证据。
+
+### 未解决风险与下一轮
+
+- 当前主机只有 150% DPI，仍需在实际 100%/125% Windows 缩放环境复跑像素矩阵；模型重叠几何的深度像素 oracle、非 D3D11 model backend、动画 skin/playback、内容 diff/hash 与 UI 帧时间/分配实测仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

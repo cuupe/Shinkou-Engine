@@ -1331,3 +1331,21 @@
 
 - 交互回归确认带 `Idle` clip 的 glTF 会产生 retained text command；全量 CTest 继续覆盖模型/媒体/UI/Physics。
 - 视觉证据只确认名称在 model area 的 retained text 路径；播放能力继续留在后续独立轮次。
+
+### 第 4.52 子阶段：D3D11 uniform buffer 合同与视觉矩阵回归
+
+目标：修复视觉审计发现的启动期 D3D11 常量缓冲区误判，同时把 GPU capture 矩阵重新跑通；普通上传 Buffer 与真正的 shader uniform buffer 必须有明确、可审计的资源语义。
+
+实现范围：
+
+- `BufferDesc` 增加显式 `uniformBuffer` 标记；普通未类型化上传 buffer 不再隐式绑定 D3D11 constant-buffer。
+- Editor model preview、model scene、ForwardRenderer、clustered lighting 和 post-process 参数 buffer 显式声明 uniform；D3D11 仅对这些资源执行 16-byte 对齐和完整块更新。
+- 保留外部物理分支的其余渲染改动，不改变 vertex/index/structured/storage buffer 的更新路径。
+- 非目标：本轮不扩展 D3D12/Vulkan descriptor model，不引入隐式资源反射或改变普通 buffer 的 partial update 语义。
+
+审计与验证安排：
+
+- 回归：示例启动必须不再报告 `D3D11 constant-buffer updates must cover the complete aligned buffer`；普通 16-byte/4-byte 上传与真实 uniform buffer 均通过。
+- 集成：全量 CTest、EditorInteraction、model renderer/glTF、媒体和渲染图测试继续通过。
+- 视觉：`RunUiMatrix.ps1` 生成 5 个 D3D11 GPU readback 场景，检查客户区尺寸、surface kind、主题字段、UI/text command 数量；暗色、浅色、高对比度 BMP 进行人工检查。
+- 非确定项：当前主机实际 Windows DPI 为 150%，因此脚本请求的 100%/125% 像素比例只能标为 `inconclusive`；这不替代对应缩放环境的复跑。

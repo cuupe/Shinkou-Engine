@@ -566,6 +566,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
         render::BufferDesc description;
         description.size = sizeof(sceneFrame);
+        description.uniformBuffer = true;
         description.initialData = copy_bytes(&sceneFrame, sizeof(sceneFrame));
         sceneBuffer_ = renderer.create_buffer(description);
         projectionKey_ = 0;
@@ -585,6 +586,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         if (materialBuffer_) renderer.destroy_resource(materialBuffer_);
         render::BufferDesc description;
         description.size = sizeof(materialFrame);
+        description.uniformBuffer = true;
         description.initialData = copy_bytes(&materialFrame, sizeof(materialFrame));
         materialBuffer_ = renderer.create_buffer(description);
         materialRevision_ = 0;
