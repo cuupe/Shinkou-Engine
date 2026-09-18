@@ -38,9 +38,20 @@ int main() {
     assert(files.write_text_atomic("assets/materials/new.mat", "shader=unlit\n", &error));
     const auto changedScan = files.scan("assets", true, 16);
     assert(std::any_of(changedScan.changes.begin(), changedScan.changes.end(), [](const FileChange& change) {
-        return change.type == FileChangeType::Added && change.relativePath == "assets/materials/new.mat";
+        return change.type == FileChangeType::Added && change.relativePath == "assets/materials/new.mat" &&
+            change.previousSize == 0 && change.currentSize == std::string("shader=unlit\n").size() &&
+            change.previousWriteStamp == 0 && change.currentWriteStamp != 0;
     }));
     assert(files.rename("assets/materials/test.mat", "assets/materials/renamed.mat", &error));
+    const auto renamedScan = files.scan("assets", true, 16);
+    assert(std::any_of(renamedScan.changes.begin(), renamedScan.changes.end(), [](const FileChange& change) {
+        return change.type == FileChangeType::Added && change.relativePath == "assets/materials/renamed.mat" &&
+            change.currentSize == std::string("shader=flat\n").size();
+    }));
+    assert(std::any_of(renamedScan.changes.begin(), renamedScan.changes.end(), [](const FileChange& change) {
+        return change.type == FileChangeType::Removed && change.relativePath == "assets/materials/test.mat" &&
+            change.previousSize == std::string("shader=flat\n").size() && change.currentSize == 0;
+    }));
     std::string content;
     assert(files.read_text("assets/materials/renamed.mat", content, &error));
     assert(content == "shader=flat\n");
@@ -51,10 +62,22 @@ int main() {
     assert(files.read_text_limited("assets/materials/renamed.mat", 4, content, &truncated, &error));
     assert(truncated && content == "repl");
     assert(files.read_text("assets/materials/renamed.mat", content, &error) && content == "replacement");
+    const auto modifiedScan = files.scan("assets", true, 16);
+    assert(std::any_of(modifiedScan.changes.begin(), modifiedScan.changes.end(), [](const FileChange& change) {
+        return change.type == FileChangeType::Modified && change.relativePath == "assets/materials/renamed.mat" &&
+            change.previousSize == std::string("shader=flat\n").size() &&
+            change.currentSize == std::string("replacement").size() &&
+            change.previousWriteStamp != 0 && change.currentWriteStamp != 0;
+    }));
     assert(!files.write_text_atomic("assets/materials", "must not replace a directory", &error));
     assert(files.exists("assets/materials/renamed.mat"));
     assert(!files.rename("assets/materials/renamed.mat", "../outside.mat", &error));
     assert(files.remove("assets/materials/renamed.mat", &error));
+    const auto removedScan = files.scan("assets", true, 16);
+    assert(std::any_of(removedScan.changes.begin(), removedScan.changes.end(), [](const FileChange& change) {
+        return change.type == FileChangeType::Removed && change.relativePath == "assets/materials/renamed.mat" &&
+            change.previousSize == std::string("replacement").size() && change.currentSize == 0;
+    }));
     assert(!files.exists("assets/materials/renamed.mat"));
     assert(files.remove("assets/materials", &error));
     assert(!files.exists("assets/materials"));

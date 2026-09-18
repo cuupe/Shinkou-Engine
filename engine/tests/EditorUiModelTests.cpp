@@ -67,12 +67,15 @@ int main() {
     recovery.externalChangeCount = 1;
     recovery.latestExternalBatchId = 7;
     recovery.externalBatchStatus = "Batch #7: 1 external path(s) require review";
-    recovery.externalChanges.push_back({"assets/external-editor.txt", "Modified", 7});
+    recovery.externalChanges.push_back({"assets/external-editor.txt", "Modified", 7,
+                                        12, 24, 100, 200, false, false});
     model.set_file_recovery_state(recovery);
     const auto recoveryRevision = model.revision();
     model.set_file_recovery_state(recovery);
     if (model.revision() != recoveryRevision || model.file_recovery_state().latestExternalBatchId != 7 ||
-        model.file_recovery_state().externalChanges.front().batchId != 7) return 11;
+        model.file_recovery_state().externalChanges.front().batchId != 7 ||
+        model.file_recovery_state().externalChanges.front().previousBytes != 12 ||
+        model.file_recovery_state().externalChanges.front().currentBytes != 24) return 11;
     auto boundedRecovery = recovery;
     boundedRecovery.externalChanges.clear();
     for (std::size_t index = 0; index < 65; ++index)

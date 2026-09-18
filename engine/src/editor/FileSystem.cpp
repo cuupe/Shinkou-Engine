@@ -255,11 +255,21 @@ FileScanResult FileSystemService::scan(std::filesystem::path relative, bool recu
     result.changes.reserve(current.size() + snapshot_.size());
     for (const auto& [path, value] : current) {
         const auto found = snapshot_.find(path);
-        if (found == snapshot_.end()) result.changes.push_back({path, FileChangeType::Added});
-        else if (!(found->second == value)) result.changes.push_back({path, FileChangeType::Modified});
+        if (found == snapshot_.end()) {
+            result.changes.push_back({path, FileChangeType::Added, 0, value.size, 0, value.writeStamp,
+                                      false, value.directory});
+        } else if (!(found->second == value)) {
+            result.changes.push_back({path, FileChangeType::Modified, found->second.size, value.size,
+                                      found->second.writeStamp, value.writeStamp,
+                                      found->second.directory, value.directory});
+        }
     }
-    for (const auto& [path, value] : snapshot_)
-        if (current.find(path) == current.end()) result.changes.push_back({path, FileChangeType::Removed});
+    for (const auto& [path, value] : snapshot_) {
+        if (current.find(path) == current.end()) {
+            result.changes.push_back({path, FileChangeType::Removed, value.size, 0, value.writeStamp, 0,
+                                      value.directory, false});
+        }
+    }
     snapshot_ = std::move(current);
     std::sort(result.changes.begin(), result.changes.end(), [](const FileChange& left, const FileChange& right) {
         return left.relativePath.generic_string() < right.relativePath.generic_string();

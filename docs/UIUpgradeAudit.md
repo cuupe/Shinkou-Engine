@@ -2193,6 +2193,39 @@
 - 已取得 GPU readback 和三种主题截图，但尚未在实际 100%/125% OS DPI 环境分别取得像素矩阵；需要在对应显示缩放或隔离测试机复跑，当前 150% 主机证据只支持“GPU capture 成功 + logical layout 合约通过”。
 - 内容 diff/三方 resolve、模型动画/深度/offscreen backend 以及 UI 帧时间/分配实测仍未完成。
 
+## 第 4.48 子阶段：外部变化 metadata 差异与可解释审阅
+
+### 实现与范围
+
+- `FileChange` 现在在 Added、Modified、Removed 中发布 `previousSize/currentSize`、`previousWriteStamp/currentWriteStamp` 以及两侧 directory 状态；首次 scan 的 Added 与删除后的 Removed 都有明确的零侧边界。
+- Recovery model 复制这些字段并纳入 snapshot equality；外部行根据 kind 和 size 变化显示新大小、最后已知大小、前后大小箭头，或“大小未变、写入时间变化”。
+- 该轮仍是 metadata-only：Review 只选择项目内现有资源并打开 Inspector，缺失路径只回到 Recovery；没有内容读取、hash、diff、自动 reload、覆盖、删除或三方 merge。
+
+### 契约与证据
+
+- 聚焦构建目标 `shinkou_file_system_tests shinkou_editor_ui_model_tests shinkou_editor_interaction_tests` 全部通过。
+- 聚焦 CTest：`3/3 passed`，总计 `24.45 sec`；覆盖 Added/Modified/Removed metadata、UiModel equality/64 行上限、外部变化批次与 Review/Inspector/Dismiss 回归。
+- `FileSystemTests` 验证 Added 的旧大小/旧 stamp 为零且当前大小/stamp 有效；Modified 验证前后大小；Removed 验证旧大小保留且当前大小为零。
+- 本轮 UI 文案改动没有新增独立 GPU capture；上一轮 4.47 的 GPU readback 已验证同一 Recovery flat surface、DPI-safe retained regions 和主题 token。为避免过度宣称，本轮不把普通 shell capture 当作 Recovery metadata 文案的像素验收。
+
+### 安全、性能与视觉审计
+
+- 差异字段来自 bounded asynchronous FileSystem scan 的 directory metadata，不把路径交给 shell/IDE，不越过 project root，不暴露 `.shinkou`，不自动改变磁盘内容。
+- scan 只在既有 worker 边界读取 entry metadata；UiModel 和 paint 只复制/格式化有界数值，Recovery 仍最多 64 条，未引入内容 hash、递归 paint IO、解码或 renderer wait。
+- size 文案对 Added/Removed 使用明确的一侧零值语义，Modified 只有大小相等时才显示 timestamp-only 解释；真实写入时间仍属于平台 metadata，不能据此证明内容相同或不同。
+- Review/Dismiss/Undo/Redo 的交互路径不变；差异详情是只读信息，不成为隐式“接受外部版本”的按钮。
+
+### 失败状态与回滚路径
+
+- 若平台 timestamp 精度导致同一内容出现 Modified，报告仍只标记 metadata 变化，不把它升级为内容冲突；后续 hash/diff 设计必须单独提供预算、权限和失败状态。
+- 如未来 metadata schema 需要迁移，可回滚 `FileChange`/model 新字段和 Recovery 文案，保留 4.46 的 batch/review/dismiss 逻辑；没有新的磁盘格式或外部进程状态需要恢复。
+
+### 未解决风险与下一轮
+
+- 同大小且写入时间未变化的替换仍无法识别；同大小但 timestamp 变化也不等价于内容变化。下一轮应先确定内容快照保存期限、最大 hash 字节数和用户可见的“未计算”状态。
+- Recovery metadata 文案尚未在“真实外部 Added/Modified/Removed + Recovery 面板打开”的 GPU screenshot 场景中独立验收；继续保持逻辑/安全证据与像素证据分离。
+- 模型动画/深度/offscreen backend 以及 UI 帧时间/分配实测仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

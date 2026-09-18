@@ -2192,8 +2192,17 @@ void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& c
         if (existing != externalFileChanges_.end()) {
             existing->kind = kind;
             existing->batchId = batchId;
+            existing->previousBytes = change.previousSize;
+            existing->currentBytes = change.currentSize;
+            existing->previousWriteStamp = change.previousWriteStamp;
+            existing->currentWriteStamp = change.currentWriteStamp;
+            existing->previousDirectory = change.previousDirectory;
+            existing->currentDirectory = change.currentDirectory;
         } else if (externalFileChanges_.size() < 64) {
-            externalFileChanges_.push_back({path, kind, batchId});
+            externalFileChanges_.push_back({path, kind, batchId,
+                                             change.previousSize, change.currentSize,
+                                             change.previousWriteStamp, change.currentWriteStamp,
+                                             change.previousDirectory, change.currentDirectory});
         }
         ++batchChanges;
     }

@@ -258,6 +258,12 @@ struct EditorFileConflictEntryModel {
     std::string path;
     std::string kind;
     std::uint64_t batchId{0};
+    std::uintmax_t previousBytes{0};
+    std::uintmax_t currentBytes{0};
+    std::uint64_t previousWriteStamp{0};
+    std::uint64_t currentWriteStamp{0};
+    bool previousDirectory{false};
+    bool currentDirectory{false};
 };
 
 struct EditorFileRecoveryUiState {

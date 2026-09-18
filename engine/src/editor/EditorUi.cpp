@@ -2856,8 +2856,19 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
             renderList_.text({row.x + 6.0f, row.y + 3.0f, std::max(0.0f, row.width - 12.0f), 17.0f},
                              batch + "External " + change.kind + "  " + change.path, danger, 10.0f,
                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+            std::string detail;
+            if (change.kind == "Added") {
+                detail = "New " + format_bytes(change.currentBytes);
+            } else if (change.kind == "Removed") {
+                detail = "Last known " + format_bytes(change.previousBytes);
+            } else if (change.previousBytes != change.currentBytes) {
+                detail = format_bytes(change.previousBytes) + " -> " + format_bytes(change.currentBytes);
+            } else {
+                detail = "Size unchanged; write timestamp changed";
+            }
+            detail += "  ·  Click to review; reimport or Undo/Redo remains explicit";
             renderList_.text({row.x + 6.0f, row.y + 20.0f, std::max(0.0f, row.width - 12.0f), 15.0f},
-                             "Click to review; reimport or Undo/Redo remains explicit", muted, 9.0f,
+                             detail, muted, 9.0f,
                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         }
         cursor += 42.0f;

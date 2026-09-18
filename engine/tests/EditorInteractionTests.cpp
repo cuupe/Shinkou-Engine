@@ -896,7 +896,9 @@ int main() {
             editor.file_recovery_state().externalChanges.front().path != "assets/external-editor.txt" ||
             editor.file_recovery_state().latestExternalBatchId == 0 ||
             editor.file_recovery_state().externalChanges.front().batchId !=
-                editor.file_recovery_state().latestExternalBatchId) {
+                editor.file_recovery_state().latestExternalBatchId ||
+            editor.file_recovery_state().externalChanges.front().previousBytes != 0 ||
+            editor.file_recovery_state().externalChanges.front().currentBytes == 0) {
             throw std::runtime_error("external project file change was not published to the recovery audit state: " +
                 editor.file_recovery_state().status + " / " + editor.last_status());
         }

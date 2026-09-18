@@ -1259,3 +1259,22 @@
 
 - 集成：交互测试在 GLTF 预览完成后循环三种窗口/DPI/主题矩阵，断言 viewport 与 retained command/text 状态。
 - 视觉/性能：检查 logical 坐标换算、命中区越界和一次 tick 后的 render-list 非空；paint 不增加文件扫描、媒体解码或 renderer wait。
+
+### 第 4.48 子阶段：外部变化 metadata 差异与可解释审阅
+
+目标：让 Recovery 的外部变化报告回答“发生了什么”，但仍保持只读、安全和可回滚；在没有内容快照、权限模型和 hash 预算之前，不自动重载、覆盖、删除或声称完成冲突合并。
+
+实现范围：
+
+- `FileChange` 从 FileSystem scan 发布变化前后的 size、writeStamp 和 directory 状态；Added/Removed 使用一侧为零的明确边界，Modified 同时保留旧/新 metadata。
+- `EditorFileConflictEntryModel` 携带同一批 metadata，UiModel equality 将其纳入 retained snapshot 稳定比较；原有 64 条外部变化上限不变。
+- Recovery 外部行把 metadata 转为 bounded 文案：`New N B`、`Last known N B`、`old -> new` 或 `Size unchanged; write timestamp changed`，继续把 Review 作为唯一动作入口。
+- 非目标：不读取文件内容、不计算 hash、不生成 diff、不执行 reimport/merge/overwrite、不改变 FileSystem root 边界和既有编辑器事务 expectation。
+
+审计与验证安排：
+
+- 单元：FileSystem 覆盖 Added/Modified/Removed 的前后 metadata，UI model 覆盖 snapshot equality 和 64 行截断。
+- 集成：EditorInteraction 断言外部 Added 变化同时携带零旧大小和非零当前大小，并继续验证 Review/Inspector/Dismiss 路由。
+- 安全/性能：metadata 只来自异步 bounded directory scan；paint 只消费 model snapshot，不做内容读取、hash、解码或 shell/IDE 调用。
+- 视觉/交互：Recovery 仍复用 danger/flat tokens、retained hit region 和现有 DPI geometry；实际窗口像素只在打开 Recovery 且产生外部变化的 capture 场景中追加，不能用普通 shell screenshot 代替。
+- 下一入口：在明确内容读取预算、基线快照保留和权限策略后，设计受控内容 hash/diff；并继续补模型动画/深度/offscreen 与 UI 帧时间/分配实测。

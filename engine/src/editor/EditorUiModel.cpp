@@ -133,7 +133,10 @@ bool same_file_recovery_state(const EditorFileRecoveryUiState& left,
     for (std::size_t index = 0; index < left.externalChanges.size(); ++index) {
         const auto& a = left.externalChanges[index];
         const auto& b = right.externalChanges[index];
-        if (a.path != b.path || a.kind != b.kind || a.batchId != b.batchId) return false;
+        if (a.path != b.path || a.kind != b.kind || a.batchId != b.batchId ||
+            a.previousBytes != b.previousBytes || a.currentBytes != b.currentBytes ||
+            a.previousWriteStamp != b.previousWriteStamp || a.currentWriteStamp != b.currentWriteStamp ||
+            a.previousDirectory != b.previousDirectory || a.currentDirectory != b.currentDirectory) return false;
     }
     return true;
 }

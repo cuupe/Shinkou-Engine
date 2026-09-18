@@ -23,6 +23,12 @@ enum class FileChangeType : std::uint8_t { Added, Modified, Removed };
 struct FileChange {
     std::filesystem::path relativePath;
     FileChangeType type{FileChangeType::Modified};
+    std::uintmax_t previousSize{0};
+    std::uintmax_t currentSize{0};
+    std::uint64_t previousWriteStamp{0};
+    std::uint64_t currentWriteStamp{0};
+    bool previousDirectory{false};
+    bool currentDirectory{false};
 };
 
 struct FileScanResult {
