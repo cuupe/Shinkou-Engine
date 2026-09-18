@@ -54,6 +54,12 @@ struct EditorModelMaterialPreview {
     bool doubleSided{false};
 };
 
+struct EditorModelAnimationPreview {
+    std::string name;
+    std::size_t channelCount{0};
+    std::size_t samplerCount{0};
+};
+
 struct EditorModelPreviewSnapshot {
     std::uint64_t revision{0};
     std::string sourceFormat{"obj"};
@@ -65,6 +71,7 @@ struct EditorModelPreviewSnapshot {
     std::size_t materialCount{0};
     std::size_t textureCount{0};
     std::size_t imageCount{0};
+    std::size_t animationCount{0};
     float minX{0.0f};
     float minY{0.0f};
     float minZ{0.0f};
@@ -91,6 +98,7 @@ struct EditorModelPreviewSnapshot {
     std::shared_ptr<const std::vector<EditorModelTexturePreview>> textures{};
     std::shared_ptr<const std::vector<EditorModelImagePreview>> images{};
     std::shared_ptr<const std::vector<EditorModelTextureArtifact>> imageArtifacts{};
+    std::shared_ptr<const std::vector<EditorModelAnimationPreview>> animations{};
     // Each adjacent pair is a normalized wireframe segment in [0, 1].
     std::shared_ptr<const std::vector<ui::Vec2>> wireSegments{};
 

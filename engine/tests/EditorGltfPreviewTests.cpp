@@ -75,6 +75,7 @@ std::string triangle_json() {
       "samplers":[{}],
       "textures":[{"name":"AlbedoTexture","source":0,"sampler":0}],
       "materials":[{"name":"TriangleMaterial","pbrMetallicRoughness":{"baseColorFactor":[0.2,0.4,0.8,1.0],"metallicFactor":0.25,"roughnessFactor":0.75,"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":0}},"alphaMode":"BLEND","doubleSided":true}],
+      "animations":[{"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]}],
       "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":2,"NORMAL":3},"indices":1}]}]
     })json";
 }
@@ -140,6 +141,10 @@ int main() {
            gltf.snapshot->triangleCount == 1 && gltf.snapshot->meshCount == 1 &&
            gltf.snapshot->primitiveCount == 1 && gltf.snapshot->materialCount == 1 &&
            gltf.snapshot->textureCount == 1 && gltf.snapshot->imageCount == 1 &&
+           gltf.snapshot->animationCount == 1 && gltf.snapshot->animations &&
+           gltf.snapshot->animations->front().name == "Idle" &&
+           gltf.snapshot->animations->front().channelCount == 1 &&
+           gltf.snapshot->animations->front().samplerCount == 1 &&
            gltf.snapshot->materials && gltf.snapshot->materials->front().name == "TriangleMaterial" &&
            gltf.snapshot->materials->front().baseColorTexture == 0 &&
            gltf.snapshot->materials->front().metallicRoughnessTexture == 0 &&

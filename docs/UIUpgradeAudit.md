@@ -2257,6 +2257,36 @@
 - 仍需加入重叠几何 fixture 或真实模型的 GPU 像素对照，证明 depth test/write 的视觉收益；透明材质排序和 MSAA 尚未处理。
 - 模型动画/skin preview、非 D3D11 backend、UI 帧时间/分配实测和内容 diff/hash 预算仍未完成。
 
+## 第 4.50 子阶段：glTF 动画清单与导入可见性
+
+### 实现与范围
+
+- glTF/GLB provider 现在解析 bounded `animations` table，发布 clip name、channelCount、samplerCount；缺少 name 时使用 `Animation #N`。
+- 解析过程拒绝非 object clip、缺少或非 array 的 sampler/channel table、超出 metadata 上限的数组，以及指向不存在 sampler 的 channel；动画数据保持 immutable metadata，不进入静态 GPU geometry。
+- Model Inspector stats 增加 `N anim`；本轮没有时间轴、播放按钮、骨骼 skinning 或动画采样，避免把 inventory 当作播放完成。
+
+### 契约与证据
+
+- 聚焦 CTest：`3/3 passed`，总计 `27.81 sec`，覆盖 `EditorModelPreviewTests`、`EditorGltfPreviewTests`、`EditorInteractionTests`。
+- glTF fixture 含 `Idle` clip，断言 snapshot 的 `animationCount=1`、name 为 `Idle`、channel/sampler 各为 1；同一 fixture 的 GLB、AssetSystem bytes、image/material/texture、cancel 和安全路径回归继续通过。
+- 交互回归确认模型选择、材质/纹理状态、GPU depth/offscreen 状态没有被 animation metadata 改变。
+
+### 安全、性能与视觉审计
+
+- animation metadata 只来自已解析的项目内 glTF JSON；没有新增 URI 读取、外部进程、网络或写盘动作。
+- 数组受 `kMaxModelMetadataEntries` 限制，paint 只消费 count/name，不创建 future、GPU buffer 或 decoder；snapshot 仍以 shared immutable vector 跨线程交付。
+- retained stats 行可以说明“有 N 个 clip”，但不说明 clip 可播放、duration 正确或节点绑定完整；这些属性必须等后续 skin/采样验证后再声明。
+
+### 失败状态与回滚路径
+
+- malformed animation metadata 使 provider 返回明确错误，不影响此前已加载的 snapshot；取消和 source generation 语义不变。
+- 可回滚 animation vector/count、parser validation 和 stats 文案，静态 geometry/material/texture/depth preview 不依赖该字段。
+
+### 未解决风险与下一轮
+
+- 当前没有访问 animation input/output accessor，也没有验证 node/skin/joint inverse bind matrix；因此还不能播放真实骨骼动画。
+- 非 D3D11 backend、重叠几何 depth 像素对照、UI 帧时间/分配实测和内容 diff/hash 预算仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

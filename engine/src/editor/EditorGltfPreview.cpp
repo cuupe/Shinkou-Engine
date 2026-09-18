@@ -1032,6 +1032,41 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
         }
     }
 
+    std::vector<EditorModelAnimationPreview> animationMetadata;
+    if (const auto* animationsValue = member(root, "animations")) {
+        if (animationsValue->kind != JsonValue::Kind::Array ||
+            animationsValue->array.size() > kMaxModelMetadataEntries)
+            return failed(path, generation, sourceStamp, "glTF animation table exceeds the preview limit");
+        animationMetadata.reserve(animationsValue->array.size());
+        for (std::size_t index = 0; index < animationsValue->array.size(); ++index) {
+            const auto& value = animationsValue->array[index];
+            const auto* samplers = member(value, "samplers");
+            const auto* channels = member(value, "channels");
+            if (value.kind != JsonValue::Kind::Object || !samplers ||
+                samplers->kind != JsonValue::Kind::Array || !channels ||
+                channels->kind != JsonValue::Kind::Array ||
+                samplers->array.size() > kMaxModelMetadataEntries ||
+                channels->array.size() > kMaxModelMetadataEntries)
+                return failed(path, generation, sourceStamp, "glTF animation has invalid sampler/channel tables");
+            EditorModelAnimationPreview animation;
+            if (!optional_string(value, "name", animation.name, error))
+                return failed(path, generation, sourceStamp, error);
+            if (animation.name.empty()) animation.name = "Animation #" + std::to_string(index + 1u);
+            animation.samplerCount = samplers->array.size();
+            animation.channelCount = channels->array.size();
+            for (const auto& channel : channels->array) {
+                if (channel.kind != JsonValue::Kind::Object)
+                    return failed(path, generation, sourceStamp, "glTF animation channel is not an object");
+                std::size_t samplerIndex = 0;
+                if (!number_to_size(member(channel, "sampler"),
+                                    animation.samplerCount == 0 ? 0 : animation.samplerCount - 1u,
+                                    samplerIndex))
+                    return failed(path, generation, sourceStamp, "glTF animation channel sampler index is invalid");
+            }
+            animationMetadata.push_back(std::move(animation));
+        }
+    }
+
     Geometry geometry;
     std::size_t primitiveCount = 0;
     for (const auto& mesh : meshesValue->array) {
@@ -1135,6 +1170,7 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
     snapshot->materialCount = materialMetadata.size();
     snapshot->textureCount = textureMetadata.size();
     snapshot->imageCount = imageMetadata.size();
+    snapshot->animationCount = animationMetadata.size();
     calculate_bounds_and_wire(geometry, *snapshot, cancel);
     if (!snapshot->wireSegments) return failed(path, generation, sourceStamp, "model preview cancelled");
     snapshot->vertices = std::make_shared<const std::vector<math::Vec3>>(std::move(geometry.vertices));
@@ -1150,6 +1186,7 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
     snapshot->textures = std::make_shared<const std::vector<EditorModelTexturePreview>>(std::move(textureMetadata));
     snapshot->images = std::make_shared<const std::vector<EditorModelImagePreview>>(std::move(imageMetadata));
     snapshot->imageArtifacts = std::make_shared<const std::vector<EditorModelTextureArtifact>>(std::move(imageArtifacts));
+    snapshot->animations = std::make_shared<const std::vector<EditorModelAnimationPreview>>(std::move(animationMetadata));
     EditorModelPreviewResult result;
     result.generation = generation; result.sourceStamp = sourceStamp;
     result.path = path; result.snapshot = std::move(snapshot);

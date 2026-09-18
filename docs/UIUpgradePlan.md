@@ -1297,3 +1297,22 @@
 - 安全/性能：depth 资源受 viewport bounded target limit 约束，resize/clear 只在 renderer lifecycle 边界发生；paint 不创建 GPU 资源。
 - 视觉：继续使用 D3D11 offscreen readback；后续应增加前后重叠模型的像素/深度回归，不能只凭 `depthTargetReady` 声称遮挡视觉正确。
 - 下一入口：验证重叠几何像素差异后进入模型动画/skin preview；并保留 UI 帧时间/分配实测和内容 diff 的独立队列。
+
+### 第 4.50 子阶段：glTF 动画清单与导入可见性
+
+目标：让模型 Inspector 明确告诉用户资源是否包含动画 clip，并把名称、channel 数和 sampler 数纳入可审计 snapshot；本轮先建立资源可见性，不伪装成已完成动画播放。
+
+实现范围：
+
+- glTF/GLB provider 解析有界 `animations` table，校验 sampler/channel table 类型、数量上限和 channel sampler 索引。
+- `EditorModelPreviewSnapshot` 保留 immutable animation metadata 和 `animationCount`；缺少 name 的 clip 使用稳定的 `Animation #N` fallback。
+- 模型统计行显示 `N anim`，与 verts/tris/meshes/materials/textures 同一 retained 文案路径；动画 metadata 不进入 renderer/GPU buffer，不改变静态 geometry preview。
+- 非目标：不计算时间 duration、不读取 animation input/output accessor、不做骨骼节点/skin 变换、不加入播放/暂停/时间轴/循环或动画缓存；这些需要独立的采样和性能预算。
+
+审计与验证安排：
+
+- provider 单元/fixture：覆盖有名 clip、channel/sampler 计数、缺名 fallback 和 malformed table/index rejection。
+- 集成：model preview 与 EditorInteraction 回归，确认 animation metadata 不破坏材质/纹理/深度状态。
+- 安全/性能：只解析 bounded JSON metadata，不新增外部路径或 shell 入口，不把动画数据上传 GPU；paint 只格式化 count。
+- 视觉：保留现有 model stats/status retained region；真实窗口截图只证明清单可见，不能证明动画播放。
+- 下一入口：设计骨骼节点/skin 数据模型、时间采样预算与静态/播放状态切换，再实现首个 CPU preview clip；并继续完成内容 diff/hash 与 UI 性能实测。

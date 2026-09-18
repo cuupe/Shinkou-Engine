@@ -1780,7 +1780,8 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                         std::to_string(modelPreview.triangleCount) + " tris  " +
                         std::to_string(modelPreview.meshCount) + " meshes  " +
                         std::to_string(modelPreview.materialCount) + " mats  " +
-                        std::to_string(modelPreview.textureCount) + " tex";
+                        std::to_string(modelPreview.textureCount) + " tex  " +
+                        std::to_string(modelPreview.animationCount) + " anim";
                     renderList_.text({modelArea.x + 8.0f, modelArea.bottom() - 18.0f,
                                       std::max(0.0f, modelArea.width - 16.0f), 16.0f},
                                      stats, muted, 9.0f, {}, ui::TextAlign::End,
