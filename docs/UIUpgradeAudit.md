@@ -2226,6 +2226,37 @@
 - Recovery metadata 文案尚未在“真实外部 Added/Modified/Removed + Recovery 面板打开”的 GPU screenshot 场景中独立验收；继续保持逻辑/安全证据与像素证据分离。
 - 模型动画/深度/offscreen backend 以及 UI 帧时间/分配实测仍未完成。
 
+## 第 4.49 子阶段：模型 GPU offscreen 深度附件
+
+### 实现与范围
+
+- 模型 offscreen color target 现在配套同尺寸 `d24s8` depth-stencil target；render graph 的 `editor_model_preview` pass 同时写入 color/depth，composite pass 只读取 color 并继续无深度全屏绘制。
+- D3D11 model pipeline 从 `depthTest=false/depthWrite=false/depthFormat=none` 改为 `true/true/d24s8`；target 尺寸或格式变化会安全重建 depth resource，renderer clear/shutdown 释放它。
+- `EditorModelPreviewRenderState.depthTargetReady`、`EditorAssetPreviewUiState.modelGpuDepthTargetReady` 和 status `depth-tested` 提供可审计状态；不支持 D3D11、viewport 或 offscreen capability 的 backend 仍返回明确 fallback。
+
+### 契约与证据
+
+- 聚焦构建目标 `shinkou_editor_model_preview_renderer_tests shinkou_editor_ui_model_tests shinkou_editor_interaction_tests` 通过。
+- 聚焦 CTest：`3/3 passed`，总计 `28.73 sec`；覆盖 Null fallback、native D3D11 model resource/graph/readback 路径、depth target 状态、UI model equality 与 EditorInteraction 回归。
+- native renderer test 在可用 D3D11 设备上断言 `depthTargetReady`、status 含 `depth-tested`，并保留既有 offscreen readback/pixel activity 断言；无设备环境仍只报告 capability fallback，不伪造 GPU 通过。
+
+### 安全、性能与视觉审计
+
+- depth target 尺寸沿用 `preview_target_dimension` 上限，不能由模型文件任意放大；资源由 renderer-owned handle 管理，没有文件、网络或外部进程入口。
+- depth target 仅在 render lifecycle 的 resize/首次创建/clear 边界分配；graph pass 声明 `DepthStencil` access，避免隐式 target 状态和跨 pass 残留。
+- 当前已验证 GPU offscreen readback 与 depth resource/graph seam，但测试 fixture 是单三角形，尚未证明两个相互遮挡三角形的最终像素顺序；因此本轮不宣称完整遮挡视觉验收。
+- Inspector retained UI 只显示既有模型 GPU status；未在 paint 中加入同步 GPU wait、文件扫描或模型重载。
+
+### 失败状态与回滚路径
+
+- depth resource 创建或 graph import 失败时 render state 返回明确错误，既有 retained/WIC preview 不被清除为“成功”；backend capability 不足仍保留 fallback。
+- 可回滚新增 depth handle、graph access、pipeline depth flags 和状态字段，保留此前 color-only offscreen preview；没有新增磁盘格式或用户项目迁移。
+
+### 未解决风险与下一轮
+
+- 仍需加入重叠几何 fixture 或真实模型的 GPU 像素对照，证明 depth test/write 的视觉收益；透明材质排序和 MSAA 尚未处理。
+- 模型动画/skin preview、非 D3D11 backend、UI 帧时间/分配实测和内容 diff/hash 预算仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

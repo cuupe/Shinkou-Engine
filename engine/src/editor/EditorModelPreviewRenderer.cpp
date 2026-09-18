@@ -327,6 +327,7 @@ void EditorModelPreviewRenderer::clear(render::Renderer& renderer) noexcept {
     if (normalTexture_) renderer.destroy_resource(normalTexture_);
     if (metallicRoughnessSampler_) renderer.destroy_resource(metallicRoughnessSampler_);
     if (metallicRoughnessTexture_) renderer.destroy_resource(metallicRoughnessTexture_);
+    if (offscreenDepth_) renderer.destroy_resource(offscreenDepth_);
     if (offscreenColor_) renderer.destroy_resource(offscreenColor_);
     if (materialBuffer_) renderer.destroy_resource(materialBuffer_);
     if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
@@ -339,6 +340,7 @@ void EditorModelPreviewRenderer::clear(render::Renderer& renderer) noexcept {
     normalTexture_ = {};
     metallicRoughnessSampler_ = {};
     metallicRoughnessTexture_ = {};
+    offscreenDepth_ = {};
     offscreenColor_ = {};
     sceneBuffer_ = {};
     indexBuffer_ = {};
@@ -359,6 +361,7 @@ void EditorModelPreviewRenderer::clear(render::Renderer& renderer) noexcept {
     offscreenWidth_ = 0;
     offscreenHeight_ = 0;
     offscreenColorFormat_.clear();
+    offscreenDepthFormat_.clear();
 }
 
 EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
@@ -432,6 +435,28 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         return state;
     }
     state.offscreenTargetReady = true;
+    const std::string depthFormat = "d24s8";
+    const auto* depthDescription = renderer.resource_description(offscreenDepth_);
+    const auto* depthTexture = depthDescription ? std::get_if<render::TextureDesc>(depthDescription) : nullptr;
+    const bool depthCompatible = offscreenDepth_ && depthTexture &&
+        depthTexture->width == targetWidth && depthTexture->height == targetHeight &&
+        depthTexture->format == depthFormat && depthTexture->depthStencil;
+    if (!depthCompatible) {
+        if (offscreenDepth_) renderer.destroy_resource(offscreenDepth_);
+        render::TextureDesc description;
+        description.width = targetWidth;
+        description.height = targetHeight;
+        description.format = depthFormat;
+        description.retainCpuCopy = false;
+        description.depthStencil = true;
+        offscreenDepth_ = renderer.create_depth_stencil(description);
+        offscreenDepthFormat_ = offscreenDepth_ ? depthFormat : std::string{};
+    }
+    if (!offscreenDepth_) {
+        state.status = "GPU model preview depth target creation failed: " + renderer.last_error();
+        return state;
+    }
+    state.depthTargetReady = true;
 
     if (snapshot.vertices->size() > kMaxPreviewVertices || snapshot.indices->size() > kMaxPreviewIndices ||
         snapshot.vertices->size() > std::numeric_limits<std::size_t>::max() / sizeof(math::Vec3) ||
@@ -710,8 +735,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         pipelineDescription.name = "editor_model_preview_pipeline_" + colorFormat;
         pipelineDescription.vertexShader = vertexShader_.id;
         pipelineDescription.fragmentShader = fragmentShader_.id;
-        pipelineDescription.depthTest = false;
-        pipelineDescription.depthWrite = false;
+        pipelineDescription.depthTest = true;
+        pipelineDescription.depthWrite = true;
         pipelineDescription.vertexInput = true;
         pipelineDescription.vertexTextureCoordinates = true;
         pipelineDescription.vertexNormals = true;
@@ -722,7 +747,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         pipelineDescription.fillMode = "solid";
         pipelineDescription.topology = "triangle";
         pipelineDescription.colorFormat = colorFormat;
-        pipelineDescription.depthFormat = "none";
+        pipelineDescription.depthFormat = depthFormat;
         pipeline_ = renderer.create_pipeline(pipelineDescription);
         if (!pipeline_) {
             state.status = "GPU model preview pipeline creation failed: " + renderer.last_error();
@@ -830,7 +855,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     };
     if (!import_resource(vertexBuffer_) || !import_resource(indexBuffer_) ||
         !import_resource(sceneBuffer_) || !import_resource(materialBuffer_) ||
-        !import_resource(offscreenColor_) ||
+        !import_resource(offscreenColor_) || !import_resource(offscreenDepth_) ||
         !import_resource(baseColorTexture_) || !import_resource(baseColorSampler_) ||
         !import_resource(normalTexture_) || !import_resource(normalSampler_) ||
         !import_resource(metallicRoughnessTexture_) || !import_resource(metallicRoughnessSampler_) ||
@@ -841,6 +866,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     const auto indexCount = static_cast<std::uint32_t>(snapshot.indices->size());
     renderer.graph().add_pass("editor_model_preview", {
         {offscreenColor_, render::ResourceUsage::ColorAttachment0},
+        {offscreenDepth_, render::ResourceUsage::DepthStencil},
         {material_, render::ResourceUsage::ShaderRead},
         {baseColorTexture_, render::ResourceUsage::ShaderRead},
         {baseColorSampler_, render::ResourceUsage::ShaderRead},
@@ -854,8 +880,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         {indexBuffer_, render::ResourceUsage::IndexBuffer}},
         [material = material_, scene = sceneBuffer_, parameters = materialBuffer_,
          vertex = vertexBuffer_, index = indexBuffer_, indexCount,
-         offscreen = offscreenColor_](auto& backend, const auto&) {
-            if (!backend.bind_editor_render_target(offscreen, {}, true)) return;
+         offscreen = offscreenColor_, depth = offscreenDepth_](auto& backend, const auto&) {
+            if (!backend.bind_editor_render_target(offscreen, depth, true)) return;
             backend.bind_material(material);
             backend.bind_uniform_buffer(scene, 2, 0);
             backend.bind_uniform_buffer(parameters, 4, 0);
@@ -897,6 +923,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
             : actualBaseColorTexture_
                 ? "GPU geometry preview ready (D3D11); offscreen target composited, base color texture sampled"
                 : "GPU geometry preview ready (D3D11); offscreen target composited, base color applied, texture artifact unavailable");
+    state.status += "; depth-tested";
     return state;
 }
 

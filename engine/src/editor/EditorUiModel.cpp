@@ -166,6 +166,7 @@ bool same_asset_preview(const EditorAssetPreviewUiState& left, const EditorAsset
         left.modelGpuMetallicRoughnessTextureSampled == right.modelGpuMetallicRoughnessTextureSampled &&
         left.modelGpuTextureSampled == right.modelGpuTextureSampled &&
         left.modelGpuOffscreenTargetReady == right.modelGpuOffscreenTargetReady &&
+        left.modelGpuDepthTargetReady == right.modelGpuDepthTargetReady &&
         left.modelGpuOffscreenCompositeApplied == right.modelGpuOffscreenCompositeApplied &&
         left.modelGpuPreviewStatus == right.modelGpuPreviewStatus &&
         left.assetSystemStatus == right.assetSystemStatus &&

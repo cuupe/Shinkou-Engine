@@ -37,6 +37,7 @@ struct EditorModelPreviewRenderState {
     bool metallicRoughnessTextureSampled{false};
     bool textureSampled{false};
     bool offscreenTargetReady{false};
+    bool depthTargetReady{false};
     bool offscreenCompositeApplied{false};
     std::size_t vertexCount{0};
     std::size_t triangleCount{0};
@@ -69,6 +70,7 @@ class EditorModelPreviewRenderer final {
     render::ResourceHandle metallicRoughnessTexture_{};
     render::ResourceHandle metallicRoughnessSampler_{};
     render::ResourceHandle offscreenColor_{};
+    render::ResourceHandle offscreenDepth_{};
     std::size_t vertexBytes_{0};
     std::size_t indexBytes_{0};
     std::uint64_t geometryRevision_{0};
@@ -92,6 +94,7 @@ class EditorModelPreviewRenderer final {
     std::uint32_t offscreenWidth_{0};
     std::uint32_t offscreenHeight_{0};
     std::string offscreenColorFormat_{};
+    std::string offscreenDepthFormat_{};
     std::uint32_t compositeTextureId_{0};
     std::uint32_t compositeSamplerId_{0};
 
@@ -110,6 +113,7 @@ public:
     const render::ResourceHandle& vertex_buffer() const noexcept { return vertexBuffer_; }
     const render::ResourceHandle& index_buffer() const noexcept { return indexBuffer_; }
     const render::ResourceHandle& offscreen_color() const noexcept { return offscreenColor_; }
+    const render::ResourceHandle& offscreen_depth() const noexcept { return offscreenDepth_; }
 };
 
 } // namespace shinkou::editor

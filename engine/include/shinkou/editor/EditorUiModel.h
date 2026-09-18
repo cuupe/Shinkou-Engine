@@ -181,6 +181,7 @@ struct EditorAssetPreviewUiState {
       bool modelGpuMetallicRoughnessTextureSampled{false};
       bool modelGpuTextureSampled{false};
       bool modelGpuOffscreenTargetReady{false};
+      bool modelGpuDepthTargetReady{false};
       bool modelGpuOffscreenCompositeApplied{false};
       std::string modelGpuPreviewStatus{};
     // The AssetSystem bridge is intentionally presentation-only. Providers

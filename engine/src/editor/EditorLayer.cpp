@@ -5097,6 +5097,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                 renderState.metallicRoughnessTextureSampled;
             assetPreviewState_.modelGpuTextureSampled = renderState.textureSampled;
             assetPreviewState_.modelGpuOffscreenTargetReady = renderState.offscreenTargetReady;
+            assetPreviewState_.modelGpuDepthTargetReady = renderState.depthTargetReady;
             assetPreviewState_.modelGpuOffscreenCompositeApplied = renderState.offscreenCompositeApplied;
             assetPreviewState_.modelGpuPreviewStatus = renderState.status;
         } else {
@@ -5110,6 +5111,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
             assetPreviewState_.modelGpuMetallicRoughnessTextureSampled = false;
             assetPreviewState_.modelGpuTextureSampled = false;
             assetPreviewState_.modelGpuOffscreenTargetReady = false;
+            assetPreviewState_.modelGpuDepthTargetReady = false;
             assetPreviewState_.modelGpuOffscreenCompositeApplied = false;
             assetPreviewState_.modelGpuPreviewStatus = "GPU model preview waiting: model camera state is not ready";
         }
@@ -5124,6 +5126,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
         assetPreviewState_.modelGpuMetallicRoughnessTextureSampled = false;
         assetPreviewState_.modelGpuTextureSampled = false;
         assetPreviewState_.modelGpuOffscreenTargetReady = false;
+        assetPreviewState_.modelGpuDepthTargetReady = false;
         assetPreviewState_.modelGpuOffscreenCompositeApplied = false;
         assetPreviewState_.modelGpuPreviewStatus = selectedAsset_.empty()
             ? std::string{} : "GPU model preview waiting: model geometry is not ready";

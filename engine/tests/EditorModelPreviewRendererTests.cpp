@@ -85,6 +85,7 @@ int main() {
     bool nativeOffscreenExecutionExercised = false;
     bool nativeOffscreenReadbackExercised = false;
     bool nativeOffscreenPixelActivityExercised = false;
+    bool nativeDepthTargetExercised = false;
     bool nativeTextureReadbackExercised = false;
     render::Renderer nativeRenderer(render::BackendApi::DirectX11);
     if (nativeRenderer.initialize()) {
@@ -109,9 +110,12 @@ int main() {
                     assert(nativeState.materialApplied);
                     assert(nativeState.materialFactorsApplied);
                     assert(nativeState.offscreenTargetReady);
+                    assert(nativeState.depthTargetReady);
                     assert(nativeState.offscreenCompositeApplied);
                     assert(nativeState.status.find("offscreen target composited") != std::string::npos);
+                    assert(nativeState.status.find("depth-tested") != std::string::npos);
                     nativeMaterialFactorsExercised = true;
+                    nativeDepthTargetExercised = true;
                     assert(nativeState.textureCoordinatesApplied);
                     assert(nativeState.normalsApplied);
                     assert(!nativeState.textureSampled);
@@ -127,6 +131,7 @@ int main() {
                     assert(nativeTextureExercised);
                     assert(texturedState.textureRoleApplied);
                     assert(texturedState.offscreenTargetReady);
+                    assert(texturedState.depthTargetReady);
                     assert(texturedState.offscreenCompositeApplied);
                     assert(texturedState.baseColorTextureSampled);
                     assert(!texturedState.normalTextureSampled);
@@ -220,6 +225,7 @@ int main() {
               << " native-offscreen-readback=" << (nativeOffscreenReadbackExercised ? 1 : 0)
               << " native-offscreen-pixel-activity="
               << (nativeOffscreenPixelActivityExercised ? 1 : 0)
+              << " native-depth-target=" << (nativeDepthTargetExercised ? 1 : 0)
               << " native-uploaded-texture-readback="
               << (nativeTextureReadbackExercised ? 1 : 0) << "\n";
     return 0;

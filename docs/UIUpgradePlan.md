@@ -1278,3 +1278,22 @@
 - 安全/性能：metadata 只来自异步 bounded directory scan；paint 只消费 model snapshot，不做内容读取、hash、解码或 shell/IDE 调用。
 - 视觉/交互：Recovery 仍复用 danger/flat tokens、retained hit region 和现有 DPI geometry；实际窗口像素只在打开 Recovery 且产生外部变化的 capture 场景中追加，不能用普通 shell screenshot 代替。
 - 下一入口：在明确内容读取预算、基线快照保留和权限策略后，设计受控内容 hash/diff；并继续补模型动画/深度/offscreen 与 UI 帧时间/分配实测。
+
+### 第 4.49 子阶段：模型 GPU offscreen 深度附件
+
+目标：让模型预览在复杂网格和相互遮挡的三角形下遵守深度关系，补齐“像 Unity 一样预览模型”所需的基本 3D raster contract；backend 不可用时仍安全回退到既有 retained/WIC 预览。
+
+实现范围：
+
+- `EditorModelPreviewRenderer` 为 bounded offscreen color target 配对同尺寸 D24S8 depth target，并在 render graph 中以 `DepthStencil` access 明确声明生命周期和清除边界。
+- D3D11 model pipeline 开启 depth test/write，composite pass 继续保持无深度的全屏合成；资源 resize 时按 width/height/format 重建 depth target，`clear()` 释放所有 renderer-owned handles。
+- `EditorModelPreviewRenderState` 与 Inspector model state 发布 `depthTargetReady`，status 带 `depth-tested`，让 UI/测试区分“offscreen color 成功”与“真实深度通过”。
+- 非目标：本轮不加入动画采样、骨骼 skinning、透明排序、阴影、MSAA 或 Vulkan/其他 backend shader path；不改变不可用 backend 的 fallback 语义。
+
+审计与验证安排：
+
+- renderer test：Null backend 仍拒绝 GPU 路径；native D3D11 路径要求 depth target、pipeline 状态、graph pass 和 readback 继续成立。
+- 集成：EditorInteraction 与 UiModel 回归，确保新增状态在模型选择/清理/切换时不会残留。
+- 安全/性能：depth 资源受 viewport bounded target limit 约束，resize/clear 只在 renderer lifecycle 边界发生；paint 不创建 GPU 资源。
+- 视觉：继续使用 D3D11 offscreen readback；后续应增加前后重叠模型的像素/深度回归，不能只凭 `depthTargetReady` 声称遮挡视觉正确。
+- 下一入口：验证重叠几何像素差异后进入模型动画/skin preview；并保留 UI 帧时间/分配实测和内容 diff 的独立队列。
