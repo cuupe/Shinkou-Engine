@@ -33,8 +33,18 @@ struct FileScanResult {
 // Editor-scoped file access. All paths are relative to the project root and
 // are checked before reading or writing, preventing accidental traversal.
 class FileSystemService final {
+    struct SnapshotValue {
+        std::uintmax_t size{0};
+        std::uint64_t writeStamp{0};
+        bool directory{false};
+
+        bool operator==(const SnapshotValue& other) const noexcept {
+            return size == other.size && writeStamp == other.writeStamp && directory == other.directory;
+        }
+    };
+
     std::filesystem::path root_;
-    std::unordered_map<std::string, std::uint64_t> snapshot_;
+    std::unordered_map<std::string, SnapshotValue> snapshot_;
     std::string snapshotScope_;
 
     std::filesystem::path resolve(std::filesystem::path relative, bool allowMissing) const;

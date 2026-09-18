@@ -1204,3 +1204,26 @@
 - 视觉/交互：保留现有 Media retained surface、waveform、Loop button、timeline 和 DPI-safe regions；自然结束显示 stopped + end position，重新 Play 从新 voice 起点恢复。
 - 失败状态与回滚：后端不支持 live loop 时 UI 状态仍安全生效于下一 voice；无效/缺失 voice 仅转 stopped 并清理临时绑定；可回滚 `set_loop` seam 和结束回收分支而保留已有播放/seek contract。
 - 下一入口：记录实际播放头刷新成本与不同 backend 的 duration/EOF 证据；之后进入多 DPI/主题 capture matrix、批量文件事务/外部冲突报告和模型材质/纹理/深度/动画预览。
+
+### 第 4.45 子阶段：外部文件变化审计与事务边界
+
+目标：把编译器、IDE、文件管理器或其他进程对项目目录的新增/修改/删除纳入编辑器的可审计状态，同时不把编辑器自身的原子写入、资源改名、回收移动和父目录元数据变化误报为外部冲突；编辑器不自动覆盖外部内容。
+
+实现范围：
+
+- `EditorLayer` 为 FileSystem scan 建立按 scope 的一次性基线；后续未被编辑器事务 expectation 覆盖的 Added/Modified/Removed 路径进入 Recovery snapshot，最多保留 64 条待复核报告。
+- expectation 只覆盖当前事务路径和有界父目录链；目录链标记为 exact parent，资源 rename/delete 的 subtree 标记仍只覆盖该操作根，避免屏蔽无关 sibling 变化。
+- `FileSystemService` 的扫描指纹同时比较文件大小、写入时间和目录属性；不引入每帧内容 hash，保持文件扫描在异步边界执行。
+- Recovery 面板增加 External 数量、路径/变化类型和 `Dismiss changes` 命令；清除只清理报告快照并立即发布新 model snapshot，不执行 reimport、覆盖或删除。
+- 检测到外部资源变化时触发现有 bounded file/manifest refresh；`.shinkou` 编辑器元数据变化继续隔离，不暴露为用户资源冲突。
+- 非目标：本轮不做外部文件 diff/三方合并、自动 reload/overwrite、跨进程锁、操作系统 watcher 或内容 hash；这些需要在批量事务与冲突解决轮次单独设计。
+
+审计与验证安排：
+
+- 集成：`EditorInteractionTests` 直接在项目根外部写入 `assets/external-editor.txt`，等待 scan→manifest→Recovery snapshot，断言 Added 路径、Recovery 面板按钮、Dismiss 后 snapshot 清空；同一测试继续覆盖资源改名/删除、拖放、AudioSource、模型、编译器和 Undo/Redo。
+- 单元：`FileSystemTests` 保留根边界/扫描契约，并验证 size-aware signature 不影响 Added/rename/write/remove；`EditorUiModel` 状态比较覆盖 external change 列表和有界截断。
+- 安全：外部变化只从 `FileSystemService::scan` 的 project-relative path 进入 UI；`.shinkou` 被排除，UI 不把路径交给 shell、不自动执行外部命令或写回外部文件。
+- 性能：文件变化仍以 1 秒逻辑轮询+异步 bounded scan 处理；指纹只读取 directory entry metadata，paint 只读 `EditorFileRecoveryUiState`，列表上限 64，不能因打开 Recovery 面板递归扫描。
+- 视觉/交互：复用现有 Recovery flat surface、danger token、button/focus region 和 DPI geometry；外部变化以只读 rows 呈现，编辑器事务不会污染冲突报告。
+- 失败状态与回滚：scan scope 初次切换只建立基线；扫描失败沿用既有 asset status；Dismiss 不改变磁盘；可回滚 conflict fields、expectation 过滤和 size-aware snapshot 而保留原有 FileSystem/Recovery 功能。
+- 下一入口：批量文件事务报告、外部 diff/resolve UX、多 DPI/主题 capture matrix，以及模型预览的动画/深度和真实 offscreen backend 证据。

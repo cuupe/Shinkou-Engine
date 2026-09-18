@@ -60,6 +60,7 @@ enum class EditorCommand : std::uint8_t {
     SelectBuildDiagnostic,
     OpenDiagnosticInIde,
     PruneFileRecovery,
+    ClearFileConflicts,
     MediaPlay,
     MediaPause,
     MediaStop,
@@ -252,6 +253,11 @@ struct EditorFileRecoveryEntryModel {
     bool orphan{false};
 };
 
+struct EditorFileConflictEntryModel {
+    std::string path;
+    std::string kind;
+};
+
 struct EditorFileRecoveryUiState {
     std::string status{"Recovery area is clean"};
     std::size_t undoCount{0};
@@ -259,6 +265,8 @@ struct EditorFileRecoveryUiState {
     std::size_t orphanCount{0};
     std::uintmax_t totalBytes{0};
     std::vector<EditorFileRecoveryEntryModel> entries;
+    std::size_t externalChangeCount{0};
+    std::vector<EditorFileConflictEntryModel> externalChanges;
 };
 
 class EditorUiModel {

@@ -105,6 +105,7 @@ struct EditorPanel {
 class EditorLayer {
     struct AsyncFileScan {
         std::uint64_t generation{0};
+        std::string scope;
         FileSystemService service{};
         std::vector<FileEntry> entries;
         std::vector<FileChange> changes;
@@ -153,6 +154,11 @@ class EditorLayer {
         std::string recyclePath;
         std::string selectedAssetBefore;
         std::filesystem::path assetDirectoryBefore;
+    };
+
+    struct ExpectedFileChange {
+        std::string path;
+        bool recursive{false};
     };
 
     struct AsyncModelSceneAsset {
@@ -212,6 +218,10 @@ class EditorLayer {
     std::string appliedFontPath_;
     float appliedFontSize_{0.0f};
     float editorFilePollAccumulator_{0.0f};
+    std::vector<ExpectedFileChange> expectedFileChanges_{};
+    std::vector<EditorFileConflictEntryModel> externalFileChanges_{};
+    bool fileScanBaselineReady_{false};
+    std::string fileScanBaselineScope_{};
     std::uint64_t fileScanGeneration_{0};
     std::uint64_t assetManifestGeneration_{0};
     bool assetManifestDirty_{true};
@@ -351,6 +361,9 @@ class EditorLayer {
     void poll_editor_files();
     void request_file_scan();
     void consume_file_scan();
+    void expect_editor_file_change(std::string_view path, bool recursive = false);
+    void collect_external_file_changes(const std::vector<FileChange>& changes);
+    void clear_file_conflict_report();
     void reset_asset_manifest(std::string status);
     void request_asset_manifest_scan();
     void poll_asset_manifest_scan();

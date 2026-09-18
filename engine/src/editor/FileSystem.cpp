@@ -247,14 +247,16 @@ FileScanResult FileSystemService::scan(std::filesystem::path relative, bool recu
         snapshotScope_ = scope;
     }
     result.entries = list(std::move(relative), recursive, maxEntries);
-    std::unordered_map<std::string, std::uint64_t> current;
+    std::unordered_map<std::string, SnapshotValue> current;
     current.reserve(result.entries.size());
-    for (const auto& entry : result.entries) current[key_for(entry.relativePath)] = entry.writeStamp;
+    for (const auto& entry : result.entries) {
+        current[key_for(entry.relativePath)] = {entry.size, entry.writeStamp, entry.directory};
+    }
     result.changes.reserve(current.size() + snapshot_.size());
     for (const auto& [path, value] : current) {
         const auto found = snapshot_.find(path);
         if (found == snapshot_.end()) result.changes.push_back({path, FileChangeType::Added});
-        else if (found->second != value) result.changes.push_back({path, FileChangeType::Modified});
+        else if (!(found->second == value)) result.changes.push_back({path, FileChangeType::Modified});
     }
     for (const auto& [path, value] : snapshot_)
         if (current.find(path) == current.end()) result.changes.push_back({path, FileChangeType::Removed});

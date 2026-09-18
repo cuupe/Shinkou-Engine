@@ -118,13 +118,20 @@ bool same_file_recovery_state(const EditorFileRecoveryUiState& left,
                               const EditorFileRecoveryUiState& right) {
     if (left.status != right.status || left.undoCount != right.undoCount ||
         left.redoCount != right.redoCount || left.orphanCount != right.orphanCount ||
-        left.totalBytes != right.totalBytes || left.entries.size() != right.entries.size()) return false;
+        left.totalBytes != right.totalBytes || left.entries.size() != right.entries.size() ||
+        left.externalChangeCount != right.externalChangeCount ||
+        left.externalChanges.size() != right.externalChanges.size()) return false;
     for (std::size_t index = 0; index < left.entries.size(); ++index) {
         const auto& a = left.entries[index];
         const auto& b = right.entries[index];
         if (a.kind != b.kind || a.sourcePath != b.sourcePath ||
             a.destinationPath != b.destinationPath || a.recyclePath != b.recyclePath ||
             a.bytes != b.bytes || a.recoverable != b.recoverable || a.orphan != b.orphan) return false;
+    }
+    for (std::size_t index = 0; index < left.externalChanges.size(); ++index) {
+        const auto& a = left.externalChanges[index];
+        const auto& b = right.externalChanges[index];
+        if (a.path != b.path || a.kind != b.kind) return false;
     }
     return true;
 }
@@ -386,6 +393,7 @@ void EditorUiModel::set_build_state(EditorBuildUiState state) {
 
 void EditorUiModel::set_file_recovery_state(EditorFileRecoveryUiState state) {
     if (state.entries.size() > 64) state.entries.resize(64);
+    if (state.externalChanges.size() > 64) state.externalChanges.resize(64);
     if (same_file_recovery_state(fileRecoveryState_, state)) return;
     fileRecoveryState_ = std::move(state);
     ++revision_;

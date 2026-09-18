@@ -757,8 +757,10 @@ int main() {
         gesture.type = input::InputEventType::MouseButtonUp;
         fake->queue.push_back(gesture);
         tick();
-        require(world.object_count() == objectCountBeforeDrop + 1,
-                "asset drag did not create a scene object");
+        if (world.object_count() != objectCountBeforeDrop + 1) {
+            throw std::runtime_error("asset drag did not create a scene object: " + editor.last_status() +
+                " / " + editor.asset_system_manifest_status());
+        }
         GameObject* droppedAssetObject = nullptr;
         world.each_object([&](GameObject& object) {
             if (object.get_component<AssetReferenceComponent>() != nullptr) droppedAssetObject = &object;
@@ -881,6 +883,20 @@ int main() {
                     deletedHistory.entries.front().kind == "recycle-delete" &&
                     deletedHistory.entries.front().sourcePath == "assets/Folder-extra.txt",
                 "file delete did not persist a validated operation journal");
+        {
+            std::ofstream external(project / "assets/external-editor.txt", std::ios::binary | std::ios::trunc);
+            external << "external editor change";
+        }
+        for (int i = 0; i < 720 && editor.file_recovery_state().externalChangeCount == 0; ++i) {
+            tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (editor.file_recovery_state().externalChangeCount != 1 ||
+            editor.file_recovery_state().externalChanges.empty() ||
+            editor.file_recovery_state().externalChanges.front().path != "assets/external-editor.txt") {
+            throw std::runtime_error("external project file change was not published to the recovery audit state: " +
+                editor.file_recovery_state().status + " / " + editor.last_status());
+        }
         EditorLayer restartedEditor;
         restartedEditor.set_project_root(project.generic_string());
         require(restartedEditor.initialize(false) && restartedEditor.file_history_undo_count() == 1,
@@ -893,6 +909,11 @@ int main() {
                 "file recovery panel did not publish the validated undo state");
         require(region("command:recovery-undo").width > 0,
                 "file recovery panel did not expose the Undo action");
+        require(region("command:recovery-clear-conflicts").width > 0,
+                "file recovery panel did not expose the external change acknowledgement action");
+        click("command:recovery-clear-conflicts");
+        require(editor.file_recovery_state().externalChangeCount == 0,
+                "external change acknowledgement did not clear the bounded audit report");
         AssetReferenceComponent* currentDeletedReference = nullptr;
         world.each_object([&](GameObject& object) {
             auto* reference = object.get_component<AssetReferenceComponent>();

@@ -2757,7 +2757,8 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
     renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, "File Recovery", text, 13.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
     renderList_.text({bounds.x, bounds.y + 22.0f, bounds.width, 18.0f}, recovery.status,
-                     recovery.orphanCount != 0 || recovery.totalBytes > 512ull * 1024ull * 1024ull
+                     recovery.orphanCount != 0 || recovery.externalChangeCount != 0 ||
+                     recovery.totalBytes > 512ull * 1024ull * 1024ull
                          ? danger : recovery.undoCount != 0 ? accent : muted,
                      10.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
 
@@ -2773,12 +2774,13 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
     renderList_.text({bounds.x, bounds.y + 41.0f, bounds.width, 17.0f},
                      "Undo " + std::to_string(recovery.undoCount) +
                          "  ·  Redo " + std::to_string(recovery.redoCount) +
-                         "  ·  Recycle " + format_bytes(recovery.totalBytes),
+                         "  ·  Recycle " + format_bytes(recovery.totalBytes) +
+                         "  ·  External " + std::to_string(recovery.externalChangeCount),
                      muted, 10.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
 
     const float buttonY = bounds.y + 64.0f;
     const float buttonGap = 6.0f;
-    const float buttonWidth = std::clamp((bounds.width - buttonGap * 2.0f) / 3.0f, 76.0f, 112.0f);
+    const float buttonWidth = std::clamp((bounds.width - buttonGap * 3.0f) / 4.0f, 76.0f, 112.0f);
     float buttonX = bounds.x;
     if (recovery.undoCount != 0) {
         const auto id = command_key("recovery-undo");
@@ -2796,6 +2798,12 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
         const auto id = command_key("recovery-prune-orphans");
         commandActions_[id] = {EditorCommand::PruneFileRecovery, {}};
         draw_button({buttonX, buttonY, buttonWidth, 25.0f}, id, "Prune orphans", layout);
+        buttonX += buttonWidth + buttonGap;
+    }
+    if (recovery.externalChangeCount != 0) {
+        const auto id = command_key("recovery-clear-conflicts");
+        commandActions_[id] = {EditorCommand::ClearFileConflicts, {}};
+        draw_button({buttonX, buttonY, buttonWidth, 25.0f}, id, "Dismiss changes", layout);
     }
 
     const float listTop = buttonY + 34.0f;
@@ -2803,7 +2811,7 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
                                      std::max(0.0f, bounds.y + bounds.height - listTop)};
     renderList_.rect(listBounds, surface, 3.0f);
     renderList_.border(listBounds, border, 1.0f, 3.0f);
-    if (recovery.entries.empty()) {
+    if (recovery.entries.empty() && recovery.externalChanges.empty()) {
         renderList_.text({listBounds.x + 8.0f, listBounds.y + 10.0f,
                           std::max(0.0f, listBounds.width - 16.0f), 18.0f},
                          "No recoverable file operations", muted, 10.0f,
@@ -2811,25 +2819,36 @@ void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& m
         return;
     }
     float cursor = listBounds.y + 5.0f;
-    const auto rows = std::min<std::size_t>(recovery.entries.size(),
+    const auto totalRows = recovery.entries.size() + recovery.externalChanges.size();
+    const auto rows = std::min<std::size_t>(totalRows,
                                             static_cast<std::size_t>(std::max(0.0f, listBounds.height - 8.0f) / 42.0f));
     for (std::size_t index = 0; index < rows; ++index) {
-        const auto& entry = recovery.entries[index];
         const auto row = ui::Rect{listBounds.x + 5.0f, cursor,
                                   std::max(0.0f, listBounds.width - 10.0f), 38.0f};
-        const auto rowId = command_key("recovery-entry", std::to_string(index));
-        if (entry.orphan) set_region(rowId, row);
-        if (hotRegion_ == rowId) renderList_.rect(row, color(layout.theme == "light" ? "#E8F1FC" : "#303B4A"), 3.0f);
-        const auto rowTitle = entry.orphan ? entry.recyclePath : entry.kind + "  " + entry.sourcePath;
-        renderList_.text({row.x + 6.0f, row.y + 3.0f, std::max(0.0f, row.width - 12.0f), 17.0f},
-                         rowTitle, entry.orphan ? danger : entry.recoverable ? text : muted, 10.0f,
-                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
-        std::string detail = entry.destinationPath.empty() ? entry.recyclePath : "to " + entry.destinationPath;
-        if (detail.empty()) detail = entry.recoverable ? "Ready to restore" : "Disk state changed; review before Undo";
-        if (entry.bytes != 0) detail += "  ·  " + format_bytes(entry.bytes);
-        renderList_.text({row.x + 6.0f, row.y + 20.0f, std::max(0.0f, row.width - 12.0f), 15.0f},
-                         detail, entry.orphan ? danger : muted, 9.0f,
-                         {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        if (index < recovery.entries.size()) {
+            const auto& entry = recovery.entries[index];
+            const auto rowId = command_key("recovery-entry", std::to_string(index));
+            if (entry.orphan) set_region(rowId, row);
+            if (hotRegion_ == rowId) renderList_.rect(row, color(layout.theme == "light" ? "#E8F1FC" : "#303B4A"), 3.0f);
+            const auto rowTitle = entry.orphan ? entry.recyclePath : entry.kind + "  " + entry.sourcePath;
+            renderList_.text({row.x + 6.0f, row.y + 3.0f, std::max(0.0f, row.width - 12.0f), 17.0f},
+                             rowTitle, entry.orphan ? danger : entry.recoverable ? text : muted, 10.0f,
+                             {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+            std::string detail = entry.destinationPath.empty() ? entry.recyclePath : "to " + entry.destinationPath;
+            if (detail.empty()) detail = entry.recoverable ? "Ready to restore" : "Disk state changed; review before Undo";
+            if (entry.bytes != 0) detail += "  ·  " + format_bytes(entry.bytes);
+            renderList_.text({row.x + 6.0f, row.y + 20.0f, std::max(0.0f, row.width - 12.0f), 15.0f},
+                detail, entry.orphan ? danger : muted, 9.0f,
+                             {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        } else {
+            const auto& change = recovery.externalChanges[index - recovery.entries.size()];
+            renderList_.text({row.x + 6.0f, row.y + 3.0f, std::max(0.0f, row.width - 12.0f), 17.0f},
+                             "External " + change.kind + "  " + change.path, danger, 10.0f,
+                             {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+            renderList_.text({row.x + 6.0f, row.y + 20.0f, std::max(0.0f, row.width - 12.0f), 15.0f},
+                             "Review before reimport or Undo/Redo", muted, 9.0f,
+                             {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        }
         cursor += 42.0f;
         if (cursor >= listBounds.bottom()) break;
     }

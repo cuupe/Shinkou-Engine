@@ -2096,6 +2096,39 @@
 - 尚未完成真实多 backend 设备上的播放头刷新成本、streaming ring buffer/underflow、外部编辑器并发文件冲突和批量事务报告。
 - 多 DPI/主题窗口 capture matrix 与模型 PBR/material/texture/depth/animation 预览仍未完成；项目继续不能宣称最终 Unity 级能力已完成。
 
+## 第 4.45 子阶段：外部文件变化审计与事务边界
+
+### 实现与范围
+
+- `EditorLayer` 新增 scope-aware file scan baseline 和 bounded editor expectation：编辑器自己的文件写入、资源 rename/delete、recycle move、未加载文档迁移、build profile/compile export 与父目录元数据变化不会被报告为外部冲突。
+- 未被 expectation 覆盖的 project-relative Added/Modified/Removed 变化进入 `EditorFileRecoveryUiState.externalChanges`，上限 64；Recovery retained panel 显示 External 数量、变化类型/路径和 `Dismiss changes`，清除命令立即同步 snapshot，不触碰磁盘。
+- `FileSystemService::SnapshotValue` 从单一写入时间扩展为 size + writeStamp + directory 三字段比较；没有引入内容 hash、watcher 或 paint-time IO。`.shinkou` 变化继续不进入外部用户报告，AssetSystem manifest 仍隔离该目录。
+- 资源事务 expectation 会补记 exact parent directory chain；subtree 操作仍只对源/目标根递归匹配，避免 Windows directory timestamp 更新污染真实冲突报告。
+
+### 契约与证据
+
+- `cmake --build out/build/mingw-debug --target shinkou_file_system_tests shinkou_editor_ui_model_tests shinkou_editor_audio_preview_tests shinkou_editor_interaction_tests -j 2` 通过。
+- 聚焦 CTest：4/4 passed，总计 `46.53 sec`；覆盖外部 `assets/external-editor.txt` 写入、scan/manifest 发布、Recovery external row、Dismiss snapshot 清除、size-aware FileSystem fingerprint，以及既有音频/rename/delete/drag-drop/AudioSource/model/build/Undo/Redo 回归。
+- 全量构建 `cmake --build out/build/mingw-debug -j 2` 通过；全量 CTest：57/57 passed，总计 `50.36 sec`，包含并行 Physics targets 与现有渲染/媒体/编辑器套件。
+- 本轮验证未发现失败；4.45 可进入受控提交。GitHub 推送仍需用户确认具体 remote/branch。
+
+### 安全、性能与视觉审计
+
+- 外部报告只消费已完成异步 scan 的 project-relative metadata；`.shinkou` 路径被过滤，任何冲突不会自动 reload、overwrite、delete、shell 执行或网络访问。
+- expectation 集合最多 128 个 marker，外部 rows 最多 64 个；scope 首次扫描只建立 baseline，之后每秒逻辑轮询触发 worker scan，Recovery paint 不访问 FileSystemService。
+- 父目录链 exact 标记与 subtree 标记分离，避免把同目录 sibling 的外部编译器输出隐藏；External 状态复用 danger/accent/flat UI tokens 和现有 retained hit regions。
+
+### 失败状态与回滚路径
+
+- 早期验证发现 scope 切换会把 `assets` 初始 Added 当作外部变化，已改为 per-scope baseline；随后发现 Windows directory timestamp 会把编辑器 rename 误报，已通过 parent expectation 修正；两类回归均由专项 CTest 复核。
+- Dismiss 只清理 UI audit state；扫描/manifest 失败继续由既有 status/console 报告，磁盘内容保持不变。
+- 可回滚 external fields、scan signature 扩展和 expectation 过滤；原有 FileSystem boundary、Recovery Undo/Redo、journal 和 AssetSystem `.shinkou` 隔离不依赖自动冲突解决。
+
+### 未解决风险与下一轮
+
+- 同大小且写入时间未变化的外部内容替换仍无法由 metadata-only fingerprint 证明；需要显式 diff/hash budget 或 watcher 设计，不能在本轮宣称完整并发冲突解决。
+- 尚未完成批量事务报告、三方 merge/resolve、多 DPI/主题 capture matrix、真实 backend 性能测量和模型动画/深度/offscreen 证据。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

@@ -792,6 +792,11 @@ void EditorLayer::set_project_root(std::string path) {
         if (std::filesystem::path(layout_.layoutFile).is_relative()) set_layout_path((root/layout_.layoutFile).generic_string());
     }
     reset_edit_history_for_file_operation();
+    expectedFileChanges_.clear();
+    externalFileChanges_.clear();
+    fileScanBaselineReady_ = false;
+    fileScanBaselineScope_.clear();
+    fileRecoveryUiDirty_ = true;
     fileSystem_.set_root(layout_.projectRoot);
     load_file_history();
     buildSystem_.set_project_root(fileSystem_.root());
@@ -1095,6 +1100,11 @@ bool EditorLayer::load_layout() {
     const bool loaded = load_layout_file();
     if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
     reset_edit_history_for_file_operation();
+    expectedFileChanges_.clear();
+    externalFileChanges_.clear();
+    fileScanBaselineReady_ = false;
+    fileScanBaselineScope_.clear();
+    fileRecoveryUiDirty_ = true;
     fileSystem_.set_root(layout_.projectRoot);
     load_file_history();
     buildSystem_.set_project_root(fileSystem_.root());
@@ -1257,12 +1267,16 @@ bool EditorLayer::checkpoint(World& world) {
 
 void EditorLayer::reset_edit_history_for_file_operation() {
     for (const auto& operation : fileUndo_) {
-        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
+        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty()) {
+            expect_editor_file_change(operation.recyclePath, true);
             fileSystem_.remove(operation.recyclePath);
+        }
     }
     for (const auto& operation : fileRedo_) {
-        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
+        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty()) {
+            expect_editor_file_change(operation.recyclePath, true);
             fileSystem_.remove(operation.recyclePath);
+        }
     }
     undo_.clear();
     redo_.clear();
@@ -1364,6 +1378,7 @@ void EditorLayer::save_file_history() {
     const auto begin = fileUndo_.size() > 64 ? fileUndo_.size() - 64 : 0;
     for (std::size_t index = begin; index < fileUndo_.size(); ++index) append(fileUndo_[index]);
     std::string json, error;
+    expect_editor_file_change(".shinkou/file-history.json");
     if (!document.to_json(json, error) ||
         !fileSystem_.write_text_atomic(".shinkou/file-history.json", json, &error)) {
         push_console("File history journal write failed: " + (error.empty() ? "unknown error" : error));
@@ -1374,6 +1389,8 @@ void EditorLayer::sync_file_recovery_ui_state() {
     EditorFileRecoveryUiState state;
     state.undoCount = fileUndo_.size();
     state.redoCount = fileRedo_.size();
+    state.externalChangeCount = externalFileChanges_.size();
+    state.externalChanges = externalFileChanges_;
 
     constexpr std::size_t kMaxRecycleEntries = 512;
     const auto recycleRoot = std::filesystem::u8path(".shinkou/recycle");
@@ -1438,11 +1455,14 @@ void EditorLayer::sync_file_recovery_ui_state() {
             state.entries.push_back(std::move(orphan));
         }
     }
-    state.status = state.undoCount == 0 && state.redoCount == 0 && state.orphanCount == 0
+    state.status = state.undoCount == 0 && state.redoCount == 0 && state.orphanCount == 0 &&
+                   state.externalChangeCount == 0
         ? "Recovery area is clean"
         : std::to_string(state.undoCount) + " undoable file operation(s)";
     if (state.redoCount != 0) state.status += "; " + std::to_string(state.redoCount) + " redoable";
     if (state.orphanCount != 0) state.status += "; " + std::to_string(state.orphanCount) + " orphan item(s)";
+    if (state.externalChangeCount != 0)
+        state.status += "; " + std::to_string(state.externalChangeCount) + " external change(s) require review";
     if (state.totalBytes > 512ull * 1024ull * 1024ull) state.status += "; exceeds 512 MiB budget";
     if (bounded) state.status += " (scan limit reached)";
     uiModel_.set_file_recovery_state(std::move(state));
@@ -1519,6 +1539,8 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
     if (operation.kind == FileOperation::Kind::Rename) {
         const auto from = forward ? operation.sourcePath : operation.destinationPath;
         const auto to = forward ? operation.destinationPath : operation.sourcePath;
+        expect_editor_file_change(from, true);
+        expect_editor_file_change(to, true);
         if (fileSystem_.rename(from, to, &error)) {
             const auto fromPath = normalized_project_path(from);
             const auto toPath = normalized_project_path(to);
@@ -1534,6 +1556,8 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
             applied = true;
         }
     } else if (forward) {
+        expect_editor_file_change(operation.sourcePath, true);
+        expect_editor_file_change(operation.recyclePath, true);
         if (fileSystem_.rename(operation.sourcePath, operation.recyclePath, &error)) {
             invalidate_live_asset_references(operation.sourcePath);
             migrate_asset_documents(operation.sourcePath, {}, true);
@@ -1545,6 +1569,8 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
             applied = true;
         }
     } else {
+        expect_editor_file_change(operation.recyclePath, true);
+        expect_editor_file_change(operation.sourcePath, true);
         if (fileSystem_.rename(operation.recyclePath, operation.sourcePath, &error)) {
             invalidate_live_asset_references(operation.sourcePath);
             migrate_asset_documents(operation.sourcePath, {}, true);
@@ -1571,8 +1597,10 @@ void EditorLayer::document_changed(bool preserveRedo) {
     if (!preserveRedo) {
         redo_.clear();
         for (const auto& operation : fileRedo_) {
-            if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
+            if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty()) {
+                expect_editor_file_change(operation.recyclePath, true);
                 fileSystem_.remove(operation.recyclePath);
+            }
         }
         fileRedo_.clear();
         redoHistory_.clear();
@@ -1818,6 +1846,9 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::PruneFileRecovery:
         prune_file_recovery_orphans();
         break;
+    case EditorCommand::ClearFileConflicts:
+        clear_file_conflict_report();
+        break;
     case EditorCommand::OpenAsset: {
         const auto path = std::filesystem::path(target).lexically_normal();
         bool directory = false;
@@ -2033,6 +2064,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::SaveSceneAs: {
         const std::string path = target.empty() ? scenePath_ : std::string(target);
         EditorDocument document; std::string json, error;
+        expect_editor_file_change(path);
         if (!EditorDocument::capture(world, layout_.selectedObject, document, error) || !document.to_json(json, error) ||
             !fileSystem_.write_text_atomic(path, json, &error)) { lastStatus_ = "Save failed: " + error; break; }
         scenePath_ = path; sceneDirty_ = false; assetsDirty_ = true; lastStatus_ = "Saved " + path; break;
@@ -2094,6 +2126,79 @@ void EditorLayer::poll_editor_files() {
     request_file_scan();
 }
 
+void EditorLayer::expect_editor_file_change(std::string_view path, bool recursive) {
+    const auto normalized = normalized_project_path(path);
+    if (normalized.empty() || normalized == ".") return;
+    const auto append = [&](std::string value, bool subtree) {
+        if (value.empty() || value == ".") return;
+        const auto found = std::find_if(expectedFileChanges_.begin(), expectedFileChanges_.end(),
+            [&](const auto& expected) {
+                return expected.path == value && expected.recursive == subtree;
+            });
+        if (found != expectedFileChanges_.end()) return;
+        if (expectedFileChanges_.size() >= 128) expectedFileChanges_.erase(expectedFileChanges_.begin());
+        expectedFileChanges_.push_back({std::move(value), subtree});
+    };
+    append(normalized, recursive);
+    // Renames, atomic writes and recycle moves also update directory metadata.
+    // Mark only the ancestor directory entries themselves; do not make the
+    // parent marker recursive, otherwise an unrelated sibling edit would be
+    // hidden from the external-change report.
+    auto parent = std::filesystem::u8path(normalized).parent_path();
+    while (!parent.empty() && parent != std::filesystem::path(".")) {
+        append(parent.generic_string(), false);
+        parent = parent.parent_path();
+    }
+}
+
+void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& changes) {
+    const auto expected = std::move(expectedFileChanges_);
+    expectedFileChanges_.clear();
+    bool discovered = false;
+    const auto change_name = [](FileChangeType type) {
+        switch (type) {
+        case FileChangeType::Added: return std::string{"Added"};
+        case FileChangeType::Removed: return std::string{"Removed"};
+        default: return std::string{"Modified"};
+        }
+    };
+    for (const auto& change : changes) {
+        const auto path = normalized_project_path(change.relativePath.generic_string());
+        if (path.empty() || path == "." || path_is_or_below(path, ".shinkou")) continue;
+        const auto owned = std::find_if(expected.begin(), expected.end(), [&](const auto& marker) {
+            return marker.recursive ? path_is_or_below(path, marker.path) : path == marker.path;
+        });
+        if (owned != expected.end()) continue;
+
+        discovered = true;
+        const auto kind = change_name(change.type);
+        const auto existing = std::find_if(externalFileChanges_.begin(), externalFileChanges_.end(),
+            [&](const auto& entry) { return entry.path == path; });
+        if (existing != externalFileChanges_.end()) {
+            existing->kind = kind;
+        } else if (externalFileChanges_.size() < 64) {
+            externalFileChanges_.push_back({path, kind});
+        }
+    }
+    if (!discovered) return;
+    fileRecoveryUiDirty_ = true;
+    assetsDirty_ = true;
+    lastStatus_ = "External project changes detected: " +
+        std::to_string(externalFileChanges_.size()) + " path(s) require review" +
+        (externalFileChanges_.empty() ? std::string{} : " (" + externalFileChanges_.front().path + ")");
+    reset_asset_manifest(lastStatus_);
+    push_console(lastStatus_);
+}
+
+void EditorLayer::clear_file_conflict_report() {
+    if (externalFileChanges_.empty()) return;
+    externalFileChanges_.clear();
+    fileRecoveryUiDirty_ = true;
+    lastStatus_ = "External file change report cleared";
+    push_console(lastStatus_);
+    sync_file_recovery_ui_state();
+}
+
 void EditorLayer::request_file_scan() {
     if (fileScanFuture_.valid()) return;
     const auto generation = fileScanGeneration_;
@@ -2103,6 +2208,8 @@ void EditorLayer::request_file_scan() {
         [generation, directory, scanner = std::move(scanner)]() mutable {
             AsyncFileScan result;
             result.generation = generation;
+            result.scope = directory.lexically_normal() == std::filesystem::path(".")
+                ? std::string{} : directory.lexically_normal().generic_string();
             // A project root without an assets folder stays cheap to open.
             // Once the user enters a directory, that directory is scanned
             // recursively so Tree view can represent its real hierarchy.
@@ -2284,6 +2391,7 @@ EditorLayer::AssetDocumentMigrationReport EditorLayer::migrate_asset_documents(
         }
         if (changed == 0) continue;
 
+        expect_editor_file_change(entry.relativePath.generic_string());
         if (!document.to_json(json, error) ||
             !fileSystem_.write_text_atomic(entry.relativePath, json, &error)) {
             ++report.filesSkipped;
@@ -3851,6 +3959,10 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
             return;
         }
         const auto target = std::filesystem::path(path).parent_path() / newName;
+        bool sourceDirectory = false;
+        fileSystem_.exists(path, &sourceDirectory);
+        expect_editor_file_change(path, sourceDirectory);
+        expect_editor_file_change(target.generic_string(), sourceDirectory);
         if (!fileSystem_.rename(path, target, &error)) {
             lastStatus_ = "Rename failed: " + error;
             push_console(lastStatus_);
@@ -3897,6 +4009,7 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
             return;
         }
         const auto target = std::filesystem::path(path) / newName;
+        expect_editor_file_change(target.generic_string(), true);
         if (!fileSystem_.ensure_directory(target, &error)) {
             lastStatus_ = "Create folder failed: " + error;
             push_console(lastStatus_);
@@ -3917,6 +4030,10 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         operation.recyclePath = make_recycle_path(normalizedPath).generic_string();
         operation.selectedAssetBefore = selectedAsset_;
         operation.assetDirectoryBefore = assetDirectory_;
+        bool sourceDirectory = false;
+        fileSystem_.exists(normalizedPath, &sourceDirectory);
+        expect_editor_file_change(normalizedPath, sourceDirectory);
+        expect_editor_file_change(operation.recyclePath, sourceDirectory);
         if (!fileSystem_.ensure_directory(std::filesystem::path(operation.recyclePath).parent_path(), &error) ||
             !fileSystem_.rename(normalizedPath, operation.recyclePath, &error)) {
             lastStatus_ = "Delete failed: " + error;
@@ -4096,6 +4213,13 @@ void EditorLayer::consume_file_scan() {
     projectFiles_ = std::move(result.entries);
     assetIndex_ = std::move(result.index);
     if (!result.changes.empty()) ++projectFilesRevision_;
+    if (!fileScanBaselineReady_ || result.scope != fileScanBaselineScope_) {
+        fileScanBaselineReady_ = true;
+        fileScanBaselineScope_ = result.scope;
+        expectedFileChanges_.clear();
+    } else {
+        collect_external_file_changes(result.changes);
+    }
     assetEntries_.clear();
     for (const auto& entry : projectFiles_) {
         if (assetEntries_.size() >= 256) break;
@@ -4187,6 +4311,7 @@ bool EditorLayer::generate_clangd_config() {
         return false;
     }
     std::string error;
+    expect_editor_file_change(plan.outputPath.generic_string());
     if (!EditorProjectIntegration::write_clangd_config(buildSystem_.project_root(), plan, &error)) {
         clangdConfigStatus_ = "Generate failed: " + error;
         lastStatus_ = clangdConfigStatus_;
@@ -4217,8 +4342,15 @@ bool EditorLayer::save_build_profile() {
     set.selectedId = selectedBuildProfileId_.empty() ? buildProfile_.id : selectedBuildProfileId_;
     std::string json;
     std::string error;
-    if (!EditorBuildProfileStore::serialize_set(set, json, &error) ||
-        !fileSystem_.write_text_atomic(".shinkou/build-profile.json", json, &error)) {
+    if (!EditorBuildProfileStore::serialize_set(set, json, &error)) {
+        buildProfileStatus_ = "Save failed: " + error;
+        lastStatus_ = "Build profile save failed: " + error;
+        push_console(lastStatus_);
+        buildUiDirty_ = true;
+        return false;
+    }
+    expect_editor_file_change(".shinkou/build-profile.json");
+    if (!fileSystem_.write_text_atomic(".shinkou/build-profile.json", json, &error)) {
         buildProfileStatus_ = "Save failed: " + error;
         lastStatus_ = "Build profile save failed: " + error;
         push_console(lastStatus_);
@@ -4626,6 +4758,7 @@ bool EditorLayer::export_compile_commands(std::string_view path) {
         return false;
     }
     const auto target = path.empty() ? std::filesystem::path{"compile_commands.export.json"} : std::filesystem::path(path);
+    expect_editor_file_change(target.generic_string());
     if (!fileSystem_.write_text_atomic(target, json, &error)) {
         compileCommandsStatus_ = "Export failed: " + error;
         lastStatus_ = compileCommandsStatus_;
