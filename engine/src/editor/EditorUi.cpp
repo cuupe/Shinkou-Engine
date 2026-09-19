@@ -267,6 +267,12 @@ void EditorUi::set_native_main_menu_available(bool available) noexcept {
     mark_full_repaint();
 }
 
+std::string EditorUi::focused_region() const {
+    const auto focused = runtime_.focused();
+    for (const auto& entry : regions_) if (entry.second == focused) return entry.first;
+    return {};
+}
+
 void EditorUi::set_asset_view(EditorAssetView view) noexcept {
     if (assetView_ == view) return;
     assetView_ = view;
@@ -830,6 +836,7 @@ void EditorUi::begin_asset_edit(EditorAssetAction action, std::string path, std:
     assetEditText_ = std::move(initial);
     assetEditActive_ = true;
     assetSelectAll_ = true;
+    pendingFocus_ = "asset.rename";
     assetContextOpen_ = false;
     mark_full_repaint();
     assetContextPath_.clear();

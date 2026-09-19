@@ -12,6 +12,9 @@ bool run_interaction_script(HWND window, const std::filesystem::path& script,
     // desktop. They exercise the native window/SDL input route without typing
     // into another application. Record this mode separately from SendInput.
     PostMessageW(window,WM_SETFOCUS,0,0);
+    SetForegroundWindow(window);
+    SetActiveWindow(window);
+    SetFocus(window);
     struct CursorRestore { POINT position{}; CursorRestore() { GetCursorPos(&position); } ~CursorRestore() { SetCursorPos(position.x,position.y); } } restoreCursor;
     POINT cursor{};
     auto key = [&](WORD vk, bool up = false, bool unicode = false) {

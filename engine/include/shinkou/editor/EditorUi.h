@@ -107,6 +107,10 @@ public:
     std::size_t visible_asset_count() const noexcept { return visibleAssetCount_; }
     const std::unordered_map<std::string, ui::Rect>& interaction_regions() const noexcept { return regionRects_; }
     const std::string& selected_asset() const noexcept { return selectedAsset_; }
+    const std::string& asset_filter() const noexcept { return assetFilter_; }
+    const std::string& asset_edit_target() const noexcept { return assetEditTarget_; }
+    const std::filesystem::path& asset_directory() const noexcept { return assetDirectory_; }
+    std::string focused_region() const;
     float asset_scroll_offset() const noexcept { return assetScrollOffset_; }
     void select_asset(std::string path) { selectedAsset_ = std::move(path); mark_full_repaint(); paintCacheValid_ = false; }
 

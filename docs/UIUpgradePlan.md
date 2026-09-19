@@ -1349,3 +1349,21 @@
 - 集成：全量 CTest、EditorInteraction、model renderer/glTF、媒体和渲染图测试继续通过。
 - 视觉：`RunUiMatrix.ps1` 生成 5 个 D3D11 GPU readback 场景，检查客户区尺寸、surface kind、主题字段、UI/text command 数量；暗色、浅色、高对比度 BMP 进行人工检查。
 - 非确定项：当前主机实际 Windows DPI 为 150%，因此脚本请求的 100%/125% 像素比例只能标为 `inconclusive`；这不替代对应缩放环境的复跑。
+
+### 第 4.53 子阶段：资源过滤键盘语义与交互性能证据
+
+目标：让资源过滤后的 Enter/F2 操作稳定指向真实匹配文件，并把输入焦点、编辑目标、资源目录和 workload metrics 纳入可复核证据；不把截图捕获器的焦点竞态误报成编辑器功能通过。
+
+实现范围：
+
+- Tree 过滤保留祖先目录用于展示，但过滤框 Enter/F2 只选择资源本身匹配过滤词的第一个非目录项；大小写不敏感地匹配相对路径和显示名。
+- 开始资源重命名时登记 `asset.rename` 待聚焦目标；QA snapshot 记录 `dir`、`focus`、`filter` 和 edit target，目录打开断言不再依赖易变的扫描状态文本。
+- 原生交互脚本将截图移到会改变焦点的文字/文件操作之后，并统一生成 LF 脚本；新增 `ValidateUiPerformance.ps1` 检查 Idle/Hover/Input/Filter/Scroll/Resize 的 samples 完整性，不设置未经基线证明的任意帧时间阈值。
+- 非目标：本轮不改变 AssetSystem 扫描上限、不在 paint 中读文件、不增加解码/编译器进程、不宣称 fresh-window 原生交互脚本已通过；该竞态保留为下一轮入口。
+
+审计与验证安排：
+
+- 单元/集成：`shinkou_editor_interaction_tests` 通过；全量 CTest 57/57 通过。
+- 原生定向证据：GPU readback 下的过滤→Enter→End→F2→rename 脚本在 `out/qa/allviews-rename-debug-487` 通过，真实文件系统产生 `renamed.txt`。
+- 性能：`out/qa/ui-interaction-perf-476/interactive.bmp.timings.csv` 已产生 Idle/Hover/Input/Filter/Resize 行；Validator 会明确报告 Scroll samples 尚未取得，不把部分 CSV 当成完整 workload 证据。
+- 视觉/交互：后续需修复 fresh fixture 首次窗口焦点建立后，再重跑完整文件操作、滚动、撤销/重做、resize 和相机脚本；GPU 矩阵 4.52 证据仍然有效。

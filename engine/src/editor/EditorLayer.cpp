@@ -582,7 +582,12 @@ void EditorLayer::handle_native_menu_command(std::uint32_t command, World& world
             std::ofstream out(path);
             const char* view = editorUi_.asset_view()==EditorAssetView::Tree ? "tree" : editorUi_.asset_view()==EditorAssetView::LargeIcons ? "large" : "small";
             out << "state " << editorUi_.dpi_scale() << ' ' << std::quoted(editorUi_.selected_asset()) << ' ' << std::quoted(lastStatus_)
-                << " view=" << view << " scroll=" << editorUi_.asset_scroll_offset() << " theme=" << layout_.theme << " playing=" << uiModel_.playing() << " paused=" << uiModel_.paused() << '\n';
+                << " view=" << view << " scroll=" << editorUi_.asset_scroll_offset() << " theme=" << layout_.theme
+                << " playing=" << uiModel_.playing() << " paused=" << uiModel_.paused()
+                << " dir=" << editorUi_.asset_directory().generic_string()
+                << " focus=" << std::quoted(editorUi_.focused_region())
+                << " filter=" << std::quoted(editorUi_.asset_filter())
+                << " edit=" << std::quoted(editorUi_.asset_edit_target()) << '\n';
             world.ecs().each<render::CameraComponent, render::TransformComponent>([&](Entity, const auto& camera, const auto& pose) {
                 if(camera.active) out << "camera " << property_text(pose.local.position) << ' ' << property_text(pose.local.rotation) << ' ' << camera.orthographicSize << '\n';
             });

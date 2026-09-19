@@ -1,6 +1,7 @@
 #include "shinkou/editor/EditorUi.h"
 #include "shinkou/editor/EditorLayer.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace shinkou::editor {
@@ -18,6 +19,30 @@ void backspace(std::string& text) {
     while (i && (static_cast<unsigned char>(text[i]) & 0xc0) == 0x80) --i;
     text.erase(i);
 }
+
+bool contains_case_insensitive(std::string_view value, std::string_view query) {
+    if (query.empty()) return true;
+    if (query.size() > value.size()) return false;
+    for (std::size_t start = 0; start + query.size() <= value.size(); ++start) {
+        bool matches = true;
+        for (std::size_t offset = 0; offset < query.size(); ++offset) {
+            const auto lhs = static_cast<unsigned char>(value[start + offset]);
+            const auto rhs = static_cast<unsigned char>(query[offset]);
+            if (std::tolower(lhs) != std::tolower(rhs)) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return true;
+    }
+    return false;
+}
+
+template <typename AssetItem>
+bool matches_asset_filter(const AssetItem& item, std::string_view filter) {
+    return contains_case_insensitive(item.path, filter) ||
+        contains_case_insensitive(item.displayName, filter);
+}
 }
 
 void EditorUi::select_asset_index(std::size_t index) {
@@ -34,6 +59,10 @@ bool EditorUi::handle_text(ui::UiEvent& event) {
     if (controlDown_) return true;
     std::string focused;
     for (const auto& pair : regions_) if (pair.second == runtime_.focused()) { focused = pair.first; break; }
+    if (focused.empty()) {
+        const auto filter = regionRects_.find("assets.filter");
+        if (filter != regionRects_.end() && filter->second.contains(event.position)) focused = "assets.filter";
+    }
     std::string* text = nullptr;
     bool* all = &editSelectAll_;
     if (!editFieldId_.empty() && focused == editFieldId_) text = &editText_;
@@ -58,6 +87,10 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
     if (!down) return false;
     std::string focused;
     for (const auto& pair : regions_) if (pair.second == runtime_.focused()) { focused = pair.first; break; }
+    if (focused.empty()) {
+        const auto filter = regionRects_.find("assets.filter");
+        if (filter != regionRects_.end() && filter->second.contains(event.position)) focused = "assets.filter";
+    }
     const bool enter = key == "enter" || key == "return";
     const auto repaint = [&] { mark_full_repaint(); paintCacheValid_ = false; };
     const auto command = [&](EditorCommand cmd, std::string_view target = {}) { if (callbacks_.command) callbacks_.command(cmd, target); repaint(); };
@@ -71,6 +104,25 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
     // Deletion confirmation consumes keyboard events until cancelled/confirmed.
     if (!assetDeletePath_.empty()) {
         if (enter) activate_region("asset-delete-confirm", {});
+        return true;
+    }
+    const bool assetKeyboardRegion = focused == "assets.filter" || focused == "assets.background" ||
+        focused == "assets.scrollbar" || focused.rfind("asset:", 0) == 0 || focused.rfind("asset-toggle:", 0) == 0;
+    if (key == "f2" && assetKeyboardRegion) {
+        if (!assetItems_.empty()) {
+            const auto selected = std::find_if(assetItems_.begin(), assetItems_.end(),
+                [&](const auto& item) {
+                    if (item.path != selectedAsset_) return false;
+                    return assetFilter_.empty() || (!item.directory && matches_asset_filter(item, assetFilter_));
+                });
+            const auto fallback = std::find_if(assetItems_.begin(), assetItems_.end(),
+                [&](const auto& item) { return !item.directory && matches_asset_filter(item, assetFilter_); });
+            const auto& item = selected != assetItems_.end() ? *selected :
+                fallback != assetItems_.end() ? *fallback : assetItems_.front();
+            selectedAsset_ = item.path;
+            begin_asset_edit(EditorAssetAction::Rename, item.path, item.displayName);
+        }
+        repaint();
         return true;
     }
     std::string* text = nullptr;
@@ -94,7 +146,15 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
                 if (callbacks_.editField && callbacks_.editField(editFieldId_.substr(6), editText_)) {
                     editFieldId_.clear(); runtime_.clear_focus(); editError_.clear();
                 } else editError_ = "Invalid value. Check type and range.";
-            } else if (focused == "assets.filter" && !assetItems_.empty()) select_asset_index(0);
+            } else if (focused == "assets.filter" && !assetItems_.empty()) {
+                std::size_t index = 0;
+                if (!assetFilter_.empty()) {
+                    const auto file = std::find_if(assetItems_.begin(), assetItems_.end(),
+                        [&](const auto& item) { return !item.directory && matches_asset_filter(item, assetFilter_); });
+                    if (file != assetItems_.end()) index = static_cast<std::size_t>(file - assetItems_.begin());
+                }
+                select_asset_index(index);
+            }
             repaint(); return true;
         }
         if (key != "tab") return true;

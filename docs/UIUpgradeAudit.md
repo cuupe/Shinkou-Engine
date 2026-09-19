@@ -2341,6 +2341,37 @@
 
 - 当前主机只有 150% DPI，仍需在实际 100%/125% Windows 缩放环境复跑像素矩阵；模型重叠几何的深度像素 oracle、非 D3D11 model backend、动画 skin/playback、内容 diff/hash 与 UI 帧时间/分配实测仍未完成。
 
+## 第 4.53 子阶段：资源过滤键盘语义与交互性能证据
+
+### 实现与范围
+
+- Tree 过滤后的 `assetItems_` 同时包含匹配文件和展示路径所需的祖先目录；输入层新增大小写不敏感的路径/显示名匹配，Enter/F2 不再误选第一个无关文件或祖先目录。
+- `begin_asset_edit()` 登记 `asset.rename` 待聚焦目标；QA snapshot 额外输出 `dir`、`focus`、`filter`、`edit`，目录导航断言改用真实资源目录而不是异步扫描覆盖的 `lastStatus`。
+- `EditorInteraction.txt` 将会改变焦点的 capture 移到文字/文件操作之后；`RunEditorInteraction.ps1` 生成 LF 脚本；`ValidateUiPerformance.ps1` 对 workload 样本完整性做硬失败校验。
+
+### 契约与证据
+
+- 增量构建 `shinkou_engine_sample`、`shinkou_editor_interaction_tests`、`shinkou_ui_capture` 通过；聚焦 `shinkou_editor_interaction_tests` 为 `1/1 passed`、23.03 秒。
+- 全量 CTest 为 `57/57 passed`、52.36 秒；包含渲染图、GPU allocator、媒体、模型/glTF、UI runtime、Physics 和 EditorInteraction。
+- `out/qa/allviews-rename-debug-487` 的真实 GPU readback 定向脚本通过，验证过滤→选中→F2→输入→重命名，并在 fixture 项目中生成 `assets/Folder/Nested/renamed.txt`。
+- `out/qa/ui-interaction-perf-476/interactive.bmp.timings.csv` 保存了部分原生 workload 数据；当前 Idle/Hover/Input/Filter/Resize 有 samples，但 Scroll 尚未取得，因此 `ValidateUiPerformance.ps1` 的默认完整性检查应保持失败，不能把它包装成完整性能通过。
+
+### 安全、性能与视觉审计
+
+- 过滤匹配只消费已构建的 retained asset snapshot 和 bounded 字符串，不执行路径拼接之外的 IO；重命名仍经 FileSystemService 项目根、文件名和回收/引用迁移契约。
+- 输入层没有把扫描、解码、编译器启动或 GPU wait 放进 paint；metrics validator 只读 CSV，不推导未经基线支持的性能阈值。
+- 现有 GPU 矩阵继续提供 5/5 D3D11 readback 视觉证据；本轮原生完整交互脚本在 fresh fixture 首次焦点建立上仍不稳定，失败证据保留在 `out/qa/ui-interaction-perf-493`、`496`、`497`，没有降级为 GDI 或删除失败日志。
+
+### 失败状态与回滚路径
+
+- fresh fixture 失败表现为首次输入时 focus 仍为空、filter 未写入，后续 F2 误作用于 `item149.txt`；这不是过滤匹配算法的成功证据。可回滚 QA 脚本排序/焦点改动，不影响项目文件操作 API。
+- 若后续继续修复原生焦点桥接，应先让 `ValidateUiPerformance.ps1` 的 Scroll samples 和完整交互步骤同时通过，再更新本节证据；在此之前不提交“全 workload 性能通过”结论。
+
+### 未解决风险与下一轮
+
+- 需要解决 fresh-window 首次 `assets.filter` 的 native focus/input 建立，并重跑完整文件创建、删除、滚动、Undo/Redo、resize、camera orbit 交互。
+- Scroll workload、100%/125% DPI 像素矩阵、模型深度像素 oracle、动画 skin/playback、内容 diff/hash 和 UI 分配实测仍未完成。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

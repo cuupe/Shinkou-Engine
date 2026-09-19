@@ -1,23 +1,15 @@
 wait 600
-capture tree
-click "asset-view:small"
-state "view=small"
-capture small
-click "asset-view:large"
-state "view=large"
-capture large
-click "asset-view:tree"
-state "view=tree"
 click "assets.filter"
 text "needle"
 key 13
 key 35
-capture filter
 key 113
+wait 300
 text "renamed.txt"
 key 13
+wait 1000
 exists "@PROJECT@/assets/Folder/Nested/renamed.txt"
-state "Renamed"
+capture filter
 wait 1100
 click "assets.filter"
 down 17
@@ -26,7 +18,6 @@ up 17
 key 8
 wait 300
 right "asset:assets/Folder"
-capture context
 click "asset-context:3"
 text "UiCreated"
 key 13
@@ -34,7 +25,6 @@ exists "@PROJECT@/assets/Folder/UiCreated"
 wait 1200
 right "asset:assets/Folder/UiCreated"
 click "asset-context:2"
-capture delete-confirm
 key 27
 exists "@PROJECT@/assets/Folder/UiCreated"
 right "asset:assets/Folder/UiCreated"
@@ -43,12 +33,11 @@ click "asset-delete-confirm"
 missing "@PROJECT@/assets/Folder/UiCreated"
 double "asset:assets/Folder"
 wait 1000
-state "Opened assets/Folder"
+state "dir=assets/Folder"
 click "asset-parent"
 wait 1000
 click "assets.background"
 key 35
-capture scrolled
 drag "assets.scrollbar" 0
 scroll-max 1
 hover "assets.background"
@@ -91,7 +80,6 @@ click "field:name"
 text "Interactive Object"
 key 13
 state "Property updated"
-capture inspector
 down 17
 key 90
 up 17
@@ -107,7 +95,6 @@ exists "@PROJECT@/assets/Scenes/Untitled.scene"
 resize 1600x900
 wait 200
 resize 1280x720
-capture narrow
 resize 1920x1080
 wait 250
 remember-camera
@@ -118,5 +105,11 @@ remember-camera
 orbit
 camera-changed
 capture camera-orbit
+capture tree
+click "asset-view:small"
+capture small
+click "asset-view:large"
+capture large
+click "asset-view:tree"
 capture final
 wait 1500
