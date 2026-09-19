@@ -2372,6 +2372,37 @@
 - 需要解决 fresh-window 首次 `assets.filter` 的 native focus/input 建立，并重跑完整文件创建、删除、滚动、Undo/Redo、resize、camera orbit 交互。
 - Scroll workload、100%/125% DPI 像素矩阵、模型深度像素 oracle、动画 skin/playback、内容 diff/hash 和 UI 分配实测仍未完成。
 
+## 第 4.54 子阶段：原生输入兜底与完整交互性能证据
+
+### 实现与范围
+
+- 资源过滤框和重命名框现在接受可打印 KeyDown 兜底文本；Shift 字母保留大小写，已有 SDL `TextInput` 与兜底字符不会重复写入。
+- 过滤框聚焦/指针命中时，KeyDown/KeyUp 也进入 `Filter` workload；性能 CSV 不依赖特定平台是否产生 SDL 文本事件。
+- 原生交互脚本在首个过滤框点击后重复点击一次以建立冷启动焦点，并使用键盘序列覆盖英文、大小写、空格和扩展名输入。
+
+### 契约与证据
+
+- 全量构建 `cmake --build out/build/mingw-debug -j 4` 通过；`shinkou_editor_audio_preview_tests` 重新链接后单测通过，避免把头文件布局变更后的陈旧测试二进制误判为段错。
+- 全量 CTest：`57/57 passed`，总计 `65.59 sec`；音频、图片、视频、模型/glTF、Build/CompileCommands、文件系统、UI、渲染和 Physics 均通过。
+- `out/qa/ui-interaction-final-20260919/interactive.bmp.steps.jsonl` 完成 `116/116` 步；真实 fixture 产生 `assets/Folder/Nested/renamed.txt` 和 `assets/Folder/UiCreated`，随后完成删除断言、滚动边界、撤销/重做、场景保存、resize、camera orbit、tree/small/large/final BMP 捕获。
+- `ValidateUiPerformance.ps1` 通过：Idle `17112`、Hover `1128`、Input `1536`、Filter `156`、Scroll `624`、Resize `48` samples。
+
+### 安全、性能与视觉审计
+
+- KeyDown 兜底仅作用于当前资源文本编辑路径，沿用现有 4096 字符上限、项目相对路径校验和 FileSystemService 重命名事务；不执行 shell、编译器、网络或任意路径写入。
+- 兜底和 workload 分类都在输入/指标边界完成，paint 仍只消费 retained snapshot，不扫描文件、不解码媒体、不等待 GPU。
+- 7 个交互 BMP 和对应 state snapshot 已保留；本轮没有用 GDI fallback 替换步骤证据。当前主机 DPI=150%，因此其他缩放比例的像素结论仍需专门环境复跑。
+
+### 失败状态与回滚路径
+
+- 中途一次全量 CTest 的音频预览段错来自旧测试可执行文件未因 `EditorUi` 头文件布局变化而重链；重建所有目标后重复测试通过，失败日志仍保留用于审计。
+- 若后续发现 KeyDown 兜底在某平台与 TextInput 顺序不同，可回滚 `keyTextFallback_` 和 workload 分类，保留原生 SDL 文本路径；不涉及资源格式迁移。
+
+### 未解决风险与下一轮
+
+- 仍需在 Windows 100%/125% DPI 环境复跑 GPU 像素矩阵，并为重叠模型增加深度像素 oracle。
+- 模型动画 skin/playback、内容 diff/hash、非 D3D11 模型后端和 UI 分配实测继续作为独立轮次，不因本轮交互完成而提前宣称。
+
 ## 后续轮次模板
 
 每轮复制以下条目并填写实际证据：

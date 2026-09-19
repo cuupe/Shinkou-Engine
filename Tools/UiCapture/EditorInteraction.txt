@@ -1,5 +1,6 @@
 wait 600
 click "assets.filter"
+click "assets.filter"
 text "needle"
 key 13
 key 35

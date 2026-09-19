@@ -243,6 +243,7 @@ private:
     std::unordered_set<ObjectId> collapsedObjects_;
     std::vector<ObjectId> visibleObjects_;
     std::string pendingFocus_;
+    std::string keyTextFallback_;
     bool handle_key(ui::UiEvent& event);
     bool handle_text(ui::UiEvent& event);
     void select_asset_index(std::size_t index);

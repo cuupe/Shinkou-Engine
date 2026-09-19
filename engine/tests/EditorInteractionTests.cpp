@@ -371,9 +371,22 @@ int main() {
             fake->queue.push_back(e); e.type=input::InputEventType::MouseButtonUp; fake->queue.push_back(e); tick();
         };
         auto key = [&](const char* name) { input::InputEvent e; e.type=input::InputEventType::KeyDown;e.control=std::string("key:")+name;fake->queue.push_back(e);tick(); };
+        auto key_up = [&](const char* name) { input::InputEvent e; e.type=input::InputEventType::KeyUp;e.control=std::string("key:")+name;fake->queue.push_back(e);tick(); };
         auto text = [&](const char* text) { input::InputEvent e;e.type=input::InputEventType::TextInput;e.text=text;fake->queue.push_back(e);tick(); };
         for(int i=0;i<200 && editor.ui_asset_file_count()<100;++i) {tick();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
         require(editor.ui_asset_file_count()>100,"async file scan did not finish");
+        click("assets.filter");
+        key("Shift"); key("N"); key_up("Shift");
+        require(editor.editor_ui().asset_filter() == "N", "shifted key fallback did not preserve case");
+        key("Backspace");
+        require(editor.editor_ui().asset_filter().empty(), "key fallback backspace did not clear the filter");
+        input::InputEvent fallbackKey; fallbackKey.type=input::InputEventType::KeyDown; fallbackKey.control="key:M";
+        fake->queue.push_back(fallbackKey);
+        input::InputEvent duplicateText; duplicateText.type=input::InputEventType::TextInput; duplicateText.text="m";
+        fake->queue.push_back(duplicateText);
+        tick();
+        require(editor.editor_ui().asset_filter() == "m", "key fallback duplicated an SDL text event");
+        key("Backspace");
         auto& referenceObject = world.create_object("Needle Reference");
         auto* needleReference = referenceObject.add_component<AssetReferenceComponent>(
             "assets/Folder/Nested/needle.txt", needleAssetId);

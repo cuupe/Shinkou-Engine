@@ -1367,3 +1367,39 @@
 - 原生定向证据：GPU readback 下的过滤→Enter→End→F2→rename 脚本在 `out/qa/allviews-rename-debug-487` 通过，真实文件系统产生 `renamed.txt`。
 - 性能：`out/qa/ui-interaction-perf-476/interactive.bmp.timings.csv` 已产生 Idle/Hover/Input/Filter/Resize 行；Validator 会明确报告 Scroll samples 尚未取得，不把部分 CSV 当成完整 workload 证据。
 - 视觉/交互：后续需修复 fresh fixture 首次窗口焦点建立后，再重跑完整文件操作、滚动、撤销/重做、resize 和相机脚本；GPU 矩阵 4.52 证据仍然有效。
+
+### 第 4.54 子阶段：原生输入兜底与完整交互性能证据
+
+目标：消除冷启动窗口在 SDL 文本输入不可用时的编辑阻塞，并让完整原生交互脚本与性能审计都能给出可复核结果。
+
+实现范围：
+
+- `EditorUi` 在资源过滤框/重命名框收到可打印 KeyDown 时提供有界文本兜底；保留 Shift 大小写，并在同一输入批次已经产生 SDL `TextInput` 时抑制重复字符。
+- `EditorUi` 将过滤框聚焦或指针命中下的 KeyDown/KeyUp 纳入 `Filter` workload，避免输入桥接实现差异使性能报告漏掉过滤操作。
+- 原生交互脚本在冷启动后重复建立过滤框焦点并发送键盘序列；不改变资源 API、扫描上限、paint IO 或外部进程边界。
+
+审计与验证安排：
+
+- 构建：全量 `cmake --build out/build/mingw-debug -j 4` 通过；曾因头文件布局变更出现一次旧测试二进制段错，重链受影响目标后消失，不作为代码失败结论。
+- 集成：`out/qa/ui-interaction-final-20260919/interactive.bmp.steps.jsonl` 116/116 步通过，覆盖过滤、Enter/F2、重命名、创建/删除、滚动、Undo/Redo、保存、resize、相机 orbit 和三种资源视图捕获。
+- 性能：`ValidateUiPerformance.ps1` 通过，Idle/Hover/Input/Filter/Scroll/Resize 分别累计 17112/1128/1536/156/624/48 samples；未设置未经基线支持的任意帧时间阈值。
+- 全量 CTest：57/57 通过，总计 65.59 秒；包含音频/图片/视频/模型预览、编译器命令、文件系统、UI 与渲染回归。
+- 非确定项：当前主机仍为 150% DPI，100%/125% 像素矩阵需在对应 Windows 缩放环境复跑；模型深度像素 oracle、动画 skin/playback、内容 diff/hash 与 UI 分配实测仍在后续队列。
+
+### 第 4.54 子阶段：原生输入兜底与完整交互性能证据
+
+目标：消除冷启动窗口在 SDL 文本输入不可用时的编辑阻塞，并让完整原生交互脚本与性能审计都能给出可复核结果。
+
+实现范围：
+
+- `EditorUi` 在资源过滤框/重命名框收到可打印 KeyDown 时提供有界文本兜底；保留 Shift 大小写，并在同一输入批次已经产生 SDL `TextInput` 时抑制重复字符。
+- `EditorUi` 将过滤框聚焦或指针命中下的 KeyDown/KeyUp 纳入 `Filter` workload，避免输入桥接实现差异使性能报告漏掉过滤操作。
+- 原生交互脚本在冷启动后重复建立过滤框焦点并发送键盘序列；不改变资源 API、扫描上限、paint IO 或外部进程边界。
+
+审计与验证安排：
+
+- 构建：全量 `cmake --build out/build/mingw-debug -j 4` 通过；曾因头文件布局变更出现一次旧测试二进制段错，重链受影响目标后消失，不作为代码失败结论。
+- 集成：`out/qa/ui-interaction-final-20260919/interactive.bmp.steps.jsonl` 116/116 步通过，覆盖过滤、Enter/F2、重命名、创建/删除、滚动、Undo/Redo、保存、resize、相机 orbit 和三种资源视图捕获。
+- 性能：`ValidateUiPerformance.ps1` 通过，Idle/Hover/Input/Filter/Scroll/Resize 分别累计 17112/1128/1536/156/624/48 samples；未设置未经基线支持的任意帧时间阈值。
+- 全量 CTest：57/57 通过，总计 65.59 秒；包含音频/图片/视频/模型预览、编译器命令、文件系统、UI 与渲染回归。
+- 非确定项：当前主机仍为 150% DPI，100%/125% 像素矩阵需在对应 Windows 缩放环境复跑；模型深度像素 oracle、动画 skin/playback、内容 diff/hash 与 UI 分配实测仍在后续队列。

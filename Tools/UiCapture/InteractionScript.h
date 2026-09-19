@@ -116,7 +116,19 @@ bool run_interaction_script(HWND window, const std::filesystem::path& script,
                 std::string text;row>>std::quoted(text);
                 const auto count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),static_cast<int>(text.size()),nullptr,0);
                 std::wstring wide(count,L'\0');MultiByteToWideChar(CP_UTF8,0,text.data(),static_cast<int>(text.size()),wide.data(),count);
-                for(wchar_t c:wide){key(c,false,true);key(c,true,true);pause(40);}
+                for(wchar_t c:wide){
+                    const SHORT mapped=VkKeyScanW(c);
+                    const BYTE modifiers=static_cast<BYTE>(mapped == -1 ? 0xFF : HIBYTE(mapped));
+                    if(mapped != -1 && (modifiers & static_cast<BYTE>(~1u)) == 0) {
+                        if((modifiers & 1u) != 0) key(VK_SHIFT,false);
+                        key(LOBYTE(mapped),false);
+                        key(LOBYTE(mapped),true);
+                        if((modifiers & 1u) != 0) key(VK_SHIFT,true);
+                    } else {
+                        key(static_cast<WORD>(c),false,true);
+                    }
+                    pause(40);
+                }
             } else if(op=="wheel") {int delta=0;row>>delta;mouse(MOUSEEVENTF_WHEEL,static_cast<DWORD>(delta*WHEEL_DELTA));}
             else if(op=="resize") {std::wstring size;std::string token;row>>token;size.assign(token.begin(),token.end());Size value{};if(!parse_size(size,value)||!resize_client(window,value))throw std::runtime_error("Resize failed");}
             else if(op=="capture") {std::string name;row>>name;region("command:play");capture(name);}

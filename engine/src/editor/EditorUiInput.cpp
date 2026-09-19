@@ -70,6 +70,13 @@ bool EditorUi::handle_text(ui::UiEvent& event) {
     else if (focused == "hierarchy.filter") text = &filterText_;
     else if (focused == "asset.rename") { text = &assetEditText_; all = &assetSelectAll_; }
     if (!text) return false;
+    if ((focused == "assets.filter" || focused == "asset.rename") &&
+        keyTextFallback_.size() == 1 && event.text.size() == 1 &&
+        std::tolower(static_cast<unsigned char>(keyTextFallback_.front())) ==
+            std::tolower(static_cast<unsigned char>(event.text.front()))) {
+        keyTextFallback_.clear();
+        return true;
+    }
     if (*all) { text->clear(); *all = false; }
     if (text->size() + event.text.size() <= 4096) text->append(event.text);
     if (focused == "hierarchy.filter" && callbacks_.setObjectFilter) callbacks_.setObjectFilter(*text);
@@ -156,6 +163,23 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
                 select_asset_index(index);
             }
             repaint(); return true;
+        }
+        if (key.size() == 1 && std::isprint(static_cast<unsigned char>(key.front()))) {
+            if (*all) { text->clear(); *all = false; }
+            auto character = key.front();
+            if (shiftDown_ && std::isalpha(static_cast<unsigned char>(character)))
+                character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+            text->push_back(character);
+            keyTextFallback_ = key;
+            if (focused == "assets.filter") assetScrollOffset_ = 0;
+            editError_.clear(); repaint(); return true;
+        }
+        if (key == "space") {
+            if (*all) { text->clear(); *all = false; }
+            text->push_back(' ');
+            keyTextFallback_ = " ";
+            if (focused == "assets.filter") assetScrollOffset_ = 0;
+            editError_.clear(); repaint(); return true;
         }
         if (key != "tab") return true;
     }

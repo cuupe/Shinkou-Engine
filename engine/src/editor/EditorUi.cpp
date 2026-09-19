@@ -1159,6 +1159,7 @@ void EditorUi::prepare_layout(const EditorLayoutState& layout, DockWorkspace& wo
 void EditorUi::process_input(const input::InputSystem& input) {
     ui::UiTimer timer(ui::UiStage::Input);
     if (!initialized_) return;
+    keyTextFallback_.clear();
     runtime_.begin_frame();
     for (const auto& source : input.events()) {
         if (source.type == input::InputEventType::MouseMove) {
@@ -1179,9 +1180,15 @@ void EditorUi::process_input(const input::InputSystem& input) {
             ui::ui_performance().workload(workload);
         }
         else if (source.type == input::InputEventType::MouseWheel) ui::ui_performance().workload(ui::UiWorkload::Scroll);
-        else if (source.type == input::InputEventType::TextInput) {
+        else if (source.type == input::InputEventType::TextInput ||
+                 source.type == input::InputEventType::KeyDown ||
+                 source.type == input::InputEventType::KeyUp) {
             const auto it = regions_.find("assets.filter");
-            ui::ui_performance().workload(it != regions_.end() && runtime_.focused() == it->second ? ui::UiWorkload::Filter : ui::UiWorkload::Input);
+            const auto filterRect = regionRects_.find("assets.filter");
+            const auto pointer = logical_position(input.mouse().position);
+            const bool filterFocused = it != regions_.end() && runtime_.focused() == it->second;
+            const bool filterPointer = filterRect != regionRects_.end() && filterRect->second.contains(pointer);
+            ui::ui_performance().workload(filterFocused || filterPointer ? ui::UiWorkload::Filter : ui::UiWorkload::Input);
         } else ui::ui_performance().workload(ui::UiWorkload::Input);
         ui::UiEvent event;
         if (source.type == input::InputEventType::FocusLost) {
