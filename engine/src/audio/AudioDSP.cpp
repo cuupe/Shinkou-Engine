@@ -54,6 +54,36 @@ void process_delay(Buffer& buffer, AudioEffectChain::EffectState& state) {
 }
 
 template<class Buffer>
+void process_reverb(Buffer& buffer, AudioEffectChain::EffectState& state) {
+    const auto channels = buffer.format.channels;
+    const auto sampleRate = static_cast<std::size_t>(buffer.format.sampleRate);
+    const auto roomFrames = std::max<std::size_t>(1, static_cast<std::size_t>(state.desc.delaySeconds * sampleRate));
+    if (!state.delayBuffer || state.delayCapacityFrames <= roomFrames) return;
+
+    const auto tapA = std::min(roomFrames, state.delayCapacityFrames - 1);
+    const auto tapB = std::min(static_cast<std::size_t>(roomFrames * 1.37f), state.delayCapacityFrames - 1);
+    const auto tapC = std::min(static_cast<std::size_t>(roomFrames * 1.73f), state.delayCapacityFrames - 1);
+    const auto wet = clamp01(state.desc.wet);
+    const auto feedback = clamp01(state.desc.feedback);
+    auto cursor = state.cursor % state.delayCapacityFrames;
+    for (std::size_t frame = 0; frame < buffer.frame_count(); ++frame) {
+        for (std::size_t channel = 0; channel < channels; ++channel) {
+            const auto read_tap = [&, channel](std::size_t delay) {
+                const auto index = (cursor + state.delayCapacityFrames - delay) % state.delayCapacityFrames;
+                return state.delayBuffer[index * channels + channel];
+            };
+            const auto reflected = read_tap(tapA) * 0.50f + read_tap(tapB) * 0.30f + read_tap(tapC) * 0.20f;
+            auto& sample = buffer.frame(static_cast<std::uint32_t>(frame))[channel];
+            const auto input = sample;
+            state.delayBuffer[cursor * channels + channel] = input + reflected * feedback;
+            sample = input * (1.0f - wet) + reflected * wet;
+        }
+        cursor = (cursor + 1) % state.delayCapacityFrames;
+    }
+    state.cursor = cursor;
+}
+
+template<class Buffer>
 void process_compressor(Buffer& buffer, AudioEffectChain::EffectState& state, bool limiter) {
     const auto threshold = limiter ? db_to_linear(-0.3f) : db_to_linear(state.desc.thresholdDb);
     const auto ratio = limiter ? 20.0f : std::max(state.desc.ratio, 1.0f);
@@ -84,7 +114,9 @@ void AudioEffectChain::prepare_state(EffectState& state) {
     state.cursor = 0;
     state.envelope = 1.0f;
     if (state.desc.type == AudioEffectType::Delay || state.desc.type == AudioEffectType::Reverb) {
-        const auto frames = std::max<std::size_t>(1, static_cast<std::size_t>(state.desc.delaySeconds * format_.sampleRate));
+        const auto frames = state.desc.type == AudioEffectType::Reverb
+            ? std::max<std::size_t>(2, static_cast<std::size_t>((state.desc.delaySeconds * 1.8f + 0.05f) * format_.sampleRate))
+            : std::max<std::size_t>(1, static_cast<std::size_t>(state.desc.delaySeconds * format_.sampleRate));
         if (state.delayCapacityFrames < frames) {
             state.delayBuffer = std::make_unique<float[]>(frames * format_.channels);
             state.delayCapacityFrames = frames;
@@ -123,7 +155,11 @@ bool AudioEffectChain::process(AudioPcmBuffer& buffer) {
         case AudioEffectType::Compressor: process_compressor(buffer, state, false); break;
         case AudioEffectType::Limiter: process_compressor(buffer, state, true); break;
         case AudioEffectType::Delay:
-        case AudioEffectType::Reverb: process_delay(buffer, state); break;
+            process_delay(buffer, state);
+            break;
+        case AudioEffectType::Reverb:
+            process_reverb(buffer, state);
+            break;
         }
     }
     return true;
@@ -141,7 +177,11 @@ bool AudioEffectChain::process(AudioRealtimeBuffer& buffer) noexcept {
         case AudioEffectType::Compressor: process_compressor(buffer, state, false); break;
         case AudioEffectType::Limiter: process_compressor(buffer, state, true); break;
         case AudioEffectType::Delay:
-        case AudioEffectType::Reverb: process_delay(buffer, state); break;
+            process_delay(buffer, state);
+            break;
+        case AudioEffectType::Reverb:
+            process_reverb(buffer, state);
+            break;
         case AudioEffectType::Pan:
             if (buffer.format.channels >= 2) {
                 const auto pan = std::clamp(state.desc.pan, -1.0f, 1.0f);

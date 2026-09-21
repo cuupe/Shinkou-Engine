@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
 
 #if defined(SHINKOU_WITH_MINIAUDIO)
@@ -16,6 +19,66 @@ namespace {
 float clamp_volume(float value) { return std::clamp(value, 0.0f, 1.0f); }
 float clamp_pan(float value) { return std::clamp(value, -1.0f, 1.0f); }
 float clamp_pitch(float value) { return std::max(value, 0.01f); }
+
+// A custom miniaudio node is used instead of pre-processing assets. This
+// keeps effects realtime, preserves loop/stream behavior, and lets effects be
+// inserted at track, bus, and master stages of the live mix graph.
+struct RealtimeEffectNode final {
+    ma_node_base base{};
+    AudioEffectChain chain;
+    std::mutex mutex;
+    bool initialized{false};
+
+    explicit RealtimeEffectNode(AudioFormat format) : chain(format) {}
+
+    ma_node* node() noexcept { return reinterpret_cast<ma_node*>(&base); }
+};
+
+void realtime_effect_process(ma_node* node,
+                             const float** input,
+                             ma_uint32* inputFrames,
+                             float** output,
+                             ma_uint32* outputFrames) {
+    auto* effect = reinterpret_cast<RealtimeEffectNode*>(node);
+    const auto capacity = *outputFrames;
+    if (capacity == 0 || output == nullptr || output[0] == nullptr) {
+        *inputFrames = 0;
+        *outputFrames = 0;
+        return;
+    }
+
+    const auto channels = effect->chain.format().channels;
+    const auto available = input != nullptr && input[0] != nullptr
+        ? std::min(*inputFrames, capacity) : 0u;
+    if (available > 0) {
+        std::memcpy(output[0], input[0],
+            static_cast<std::size_t>(available) * channels * sizeof(float));
+    }
+    if (available < capacity) {
+        std::memset(output[0] + static_cast<std::size_t>(available) * channels, 0,
+            static_cast<std::size_t>(capacity - available) * channels * sizeof(float));
+    }
+
+    AudioRealtimeBuffer buffer;
+    buffer.format = effect->chain.format();
+    buffer.samples = output[0];
+    buffer.capacityFrames = capacity;
+    buffer.frames = capacity;
+    {
+        std::lock_guard lock(effect->mutex);
+        effect->chain.process(buffer);
+    }
+    *inputFrames = available;
+    *outputFrames = capacity;
+}
+
+const ma_node_vtable kRealtimeEffectVtable{
+    realtime_effect_process,
+    nullptr,
+    1,
+    1,
+    MA_NODE_FLAG_CONTINUOUS_PROCESSING | MA_NODE_FLAG_ALLOW_NULL_INPUT,
+};
 #endif
 
 std::uint32_t clamp_pool_size(std::uint32_t value) {
@@ -190,6 +253,7 @@ class MiniaudioBackend final : public IAudioBackend {
     struct TrackSlot {
         AudioTrackDesc desc{};
         ma_sound_group group{};
+        std::unique_ptr<RealtimeEffectNode> effects{};
         std::uint32_t generation{1};
         bool initialized{false};
     };
@@ -197,6 +261,9 @@ class MiniaudioBackend final : public IAudioBackend {
     ma_engine engine_{};
     std::array<ma_sound_group, static_cast<std::size_t>(AudioBus::Count)> buses_{};
     std::array<bool, static_cast<std::size_t>(AudioBus::Count)> busInitialized_{};
+    std::array<std::unique_ptr<RealtimeEffectNode>, static_cast<std::size_t>(AudioBus::Count)> busEffects_{};
+    std::unique_ptr<RealtimeEffectNode> masterEffects_{};
+    AudioFormat effectFormat_{};
     std::vector<VoiceSlot> voices_;
     std::vector<std::uint32_t> freeVoices_;
     std::vector<TrackSlot> tracks_;
@@ -224,6 +291,41 @@ class MiniaudioBackend final : public IAudioBackend {
     ma_sound_group* track_group(AudioTrackId track) {
         return valid_track(track) ? &tracks_[audio_handle_index(track)].group : nullptr;
     }
+    ma_node* track_parent(AudioBus bus) {
+        if (bus == AudioBus::Master) return masterEffects_ ? masterEffects_->node() : ma_engine_get_endpoint(&engine_);
+        if (auto* group = bus_group(bus)) return reinterpret_cast<ma_node*>(group);
+        return ma_engine_get_endpoint(&engine_);
+    }
+    bool initialize_effect_node(std::unique_ptr<RealtimeEffectNode>& target) {
+        target = std::make_unique<RealtimeEffectNode>(effectFormat_);
+        ma_node_config nodeConfig = ma_node_config_init();
+        const auto channels = effectFormat_.channels;
+        nodeConfig.vtable = &kRealtimeEffectVtable;
+        nodeConfig.pInputChannels = &channels;
+        nodeConfig.pOutputChannels = &channels;
+        const auto result = ma_node_init(ma_engine_get_node_graph(&engine_), &nodeConfig, nullptr, &target->base);
+        if (result != MA_SUCCESS) {
+            target.reset();
+            set_error(result, "audio effect node initialization failed");
+            return false;
+        }
+        target->initialized = true;
+        return true;
+    }
+    void destroy_effect_node(std::unique_ptr<RealtimeEffectNode>& node) {
+        if (!node) return;
+        if (node->initialized) ma_node_uninit(&node->base, nullptr);
+        node.reset();
+    }
+    bool connect_effect_node(ma_node* source, RealtimeEffectNode& effect, ma_node* destination) {
+        if (ma_node_detach_all_output_buses(source) != MA_SUCCESS ||
+            ma_node_attach_output_bus(source, 0, effect.node(), 0) != MA_SUCCESS ||
+            ma_node_attach_output_bus(effect.node(), 0, destination, 0) != MA_SUCCESS) {
+            set_error(MA_ERROR, "audio effect graph connection failed");
+            return false;
+        }
+        return true;
+    }
     void set_error(ma_result result, std::string_view action) {
         error_ = std::string(action) + " (miniaudio error " + std::to_string(static_cast<int>(result)) + ")";
     }
@@ -239,6 +341,7 @@ class MiniaudioBackend final : public IAudioBackend {
     void release_track(std::uint32_t index) {
         auto& slot = tracks_[index];
         if (!slot.initialized) return;
+        destroy_effect_node(slot.effects);
         ma_sound_group_uninit(&slot.group);
         slot.desc = {};
         slot.initialized = false;
@@ -261,6 +364,15 @@ public:
         for (std::uint32_t i = 0; i < trackCapacity; ++i) freeTracks_.push_back(trackCapacity - i - 1u);
         busVolumes_.fill(1.0f);
         busMuted_.fill(false);
+        busInitialized_.fill(false);
+        for (auto& effect : busEffects_) effect.reset();
+        masterEffects_.reset();
+        effectFormat_ = config.mixFormat;
+        effectFormat_.channels = std::max(config.outputChannels, 1u);
+        effectFormat_.layout = effectFormat_.channels == 1
+            ? AudioChannelLayout::Mono : AudioChannelLayout::Stereo;
+        effectFormat_.sampleFormat = AudioSampleFormat::Float32;
+        effectFormat_.sampleRate = std::max(config.mixFormat.sampleRate, 1u);
 
         ma_engine_config engineConfig = ma_engine_config_init();
         engineConfig.noAutoStart = config.startDevice ? MA_FALSE : MA_TRUE;
@@ -275,11 +387,30 @@ public:
             if (busResult != MA_SUCCESS) { set_error(busResult, "audio bus initialization failed"); shutdown(); return false; }
             busInitialized_[i] = true;
         }
+
+        if (!initialize_effect_node(masterEffects_)) { shutdown(); return false; }
+        auto* endpoint = ma_engine_get_endpoint(&engine_);
+        for (std::size_t i = 1; i < busInitialized_.size(); ++i) {
+            if (!connect_effect_node(reinterpret_cast<ma_node*>(&buses_[i]), *masterEffects_, endpoint)) {
+                shutdown();
+                return false;
+            }
+        }
+        // Reinsert a dedicated chain between each bus and the master chain.
+        // The master node is already connected to the endpoint, so each bus
+        // effect becomes a pre-master insert in the same graph.
+        for (std::size_t i = 1; i < busInitialized_.size(); ++i) {
+            if (!initialize_effect_node(busEffects_[i]) ||
+                !connect_effect_node(reinterpret_cast<ma_node*>(&buses_[i]), *busEffects_[i], masterEffects_->node())) {
+                shutdown();
+                return false;
+            }
+        }
         return true;
     }
     void shutdown() override {
         for (std::uint32_t i = 0; i < voices_.size(); ++i) if (voices_[i].initialized) ma_sound_uninit(&voices_[i].sound);
-        for (std::uint32_t i = 0; i < tracks_.size(); ++i) if (tracks_[i].initialized) ma_sound_group_uninit(&tracks_[i].group);
+        for (std::uint32_t i = 0; i < tracks_.size(); ++i) if (tracks_[i].initialized) release_track(i);
         for (auto& slot : voices_) {
             slot.initialized = false;
             slot.generation = (slot.generation + 1u) & AudioHandleGenerationMask;
@@ -292,6 +423,8 @@ public:
             if (slot.generation == 0) slot.generation = 1;
         }
         freeVoices_.clear(); freeTracks_.clear();
+        for (auto& effect : busEffects_) destroy_effect_node(effect);
+        destroy_effect_node(masterEffects_);
         for (std::size_t i = 1; i < busInitialized_.size(); ++i) { if (busInitialized_[i]) ma_sound_group_uninit(&buses_[i]); busInitialized_[i] = false; }
         if (initialized_) ma_engine_uninit(&engine_);
         initialized_ = false;
@@ -323,8 +456,17 @@ public:
         const auto index = freeVoices_.back();
         auto& slot = voices_[index];
         const auto flags = (params.streaming || asset.streaming) ? MA_SOUND_FLAG_STREAM : MA_SOUND_FLAG_DECODE;
-        auto* parent = params.track != 0 ? track_group(params.track) : bus_group(params.bus);
-        if (ma_sound_init_from_file(&engine_, asset.path.string().c_str(), flags, parent, nullptr, &slot.sound) != MA_SUCCESS) { error_ = "audio asset load failed: " + asset.path.string(); return 0; }
+        ma_sound_config soundConfig = ma_sound_config_init_2(&engine_);
+        const auto path = asset.path.string();
+        soundConfig.pFilePath = path.c_str();
+        soundConfig.flags = flags;
+        soundConfig.pInitialAttachment = params.track != 0
+            ? reinterpret_cast<ma_node*>(track_group(params.track))
+            : (params.bus == AudioBus::Master
+                ? (masterEffects_ ? masterEffects_->node() : ma_engine_get_endpoint(&engine_))
+                : reinterpret_cast<ma_node*>(bus_group(params.bus)));
+        if (soundConfig.pInitialAttachment == nullptr) soundConfig.pInitialAttachment = ma_engine_get_endpoint(&engine_);
+        if (ma_sound_init_ex(&engine_, &soundConfig, &slot.sound) != MA_SUCCESS) { error_ = "audio asset load failed: " + asset.path.string(); return 0; }
         slot.bus = params.bus; slot.track = params.track; slot.initialized = true;
         ma_sound_set_looping(&slot.sound, params.loop ? MA_TRUE : MA_FALSE);
         ma_sound_set_volume(&slot.sound, clamp_volume(params.volume));
@@ -383,12 +525,35 @@ public:
     void set_listener(const AudioListener& listener) override { ma_engine_listener_set_position(&engine_, 0, listener.position.x, listener.position.y, listener.position.z); ma_engine_listener_set_direction(&engine_, 0, listener.forward.x, listener.forward.y, listener.forward.z); ma_engine_listener_set_world_up(&engine_, 0, listener.up.x, listener.up.y, listener.up.z); ma_engine_listener_set_velocity(&engine_, 0, listener.velocity.x, listener.velocity.y, listener.velocity.z); }
     void set_bus_volume(AudioBus bus, float volume) override { if (bus_index(bus) >= busVolumes_.size()) return; busVolumes_[bus_index(bus)] = clamp_volume(volume); const auto value = busMuted_[bus_index(bus)] ? 0.0f : busVolumes_[bus_index(bus)]; if (bus == AudioBus::Master) ma_engine_set_volume(&engine_, value); else if (auto* group = bus_group(bus)) ma_sound_group_set_volume(group, value); }
     void set_bus_muted(AudioBus bus, bool muted) override { if (bus_index(bus) >= busMuted_.size()) return; busMuted_[bus_index(bus)] = muted; const auto value = muted ? 0.0f : busVolumes_[bus_index(bus)]; if (bus == AudioBus::Master) ma_engine_set_volume(&engine_, value); else if (auto* group = bus_group(bus)) ma_sound_group_set_volume(group, value); }
+    void set_bus_effects(AudioBus bus, const std::vector<AudioEffectDesc>& effects) override {
+        if (bus_index(bus) >= busEffects_.size()) return;
+        auto* target = bus == AudioBus::Master ? masterEffects_.get() : busEffects_[bus_index(bus)].get();
+        if (!target) return;
+        std::lock_guard lock(target->mutex);
+        target->chain.clear();
+        for (const auto& effect : effects) target->chain.add(effect);
+    }
     AudioTrackId create_track(const AudioTrackDesc& desc) override {
         if (freeTracks_.empty()) return 0;
         const auto index = freeTracks_.back();
         auto& slot = tracks_[index];
-        if (ma_sound_group_init(&engine_, 0, bus_group(desc.bus), &slot.group) != MA_SUCCESS) { error_ = "audio track initialization failed"; return 0; }
-        freeTracks_.pop_back(); slot.desc = desc; slot.initialized = true; ma_sound_group_set_volume(&slot.group, desc.muted ? 0.0f : clamp_volume(desc.volume));
+        ma_sound_group_config groupConfig = ma_sound_group_config_init_2(&engine_);
+        groupConfig.pInitialAttachment = track_parent(desc.bus);
+        if (ma_sound_group_init_ex(&engine_, &groupConfig, &slot.group) != MA_SUCCESS) {
+            error_ = "audio track initialization failed";
+            return 0;
+        }
+        if (!initialize_effect_node(slot.effects) ||
+            !connect_effect_node(reinterpret_cast<ma_node*>(&slot.group), *slot.effects,
+                track_parent(desc.bus))) {
+            destroy_effect_node(slot.effects);
+            ma_sound_group_uninit(&slot.group);
+            return 0;
+        }
+        freeTracks_.pop_back();
+        slot.desc = desc;
+        slot.initialized = true;
+        ma_sound_group_set_volume(&slot.group, desc.muted ? 0.0f : clamp_volume(desc.volume));
         return make_audio_handle(index, slot.generation);
     }
     void destroy_track(AudioTrackId track) override {
@@ -399,6 +564,13 @@ public:
     }
     void set_track_volume(AudioTrackId track, float volume) override { if (valid_track(track)) { auto& slot = tracks_[audio_handle_index(track)]; slot.desc.volume = clamp_volume(volume); ma_sound_group_set_volume(&slot.group, slot.desc.muted ? 0.0f : slot.desc.volume); } }
     void set_track_muted(AudioTrackId track, bool muted) override { if (valid_track(track)) { auto& slot = tracks_[audio_handle_index(track)]; slot.desc.muted = muted; ma_sound_group_set_volume(&slot.group, muted ? 0.0f : slot.desc.volume); } }
+    void set_track_effects(AudioTrackId track, const std::vector<AudioEffectDesc>& effects) override {
+        if (!valid_track(track)) return;
+        auto& slot = tracks_[audio_handle_index(track)];
+        std::lock_guard lock(slot.effects->mutex);
+        slot.effects->chain.clear();
+        for (const auto& effect : effects) slot.effects->chain.add(effect);
+    }
     AudioTrackSnapshot track_snapshot(AudioTrackId track) const override {
         if (!valid_track(track)) return {};
         const auto index = audio_handle_index(track);
@@ -492,10 +664,12 @@ void AudioSystem::set_spatial(AudioVoiceId voice, const AudioPlayParams& params)
 void AudioSystem::set_listener(const AudioListener& listener) { if (backend_) backend_->set_listener(listener); }
 void AudioSystem::set_bus_volume(AudioBus bus, float volume) { if (backend_) backend_->set_bus_volume(bus, volume); }
 void AudioSystem::set_bus_muted(AudioBus bus, bool muted) { if (backend_) backend_->set_bus_muted(bus, muted); }
+void AudioSystem::set_bus_effects(AudioBus bus, std::vector<AudioEffectDesc> effects) { if (backend_) backend_->set_bus_effects(bus, effects); }
 AudioTrackId AudioSystem::create_track(AudioTrackDesc desc) { if (!backend_) return 0; const auto track = backend_->create_track(desc); if (track == 0) return 0; const auto index = audio_handle_index(track); if (index >= tracks_.size()) return 0; tracks_[index].name = std::move(desc.name); tracks_[index].snapshot = {track, tracks_[index].name, desc.bus, desc.volume, desc.muted, 0}; tracks_[index].active = true; ++trackCount_; return track; }
 void AudioSystem::destroy_track(AudioTrackId track) { if (backend_) backend_->destroy_track(track); const auto index = audio_handle_index(track); if (index < tracks_.size() && tracks_[index].active && tracks_[index].snapshot.track == track) { tracks_[index].snapshot = {}; tracks_[index].name.clear(); tracks_[index].active = false; --trackCount_; } }
 void AudioSystem::set_track_volume(AudioTrackId track, float volume) { if (backend_) backend_->set_track_volume(track, volume); }
 void AudioSystem::set_track_muted(AudioTrackId track, bool muted) { if (backend_) backend_->set_track_muted(track, muted); }
+void AudioSystem::set_track_effects(AudioTrackId track, std::vector<AudioEffectDesc> effects) { if (backend_) backend_->set_track_effects(track, effects); }
 AudioTrackSnapshot AudioSystem::track_snapshot(AudioTrackId track) const { return backend_ ? backend_->track_snapshot(track) : AudioTrackSnapshot{}; }
 AudioBusSnapshot AudioSystem::bus_snapshot(AudioBus bus) const { AudioBusSnapshot result; result.bus = bus; if (backend_) result.activeVoices = backend_->diagnostics().activeVoices; return result; }
 

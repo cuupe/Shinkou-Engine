@@ -24,6 +24,7 @@ option(SHINKOU_ENABLE_PYTHON "Enable Python scripting integration when available
 option(SHINKOU_ENABLE_CSHARP "Enable .NET/C# capability detection" ON)
 option(SHINKOU_BUILD_TESTS "Build engine tests" ON)
 option(SHINKOU_BUILD_BENCHMARKS "Build engine microbenchmarks" OFF)
+option(SHINKOU_BUILD_AUDIO_MIXER_TEST "Build the native Win32 audio mixer test utility" ON)
 option(SHINKOU_ENABLE_AVX2 "Enable AVX2 math kernels for supported targets" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -147,6 +148,19 @@ endif()
 if(WIN32)
     target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid d2d1 dwrite windowscodecs mfplat mfreadwrite mfuuid propsys gdi32 ws2_32)
     target_compile_definitions(shinkou_engine PRIVATE SHINKOU_PLATFORM_WINDOWS=1)
+
+    if(SHINKOU_BUILD_AUDIO_MIXER_TEST)
+        add_executable(shinkou_audio_mixer_test WIN32
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tools/AudioMixerTest/AudioMixerTest.cpp")
+        target_compile_features(shinkou_audio_mixer_test PRIVATE cxx_std_17)
+        target_compile_definitions(shinkou_audio_mixer_test PRIVATE
+            NOMINMAX=1
+            WIN32_LEAN_AND_MEAN=1)
+        target_link_libraries(shinkou_audio_mixer_test PRIVATE
+            shinkou_engine comctl32 comdlg32 gdi32 user32 ole32 avrt winmm)
+        set_target_properties(shinkou_audio_mixer_test PROPERTIES
+            OUTPUT_NAME shinkou_audio_mixer_test)
+    endif()
 endif()
 
 if(SHINKOU_BUILD_SAMPLE)

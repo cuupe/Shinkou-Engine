@@ -172,10 +172,15 @@ public:
     virtual void set_listener(const AudioListener& listener) = 0;
     virtual void set_bus_volume(AudioBus bus, float volume) = 0;
     virtual void set_bus_muted(AudioBus bus, bool muted) = 0;
+    // Effects are optional for backends. The miniaudio backend wires these
+    // chains into its realtime node graph; lightweight/null backends may
+    // ignore them while retaining the same control surface.
+    virtual void set_bus_effects(AudioBus, const std::vector<AudioEffectDesc>&) {}
     virtual AudioTrackId create_track(const AudioTrackDesc& desc) = 0;
     virtual void destroy_track(AudioTrackId track) = 0;
     virtual void set_track_volume(AudioTrackId track, float volume) = 0;
     virtual void set_track_muted(AudioTrackId track, bool muted) = 0;
+    virtual void set_track_effects(AudioTrackId, const std::vector<AudioEffectDesc>&) {}
     virtual AudioTrackSnapshot track_snapshot(AudioTrackId track) const = 0;
     virtual AudioVoiceState state(AudioVoiceId voice) const = 0;
     virtual std::uint32_t collect_finished(AudioVoiceId* output, std::uint32_t capacity) = 0;
@@ -254,10 +259,12 @@ public:
     void set_listener(const AudioListener& listener);
     void set_bus_volume(AudioBus bus, float volume);
     void set_bus_muted(AudioBus bus, bool muted);
+    void set_bus_effects(AudioBus bus, std::vector<AudioEffectDesc> effects);
     AudioTrackId create_track(AudioTrackDesc desc = {});
     void destroy_track(AudioTrackId track);
     void set_track_volume(AudioTrackId track, float volume);
     void set_track_muted(AudioTrackId track, bool muted);
+    void set_track_effects(AudioTrackId track, std::vector<AudioEffectDesc> effects);
     AudioTrackSnapshot track_snapshot(AudioTrackId track) const;
     AudioBusSnapshot bus_snapshot(AudioBus bus) const;
     AudioDiagnostics diagnostics() const noexcept { return diagnostics_; }
