@@ -1604,14 +1604,12 @@ public:
                 D3D11_SUBRESOURCE_DATA data{};
                 std::vector<std::uint8_t> alignedInitialData;
                 if (!desc.initialData.empty()) {
-                    if (desc.initialData.size() > desc.size ||
-                        (!record.constantBuffer && desc.initialData.size() < buffer.ByteWidth)) {
+                    if (desc.initialData.size() > desc.size) {
                         lastError_ = "D3D11 buffer initial data does not cover the native resource";
                         resourceCreationFailed = true;
                         return;
                     }
-                    if ((buffer.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0 &&
-                        desc.initialData.size() < buffer.ByteWidth) {
+                    if (desc.initialData.size() < buffer.ByteWidth) {
                         alignedInitialData.resize(buffer.ByteWidth, 0);
                         std::copy(desc.initialData.begin(), desc.initialData.end(), alignedInitialData.begin());
                         data.pSysMem = alignedInitialData.data();
