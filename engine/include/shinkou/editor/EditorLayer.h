@@ -405,6 +405,9 @@ class EditorLayer {
     void poll_model_texture_preview();
     void navigate_model_preview(ViewportNavigation action, math::Vec2 delta);
     void reset_model_preview();
+    void toggle_model_animation();
+    void select_model_animation(std::int32_t delta);
+    void seek_model_animation(float normalizedTime);
     void sync_media_preview_state();
     void stop_audio_preview();
     void clear_audio_asset_bindings();

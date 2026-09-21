@@ -91,20 +91,23 @@ std::string triangle_json() {
 
 std::string animated_triangle_json() {
     auto json = triangle_json();
+    const auto bufferUri = json.find("triangle.bin");
+    assert(bufferUri != std::string::npos);
+    json.replace(bufferUri, std::string("triangle.bin").size(), "animated.bin");
     const auto byteLength = json.find("\"byteLength\":102");
     assert(byteLength != std::string::npos);
-    json.replace(byteLength, std::string("\"byteLength\":102").size(), "\"byteLength\":134");
+    json.replace(byteLength, std::string("\"byteLength\":102").size(), "\"byteLength\":142");
     const auto viewTail = json.find(R"({"buffer":0,"byteOffset":66,"byteLength":36})");
     assert(viewTail != std::string::npos);
     json.insert(viewTail + std::string(R"({"buffer":0,"byteOffset":66,"byteLength":36})").size(),
-                R",({"buffer":0,"byteOffset":102,"byteLength":8},{"buffer":0,"byteOffset":110,"byteLength":24})");
+                ",{\"buffer\":0,\"byteOffset\":102,\"byteLength\":8},{\"buffer\":0,\"byteOffset\":110,\"byteLength\":32}");
     const auto accessorTail = json.find(R"({"bufferView":3,"componentType":5126,"count":3,"type":"VEC3"})");
     assert(accessorTail != std::string::npos);
     json.insert(accessorTail + std::string(R"({"bufferView":3,"componentType":5126,"count":3,"type":"VEC3"})").size(),
-                R",({"bufferView":4,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":5,"componentType":5126,"count":2,"type":"VEC4"})");
-    const auto animation = json.find(R"({"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]})");
-    assert(animation != std::string::npos);
-    json.replace(animation, std::string(R"({"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]})").size(),
+                ",{\"bufferView\":4,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"},{\"bufferView\":5,\"componentType\":5126,\"count\":2,\"type\":\"VEC4\"}");
+    const auto animationField = json.find(R"("animations":[{"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]})");
+    assert(animationField != std::string::npos);
+    json.replace(animationField, std::string(R"("animations":[{"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]})").size(),
                  R"("nodes":[{"name":"TriangleRoot","mesh":0}],"animations":[{"name":"Spin","samplers":[{"input":4,"output":5,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":0,"path":"rotation"}}]})");
     return json;
 }

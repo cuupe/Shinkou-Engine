@@ -933,7 +933,7 @@ float4 PresentPS(VertexOutput input) : SV_Target { return gTexture.Sample(gSampl
         // The previous frame may still reference the old targets on an explicit
         // backend. Wait before releasing them, then switch every descriptor used
         // by the next render graph to the new size.
-        if (activeRenderer.backend()) activeRenderer.backend()->wait_idle();
+        activeRenderer.wait_idle();
         activeRenderer.destroy_resource(presentMaterial);
         activeRenderer.destroy_resource(depthTarget);
         activeRenderer.destroy_resource(colorTarget);

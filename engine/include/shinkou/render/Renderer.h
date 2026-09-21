@@ -102,6 +102,10 @@ public:
     // High-level UI capture seam. Upper layers must not reach through the
     // renderer to call backend-specific services directly.
     void request_ui_capture() noexcept;
+    // Waits for submitted GPU work before callers release or replace resources.
+    // This keeps resource-lifetime synchronization inside the renderer facade
+    // instead of exposing a concrete backend to tools and examples.
+    void wait_idle() noexcept;
     void submit();
 };
 }

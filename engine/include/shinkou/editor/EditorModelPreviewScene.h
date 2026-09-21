@@ -22,8 +22,10 @@ struct EditorModelPreviewCameraState {
 struct EditorModelPreviewSceneState {
     std::uint64_t geometryRevision{0};
     std::uint64_t projectionRevision{0};
+    std::uint64_t animationRevision{0};
     EditorModelPreviewCameraState camera{};
     std::shared_ptr<const std::vector<ui::Vec2>> wireSegments{};
+    std::shared_ptr<const std::vector<math::Vec3>> transformedVertices{};
     std::int32_t animationIndex{-1};
     float animationTime{0.0f};
     float animationDuration{0.0f};
@@ -43,6 +45,7 @@ class EditorModelPreviewScene final {
     std::shared_ptr<const EditorModelPreviewSnapshot> snapshot_{};
     EditorModelPreviewCameraState camera_{};
     std::shared_ptr<const std::vector<ui::Vec2>> wireSegments_{};
+    std::shared_ptr<const std::vector<math::Vec3>> transformedVertices_{};
     std::uint64_t projectionRevision_{0};
     animation::Animator animator_{};
     std::int32_t animationIndex_{-1};

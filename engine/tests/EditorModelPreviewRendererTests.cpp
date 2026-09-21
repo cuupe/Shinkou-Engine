@@ -85,6 +85,8 @@ int main() {
     bool nativeOffscreenExecutionExercised = false;
     bool nativeOffscreenReadbackExercised = false;
     bool nativeOffscreenPixelActivityExercised = false;
+    bool nativeAnimatedUpdateExercised = false;
+    bool nativeAnimatedReadbackExercised = false;
     bool nativeDepthTargetExercised = false;
     bool nativeTextureReadbackExercised = false;
     render::Renderer nativeRenderer(render::BackendApi::DirectX11);
@@ -159,6 +161,24 @@ int main() {
                            std::string::npos);
                     nativeMetallicRoughnessTextureExercised = true;
                     assert(nativeRenderer.graph().passes().size() == 8);
+
+                    // Change only the retained scene pose and animation revision.
+                    // The renderer must upload the transformed vertices again,
+                    // while preserving the same model/material contract.
+                    auto animatedState = std::make_shared<EditorModelPreviewSceneState>(*sceneState);
+                    auto animatedVertices = std::make_shared<std::vector<math::Vec3>>();
+                    animatedVertices->insert(animatedVertices->end(), {
+                        {-0.5f, -1.0f, 0.0f}, {1.0f, -0.5f, 0.0f}, {-0.5f, 1.0f, 0.0f}});
+                    animatedState->transformedVertices = animatedVertices;
+                    animatedState->animationRevision = 1;
+                    animatedState->projectionRevision += 1;
+                    const auto animatedStateResult = previewRenderer.render(
+                        nativeRenderer, *snapshot, *animatedState, 0, image,
+                        EditorModelPreviewTextureRole::BaseColor);
+                    assert(animatedStateResult.rendererReady);
+                    assert(animatedStateResult.geometryUploaded);
+                    nativeAnimatedUpdateExercised = true;
+
                     nativeRenderer.submit();
                     if (nativeRenderer.last_error().empty()) {
                         nativeOffscreenExecutionExercised = true;
@@ -173,6 +193,8 @@ int main() {
                             nativeOffscreenReadbackExercised = true;
                             nativeOffscreenPixelActivityExercised = std::any_of(
                                 readback.data.begin(), readback.data.end(), [](std::uint8_t value) { return value != 0; });
+                            nativeAnimatedReadbackExercised = nativeOffscreenReadbackExercised &&
+                                nativeOffscreenPixelActivityExercised;
                         } else {
                             std::cerr << "native offscreen readback failure: "
                                       << nativeRenderer.last_error() << "\n";
@@ -225,6 +247,8 @@ int main() {
               << " native-offscreen-readback=" << (nativeOffscreenReadbackExercised ? 1 : 0)
               << " native-offscreen-pixel-activity="
               << (nativeOffscreenPixelActivityExercised ? 1 : 0)
+              << " native-animated-update=" << (nativeAnimatedUpdateExercised ? 1 : 0)
+              << " native-animated-readback=" << (nativeAnimatedReadbackExercised ? 1 : 0)
               << " native-depth-target=" << (nativeDepthTargetExercised ? 1 : 0)
               << " native-uploaded-texture-readback="
               << (nativeTextureReadbackExercised ? 1 : 0) << "\n";

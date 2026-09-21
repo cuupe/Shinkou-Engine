@@ -49,6 +49,7 @@ bool EditorModelPreviewCameraState::valid() const noexcept {
 void EditorModelPreviewScene::clear() noexcept {
     snapshot_.reset();
     wireSegments_.reset();
+    transformedVertices_.reset();
     camera_ = {};
     projectionRevision_ = 0;
     clear_animation();
@@ -136,7 +137,7 @@ void EditorModelPreviewScene::seek_animation(float seconds) noexcept {
 void EditorModelPreviewScene::advance_animation(float deltaSeconds) noexcept {
     if (animationIndex_ < 0 || !animator_.clip() || !std::isfinite(deltaSeconds)) return;
     const auto before = animator_.time();
-    animator_.update(std::clamp(deltaSeconds, -0.25f, 0.25f));
+    animator_.update(std::clamp(deltaSeconds, -0.5f, 0.5f));
     if (before == animator_.time() && !animator_.playing()) return;
     animationRevision_ = animationRevision_ == std::numeric_limits<std::uint64_t>::max()
         ? 1 : animationRevision_ + 1;
@@ -151,7 +152,8 @@ void EditorModelPreviewScene::rebuild_projection() noexcept {
     }
     const auto& vertices = *snapshot_->vertices;
     const auto& indices = *snapshot_->indices;
-    const auto transformed = [&](std::size_t index) {
+    auto transformedVertices = std::make_shared<std::vector<math::Vec3>>(vertices.size());
+    const auto transform_point = [&](std::size_t index) {
         if (index >= vertices.size()) return math::Vec3{};
         if (snapshot_->vertexBones && index < snapshot_->vertexBones->size() &&
             animator_.skeleton() && animator_.pose().compatible(*animator_.skeleton())) {
@@ -160,6 +162,12 @@ void EditorModelPreviewScene::rebuild_projection() noexcept {
                 return math::TransformPoint(animator_.pose().model[bone], vertices[index]);
         }
         return vertices[index];
+    };
+    for (std::size_t index = 0; index < vertices.size(); ++index)
+        (*transformedVertices)[index] = transform_point(index);
+    transformedVertices_ = std::move(transformedVertices);
+    const auto transformed = [&](std::size_t index) {
+        return index < transformedVertices_->size() ? (*transformedVertices_)[index] : math::Vec3{};
     };
     math::Vec3 minimum{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
     math::Vec3 maximum{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
@@ -201,8 +209,10 @@ std::shared_ptr<const EditorModelPreviewSceneState> EditorModelPreviewScene::sta
     auto result = std::make_shared<EditorModelPreviewSceneState>();
     result->geometryRevision = snapshot_->revision;
     result->projectionRevision = projectionRevision_;
+    result->animationRevision = animationRevision_;
     result->camera = camera_;
     result->wireSegments = wireSegments_;
+    result->transformedVertices = transformedVertices_;
     result->animationIndex = animationIndex_;
     result->animationTime = animator_.clip() ? animator_.time() : 0.0f;
     result->animationDuration = animator_.clip() ? animator_.clip()->duration() : 0.0f;

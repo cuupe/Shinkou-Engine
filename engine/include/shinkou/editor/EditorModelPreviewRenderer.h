@@ -74,6 +74,7 @@ class EditorModelPreviewRenderer final {
     std::size_t vertexBytes_{0};
     std::size_t indexBytes_{0};
     std::uint64_t geometryRevision_{0};
+    std::uint64_t vertexAnimationRevision_{0};
     std::uint64_t projectionKey_{0};
     std::uint64_t materialRevision_{0};
     std::int32_t materialIndex_{-2};

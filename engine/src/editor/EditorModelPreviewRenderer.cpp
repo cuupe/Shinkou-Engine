@@ -252,13 +252,24 @@ PreviewSceneFrame make_scene_frame(const EditorModelPreviewSnapshot& snapshot,
                                    const EditorModelPreviewSceneState& scene,
                                    const render::EditorViewportRect& viewport) noexcept {
     PreviewSceneFrame frame;
-    const math::Vec3 center{
-        (snapshot.minX + snapshot.maxX) * 0.5f,
-        (snapshot.minY + snapshot.maxY) * 0.5f,
-        (snapshot.minZ + snapshot.maxZ) * 0.5f};
-    const math::Vec3 extent{snapshot.maxX - snapshot.minX,
-                            snapshot.maxY - snapshot.minY,
-                            snapshot.maxZ - snapshot.minZ};
+    math::Vec3 minimum{snapshot.minX, snapshot.minY, snapshot.minZ};
+    math::Vec3 maximum{snapshot.maxX, snapshot.maxY, snapshot.maxZ};
+    if (scene.transformedVertices && scene.transformedVertices->size() == snapshot.vertexCount &&
+        !scene.transformedVertices->empty()) {
+        minimum = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+        maximum = {std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
+        for (const auto& point : *scene.transformedVertices) {
+            if (!finite_vec3(point)) continue;
+            minimum.x = std::min(minimum.x, point.x); minimum.y = std::min(minimum.y, point.y); minimum.z = std::min(minimum.z, point.z);
+            maximum.x = std::max(maximum.x, point.x); maximum.y = std::max(maximum.y, point.y); maximum.z = std::max(maximum.z, point.z);
+        }
+    }
+    const math::Vec3 center{(minimum.x + maximum.x) * 0.5f,
+                            (minimum.y + maximum.y) * 0.5f,
+                            (minimum.z + maximum.z) * 0.5f};
+    const math::Vec3 extent{maximum.x - minimum.x,
+                            maximum.y - minimum.y,
+                            maximum.z - minimum.z};
     const float radius = std::max(1.0e-4f, 0.5f * math::Length(extent));
     const auto rotation = math::FromAxisAngle({0.0f, 1.0f, 0.0f}, scene.camera.yaw) *
         math::FromAxisAngle({1.0f, 0.0f, 0.0f}, scene.camera.pitch);
@@ -362,6 +373,7 @@ void EditorModelPreviewRenderer::clear(render::Renderer& renderer) noexcept {
     offscreenHeight_ = 0;
     offscreenColorFormat_.clear();
     offscreenDepthFormat_.clear();
+    vertexAnimationRevision_ = 0;
 }
 
 EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
@@ -482,8 +494,15 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     const bool hasTextureCoordinates = snapshot.textureCoordinates &&
         snapshot.textureCoordinates->size() == snapshot.vertices->size();
     const bool hasNormals = snapshot.normals && snapshot.normals->size() == snapshot.vertices->size();
-    for (std::size_t index = 0; index < snapshot.vertices->size(); ++index) {
-        const auto& position = (*snapshot.vertices)[index];
+    const auto& positions = scene.transformedVertices &&
+        scene.transformedVertices->size() == snapshot.vertices->size()
+        ? *scene.transformedVertices : *snapshot.vertices;
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+        const auto& position = positions[index];
+        if (!finite_vec3(position)) {
+            state.status = "GPU model preview rejected: animated vertices contain non-finite values";
+            return state;
+        }
         const auto fallback = math::Vec2{position.x * 0.5f + 0.5f, position.y * 0.5f + 0.5f};
         const auto coordinate = hasTextureCoordinates ? (*snapshot.textureCoordinates)[index] : fallback;
         if (!math::IsFinite(coordinate.x) || !math::IsFinite(coordinate.y)) {
@@ -512,7 +531,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         vertexBuffer_ = renderer.create_buffer(description);
         vertexBytes_ = vertexBuffer_ ? vertexBytes : 0;
         geometryRevision_ = 0;
-    } else if (geometryRevision_ != snapshot.revision) {
+        vertexAnimationRevision_ = 0;
+    } else if (geometryRevision_ != snapshot.revision || vertexAnimationRevision_ != scene.animationRevision) {
         if (!renderer.update_buffer({vertexBuffer_, 0, vertexData})) {
             state.status = "GPU model preview upload failed for vertices: " + renderer.last_error();
             return state;
@@ -543,6 +563,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         return state;
     }
     geometryRevision_ = snapshot.revision;
+    vertexAnimationRevision_ = scene.animationRevision;
     state.geometryUploaded = true;
     state.textureCoordinatesApplied = hasTextureCoordinates;
     state.normalsApplied = hasNormals;

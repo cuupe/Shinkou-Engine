@@ -405,6 +405,16 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         return ui::EventResult::Handled;
     }
     const auto point = event.position;
+    if (id == "asset-model-animation-timeline" && event.type == ui::UiEventType::PointerMove &&
+        activeRegion_ == id && callbacks_.seekModelAnimation) {
+        const auto bounds = regionRects_.find(std::string(id));
+        if (bounds != regionRects_.end() && bounds->second.width > 0.0f) {
+            callbacks_.seekModelAnimation(std::clamp(
+                (point.x - bounds->second.x) / bounds->second.width, 0.0f, 1.0f));
+            mark_region_repaint(id); paintCacheValid_ = false;
+        }
+        return ui::EventResult::Handled;
+    }
     if (id == "asset-model-preview") {
         if (event.type == ui::UiEventType::Scroll) {
             if (callbacks_.navigateModelPreview)
@@ -882,6 +892,25 @@ void EditorUi::activate_region(std::string_view id, ui::Vec2 position) {
     }
     if (id == "asset-model-texture-next") {
         if (callbacks_.selectModelTexture) callbacks_.selectModelTexture(1);
+        return;
+    }
+    if (id == "asset-model-animation-toggle") {
+        if (callbacks_.toggleModelAnimation) callbacks_.toggleModelAnimation();
+        return;
+    }
+    if (id == "asset-model-animation-prev") {
+        if (callbacks_.selectModelAnimation) callbacks_.selectModelAnimation(-1);
+        return;
+    }
+    if (id == "asset-model-animation-next") {
+        if (callbacks_.selectModelAnimation) callbacks_.selectModelAnimation(1);
+        return;
+    }
+    if (id == "asset-model-animation-timeline") {
+        const auto bounds = regionRects_.find(std::string(id));
+        if (bounds != regionRects_.end() && bounds->second.width > 0.0f && callbacks_.seekModelAnimation)
+            callbacks_.seekModelAnimation(std::clamp(
+                (position.x - bounds->second.x) / bounds->second.width, 0.0f, 1.0f));
         return;
     }
     if (id.rfind("inspector-choice:", 0) == 0) {
@@ -1760,6 +1789,7 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                     renderList_.text({modelArea.x + 66.0f, modelArea.y + 32.0f, selectorWidth, 18.0f},
                                      textureLabel, muted, 9.0f, {}, ui::TextAlign::Start,
                                      ui::TextOverflow::Ellipsis);
+                    const auto& modelPreview = *previewState.modelPreview;
                     if (previewState.modelTextureSnapshot && previewState.modelTextureSnapshot->valid()) {
                         const float textureWidth = static_cast<float>(previewState.modelTextureSnapshot->width);
                         const float textureHeight = static_cast<float>(previewState.modelTextureSnapshot->height);
@@ -1772,6 +1802,40 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                         renderList_.rect(textureRect, color(layout.theme == "light" ? "#FFFFFF" : "#20242B"), 2.0f);
                         renderList_.image(textureRect, previewState.modelTextureSnapshot);
                         renderList_.border(textureRect, color(layout.theme == "light" ? "#C9D1DC" : "#465161"), 1.0f, 2.0f);
+                    }
+                    if (modelPreview.animations && !modelPreview.animations->empty()) {
+                        const auto animationState = previewState.modelPreviewScene;
+                        const float animationY = modelArea.y + 56.0f;
+                        draw_button({modelArea.x + 8.0f, animationY, 24.0f, 21.0f},
+                                    "asset-model-animation-prev", "<", layout, false);
+                        draw_button({modelArea.x + 36.0f, animationY, 52.0f, 21.0f},
+                                    "asset-model-animation-toggle",
+                                    animationState && animationState->animationPlaying ? "Pause" : "Play",
+                                    layout, false);
+                        draw_button({modelArea.x + 92.0f, animationY, 24.0f, 21.0f},
+                                    "asset-model-animation-next", ">", layout, false);
+                        std::string animationLabel = "Animation: none";
+                        if (animationState && animationState->animationIndex >= 0 &&
+                            static_cast<std::size_t>(animationState->animationIndex) < modelPreview.animations->size()) {
+                            const auto& animation = (*modelPreview.animations)[static_cast<std::size_t>(animationState->animationIndex)];
+                            animationLabel = (animation.name.empty() ? "Unnamed" : animation.name) +
+                                "  " + std::to_string(animationState->animationTime) +
+                                " / " + std::to_string(animationState->animationDuration);
+                        }
+                        renderList_.text({modelArea.x + 124.0f, animationY + 3.0f,
+                                          std::max(0.0f, modelArea.width - 132.0f), 16.0f},
+                                         animationLabel, muted, 8.0f, {}, ui::TextAlign::Start,
+                                         ui::TextOverflow::Ellipsis);
+                        const auto timeline = ui::Rect{modelArea.x + 8.0f, animationY + 26.0f,
+                                                       std::max(0.0f, modelArea.width - 16.0f), 10.0f};
+                        set_region("asset-model-animation-timeline", timeline, true);
+                        renderList_.rect(timeline, color(layout.theme == "light" ? "#D9DEE6" : "#303641"), 3.0f);
+                        if (animationState && animationState->animationPlayable && animationState->animationDuration > 0.0f) {
+                            const float progress = std::clamp(animationState->animationTime /
+                                animationState->animationDuration, 0.0f, 1.0f);
+                            renderList_.rect({timeline.x, timeline.y, timeline.width * progress, timeline.height},
+                                             color(layout.theme == "light" ? "#3B78B8" : "#82B7F2"), 3.0f);
+                        }
                     }
                     const auto wire = previewState.modelPreviewScene &&
                         previewState.modelPreviewScene->valid()
@@ -1788,7 +1852,6 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                         };
                         renderList_.line(map((*wire)[index]), map((*wire)[index + 1]), ink, 1.0f);
                     }
-                    const auto& modelPreview = *previewState.modelPreview;
                     const auto stats = modelPreview.sourceFormat + "  " +
                         std::to_string(modelPreview.vertexCount) + " verts  " +
                         std::to_string(modelPreview.triangleCount) + " tris  " +

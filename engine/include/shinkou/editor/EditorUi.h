@@ -62,6 +62,9 @@ struct EditorUiCallbacks {
     std::function<void()> resetModelPreview;
     std::function<void(std::int32_t)> selectModelMaterial;
     std::function<void(std::int32_t)> selectModelTexture;
+    std::function<void()> toggleModelAnimation;
+    std::function<void(std::int32_t)> selectModelAnimation;
+    std::function<void(float)> seekModelAnimation;
     std::function<void(std::string, math::Vec2)> dropAssetToViewport;
 };
 

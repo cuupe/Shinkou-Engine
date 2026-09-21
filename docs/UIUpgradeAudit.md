@@ -2419,3 +2419,39 @@
 - 失败状态与回滚路径：
 - 未解决风险：
 - 下一轮入口：
+
+## 第 4.55 子阶段：模型 CPU 动画采样与预览时间轴
+
+### 实现与范围
+
+- glTF provider 增加有界节点层级与 TRS/matrix 绑定姿态解析，并将节点 parent 重新排序为有效的核心 animation skeleton；每个 flatten vertex 发布对应 bone index，未绑定资源使用 `InvalidBone`。
+- 动画 sampler 在有界 accessor 内读取 SCALAR 时间和 VEC3/VEC4 output；仅 `LINEAR` translation/rotation/scale 且具有有效 skeleton 的 clip 标记 `cpuPlayable`，duration、playable channel 数和不可播放 metadata 均保留在 immutable snapshot。
+- `EditorModelPreviewScene` 复用核心 `animation::Animator`，维护 animation index/time/play state，按 dt 生成 transformed vertices；`EditorLayer` 在 draw 生命周期推进采样并把状态重新发布给 UiModel。
+- retained model preview 增加动画上一项、播放/暂停、下一项和时间轴区域；D3D11 model renderer 使用 scene transformed vertices，并以独立 `animationRevision` 触发姿态顶点更新，避免 camera-only orbit 造成重复上传。
+- 明确非目标：尚未实现 JOINTS_0/WEIGHTS_0 GPU skinning、inverse-bind skin mesh、STEP/CUBICSPLINE、morph target、透明排序和非 D3D11 model shader path。
+
+### 契约与证据
+
+- `EditorGltfPreviewTests` 新增 142-byte animated glTF fixture：真实 input/output accessors、`TriangleRoot` 节点、rotation clip、duration=1、CPU clip 和三顶点 bone mapping 均通过；原有 metadata-only、GLB、AssetSystem bytes、image/material/texture、安全路径和取消回归保持通过。
+- `EditorModelPreviewSceneTests` 覆盖默认选择、0.5 秒采样、projection revision 改变、pause、seek 和 toggle；`EditorModelPreviewRendererTests` 保持 Null backend fallback 与 D3D11 条件路径通过。
+- `EditorInteractionTests` 的 glTF fixture 增加 `Idle` metadata，并断言四个动画 retained region 已注册；该测试通过 1/1。
+- 全量构建 `cmake --build out/build/mingw-debug -j 4` 通过；过程中审计出并修复物理可视化示例穿透访问 `Renderer` 私有 backend 的编译回归，改为 Renderer 公共 `wait_idle()` 生命周期接口。
+- 全量 CTest：`58/58 passed`，总计 `84.98 sec`；模型 scene、renderer、glTF、媒体、UI、渲染和 Physics 均通过；动画相关定向 CTest 为 `4/4 passed`（`44.50 sec`，其中交互测试占主要时间）。
+- 本机 D3D11 renderer 专项输出：`native-d3d11-pass=1`、`native-offscreen-readback=1`、`native-offscreen-pixel-activity=1`、`native-animated-update=1`、`native-animated-readback=1`。其中 `native-animated-update` 由动画 revision 变化触发实际 geometry upload，随后对 offscreen target 做 readback；这证明了动态顶点更新链路，但还不是“前后两帧像素差异 oracle”。
+
+### 安全、性能与视觉审计
+
+- 解析边界包括 node/metadata 4096、animation key 65536、duration 3600 秒、source/buffer 原有上限；失败返回 bounded error，不替换现有 snapshot，不增加外部 URI、shell、网络或任意项目写入入口。
+- sampler 只在线程 provider 阶段读取 immutable source buffers；播放阶段只消费 snapshot 和 pose，不读盘、不解码、不操作活动 World；GPU renderer 对动画顶点执行有限 buffer update。
+- retained 控件只提交按钮、文本和时间轴 draw command；UI 输入通过 `EditorUiCallbacks` 回到 EditorLayer，时间轴位置 clamp 到 `[0,1]`，不把 renderer handle 暴露给 UI。
+- 视觉证据同时覆盖 retained 控件/场景状态和本机 D3D11 animated offscreen readback；没有使用 GDI 或静态 wire 变化替代 GPU 证据。readback 的非零像素与 geometry upload 均通过，但重叠模型的遮挡/前后姿态像素差异仍需独立 oracle。
+
+### 失败状态与回滚路径
+
+- 本轮 fixture 曾因 JSON 仍指向 102-byte 静态 buffer、以及 0.5 秒 dt 被误裁为 0.25 秒而失败；修复后定向回归通过，失败日志不被当作通过证据。
+- 不可播放的 metadata-only 或非 LINEAR clip 会显示控制区但保持 `animationPlayable=false`，Play/Pause 不会伪造时间变化；可回滚 provider clip fields、scene animation state、UI callbacks 和 renderer pose seam，静态 model/material/texture/depth fallback 保持独立。
+
+### 未解决风险与下一轮
+
+- native D3D11 animated offscreen readback 与真实 GPU 顶点更新已通过；仍需补前后姿态像素差异 oracle，避免只证明“有绘制”而未证明姿态投影变化。
+- JOINTS_0/WEIGHTS_0 与 inverse-bind skinning、STEP/CUBICSPLINE/morph、非 D3D11 model backend、100%/125% DPI、UI frame-time/分配和内容 hash/diff 预算尚未完成。

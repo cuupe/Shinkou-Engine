@@ -1265,6 +1265,10 @@ void Renderer::request_ui_capture() noexcept {
     if (backend_ && initialized_) backend_->request_ui_capture();
 }
 
+void Renderer::wait_idle() noexcept {
+    if (backend_ && initialized_) backend_->wait_idle();
+}
+
 void Renderer::submit() {
     lastError_.clear();
     const auto clear_overlay_submission = [this]() {

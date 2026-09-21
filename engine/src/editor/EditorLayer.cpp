@@ -337,6 +337,9 @@ bool EditorLayer::initialize(bool enableImGui) {
         [this]() { reset_model_preview(); },
         [this](std::int32_t delta) { select_model_material(delta); },
         [this](std::int32_t delta) { select_model_texture(delta); },
+        [this]() { toggle_model_animation(); },
+        [this](std::int32_t delta) { select_model_animation(delta); },
+        [this](float normalizedTime) { seek_model_animation(normalizedTime); },
         [this](std::string path, math::Vec2 point) { drop_asset_to_viewport(std::move(path), point); }
     });
 #if defined(SHINKOU_WITH_IMGUI)
@@ -3990,6 +3993,39 @@ void EditorLayer::reset_model_preview() {
     uiModel_.set_asset_preview(assetPreviewState_);
 }
 
+void EditorLayer::toggle_model_animation() {
+    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid()) return;
+    modelPreviewScene_.toggle_animation();
+    assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
+    uiModel_.set_asset_preview(assetPreviewState_);
+}
+
+void EditorLayer::select_model_animation(std::int32_t delta) {
+    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid() ||
+        !modelPreviewSnapshot_->animations || modelPreviewSnapshot_->animations->empty() || delta == 0) return;
+    const auto count = static_cast<std::int32_t>(modelPreviewSnapshot_->animations->size());
+    auto index = modelPreviewScene_.animation_index();
+    if (index < 0) index = delta > 0 ? -1 : 0;
+    for (std::int32_t attempt = 0; attempt < count; ++attempt) {
+        index = (index + (delta > 0 ? 1 : -1) + count) % count;
+        if (modelPreviewScene_.select_animation(index)) {
+            assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
+            uiModel_.set_asset_preview(assetPreviewState_);
+            return;
+        }
+    }
+}
+
+void EditorLayer::seek_model_animation(float normalizedTime) {
+    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid() ||
+        !std::isfinite(normalizedTime)) return;
+    const auto state = modelPreviewScene_.state();
+    if (!state || !state->animationPlayable || state->animationDuration <= 0.0f) return;
+    modelPreviewScene_.seek_animation(std::clamp(normalizedTime, 0.0f, 1.0f) * state->animationDuration);
+    assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
+    uiModel_.set_asset_preview(assetPreviewState_);
+}
+
 void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path, std::string value) {
     std::string error;
     switch (action) {
@@ -5067,6 +5103,10 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     poll_model_scene_assets();
     sync_model_scene_assets(world);
     poll_model_texture_preview();
+    if (modelPreviewSnapshot_ && modelPreviewSnapshot_->valid()) {
+        modelPreviewScene_.advance_animation(dt);
+        assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
+    }
     sync_media_preview_state();
     editorFilePollAccumulator_ += std::max(0.0f, dt);
     if (editorFilePollAccumulator_ >= 1.0f) {

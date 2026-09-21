@@ -247,6 +247,7 @@ int main() {
             {"name":"MaterialA","pbrMetallicRoughness":{"baseColorTexture":{"index":0}}},
             {"name":"MaterialB","pbrMetallicRoughness":{"baseColorTexture":{"index":1}}}
           ],
+          "animations":[{"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]}],
           "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"material":0}]}]
         })json";
         std::ofstream(project/"assets/Folder-extra.txt") << "sibling must follow the complete subtree";
@@ -1158,6 +1159,11 @@ int main() {
         require(editor.asset_preview().modelTextureSnapshot &&
                 editor.asset_preview().modelTextureSnapshot->valid(),
                 "GLTF image artifact was not decoded by the WIC preview seam");
+        require(region("asset-model-animation-prev").width > 0.0f &&
+                region("asset-model-animation-toggle").width > 0.0f &&
+                region("asset-model-animation-next").width > 0.0f &&
+                region("asset-model-animation-timeline").width > 0.0f,
+                "model animation controls were not retained for an imported clip");
         click("asset-model-material-next");
         for (int i = 0; i < 120 && editor.asset_preview().modelTextureStatus.find("Loading") != std::string::npos; ++i) {
             tick();

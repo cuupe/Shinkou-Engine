@@ -1386,6 +1386,28 @@
 - 全量 CTest：57/57 通过，总计 65.59 秒；包含音频/图片/视频/模型预览、编译器命令、文件系统、UI 与渲染回归。
 - 非确定项：当前主机仍为 150% DPI，100%/125% 像素矩阵需在对应 Windows 缩放环境复跑；模型深度像素 oracle、动画 skin/playback、内容 diff/hash 与 UI 分配实测仍在后续队列。
 
+### 第 4.55 子阶段：模型 CPU 动画采样与预览时间轴
+
+目标：把 glTF 的首个真实线性 TRS clip 接入既有 `animation::Animator`，使模型预览具备可验证的播放、暂停、选择和时间轴定位能力，并让 retained 线框与 D3D11 offscreen 顶点上传使用同一份采样姿态。
+
+实现范围：
+
+- glTF provider 在既有有界 JSON/accessor 校验之上解析节点层级、TRS/matrix 绑定姿态、mesh-to-node 顶点归属，以及 `LINEAR` translation/rotation/scale 通道；输入时间限制为非负、单调且不超过 3600 秒，访问器 key 数限制为 65536。
+- `EditorModelPreviewSnapshot` 发布 immutable node/skeleton/vertex-bone/CPU clip 数据；没有完整 accessor、没有节点绑定或使用非 LINEAR 插值的动画保留 metadata，但明确标记为不可播放，不伪装为可用 clip。
+- `EditorModelPreviewScene` 复用核心 `Skeleton/Pose/AnimationClip/Animator`，按 bounded `dt` 采样姿态并生成 transformed vertices；UI 增加 clip 前后选择、Play/Pause 和时间轴点击/拖动，回调仍由 `EditorLayer` 统筹。
+- `EditorModelPreviewRenderer` 消费 scene 的采样顶点和独立 animation revision；D3D11 offscreen path 在姿态改变时更新 vertex buffer，camera-only 变化不重复上传顶点。
+- 非目标：本轮不宣称完成 GPU JOINTS_0/WEIGHTS_0 skinning、inverse-bind skin mesh、CUBICSPLINE/STEP 精确插值、morph weights、透明排序或非 D3D11 模型 shader backend；这些保留为下一轮明确入口。
+
+审计与验证安排：
+
+- provider fixture 覆盖真实时间/rotation accessor、节点 skeleton、vertex bone mapping、duration 和 CPU clip；旧 metadata-only fixture 继续验证兼容与不可播放状态。
+- scene unit 覆盖默认 clip、0.5 秒采样、暂停、seek、toggle 和 projection revision；renderer unit 保持 Null fallback 与 D3D11 depth/offscreen 契约，并检查 transformed vertex seam 不破坏静态模型。
+- EditorInteraction 覆盖导入动画 metadata 后四个 retained 控件区域存在；完整 CTest 必须重新执行，不能用定向测试代替 UI/renderer/asset 全链路证据。
+- 安全/性能：节点、accessor、key、duration 和顶点均有上限；采样不读文件、不启动进程、不触碰活动 World；后续必须补 UI 分配/frame-time 实测，当前不设未经基线证明的硬帧阈值。
+- 视觉：本轮新增的是状态和采样 seam；已用真实 animated fixture 在本机 D3D11 offscreen path 完成 geometry upload、提交和 readback 证据，不能只用 retained wire 或 `animationPlaying=true` 作为 GPU 动画证明。前后姿态像素差异仍保留为独立 oracle。
+
+下一入口：在真实 animated fixture 的 native readback 证据稳定后，补 skin/joint weights 与 inverse-bind 矩阵；并并行完成重叠几何 depth pixel oracle、100%/125% DPI 矩阵、内容 hash/diff 和 UI 分配预算。
+
 ### 第 4.54 子阶段：原生输入兜底与完整交互性能证据
 
 目标：消除冷启动窗口在 SDL 文本输入不可用时的编辑阻塞，并让完整原生交互脚本与性能审计都能给出可复核结果。
