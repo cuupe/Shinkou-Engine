@@ -1,0 +1,159 @@
+#include "shinkou/editor/EditorLocalization.h"
+
+#include <array>
+
+namespace shinkou::editor {
+namespace {
+
+struct Translation {
+    std::string_view english;
+    std::string_view chinese;
+};
+
+constexpr std::array kTranslations{
+    Translation{"File", "文件"},
+    Translation{"Edit", "编辑"},
+    Translation{"Assets", "资源"},
+    Translation{"Build", "构建"},
+    Translation{"GameObject", "游戏对象"},
+    Translation{"Component", "组件"},
+    Translation{"Window", "窗口"},
+    Translation{"Theme", "主题"},
+    Translation{"Help", "帮助"},
+    Translation{"New Scene", "新建场景"},
+    Translation{"Open Scene...", "打开场景..."},
+    Translation{"Save Scene", "保存场景"},
+    Translation{"Save Scene As...", "场景另存为..."},
+    Translation{"Save Layout", "保存布局"},
+    Translation{"Reload Layout", "重新加载布局"},
+    Translation{"Reset Layout", "重置布局"},
+    Translation{"Exit", "退出"},
+    Translation{"Undo", "撤销"},
+    Translation{"Redo", "重做"},
+    Translation{"Delete Object", "删除对象"},
+    Translation{"Frame Selected", "聚焦选中对象"},
+    Translation{"Project Settings", "项目设置"},
+    Translation{"Editor Settings", "编辑器设置"},
+    Translation{"Create Asset", "创建资源"},
+    Translation{"Import New Asset...", "导入新资源..."},
+    Translation{"Refresh", "刷新"},
+    Translation{"Build Project", "构建项目"},
+    Translation{"Cancel Build", "取消构建"},
+    Translation{"Refresh Toolchains", "刷新工具链"},
+    Translation{"Discover Project Files", "扫描项目文件"},
+    Translation{"Associate Recommended Project", "关联推荐项目"},
+    Translation{"Generate .clangd", "生成 .clangd"},
+    Translation{"Import compile_commands.json", "导入 compile_commands.json"},
+    Translation{"Export compile_commands.json", "导出 compile_commands.json"},
+    Translation{"Open in Visual Studio", "在 Visual Studio 中打开"},
+    Translation{"Open in Rider", "在 Rider 中打开"},
+    Translation{"Open in VS Code", "在 VS Code 中打开"},
+    Translation{"Save Build Profile", "保存构建配置"},
+    Translation{"Reload Build Profile", "重新加载构建配置"},
+    Translation{"Create Empty", "创建空对象"},
+    Translation{"Create Child", "创建子对象"},
+    Translation{"Scene", "场景"},
+    Translation{"Game", "游戏"},
+    Translation{"3D Object", "三维对象"},
+    Translation{"2D Object", "二维对象"},
+    Translation{"3D Object (factory unavailable)", "三维对象（工厂不可用）"},
+    Translation{"2D Object (factory unavailable)", "二维对象（工厂不可用）"},
+    Translation{"UI Object (factory unavailable)", "UI 对象（工厂不可用）"},
+    Translation{"Add Component...", "添加组件..."},
+    Translation{"Documentation", "文档"},
+    Translation{"About ShinkouEngine", "关于 ShinkouEngine"},
+    Translation{"Play", "播放"},
+    Translation{"Stop", "停止"},
+    Translation{"Pause", "暂停"},
+    Translation{"Resume", "继续"},
+    Translation{"Step", "单帧"},
+    Translation{"Save", "保存"},
+    Translation{"Reset", "重置"},
+    Translation{"Scene Editor", "场景编辑器"},
+    Translation{"Renderer diagnostic", "渲染器诊断"},
+    Translation{"Scene Viewport", "场景视口"},
+    Translation{"Viewport", "视口"},
+    Translation{"Asset Browser", "资源浏览器"},
+    Translation{"Hierarchy", "层级"},
+    Translation{"Inspector", "检查器"},
+    Translation{"Project", "项目"},
+    Translation{"Console", "控制台"},
+    Translation{"Profiler", "性能分析"},
+    Translation{"Render Graph", "渲染图"},
+    Translation{"Media Preview", "媒体预览"},
+    Translation{"File Recovery", "文件恢复"},
+    Translation{"Filter", "过滤"},
+    Translation{"Filter objects", "过滤对象"},
+    Translation{"Search assets", "搜索资源"},
+    Translation{"Small", "小图标"},
+    Translation{"Large", "大图标"},
+    Translation{"Tree", "树"},
+    Translation{"Up", "上级"},
+    Translation{"Asset", "资源"},
+    Translation{"Location", "位置"},
+    Translation{"Select an object to inspect it.", "请选择对象查看属性。"},
+    Translation{"Add component", "添加组件"},
+    Translation{"Transform enabled", "变换组件"},
+    Translation{"position", "位置"},
+    Translation{"rotation", "旋转"},
+    Translation{"scale", "缩放"},
+    Translation{"On", "开启"},
+    Translation{"Off", "关闭"},
+    Translation{"None", "无"},
+    Translation{"Playing", "播放中"},
+    Translation{"Paused", "已暂停"},
+    Translation{"Stopped", "已停止"},
+    Translation{"Duration unavailable", "时长不可用"},
+    Translation{"Timeline unavailable", "时间轴不可用"},
+    Translation{"Material: none", "材质：无"},
+    Translation{"Texture: none", "纹理：无"},
+    Translation{"Animation: none", "动画：无"},
+    Translation{"Unnamed", "未命名"},
+    Translation{"Animations:", "动画："},
+    Translation{"This folder is empty", "此文件夹为空"},
+    Translation{"No matching assets", "未找到匹配资源"},
+    Translation{"Create folder", "新建文件夹"},
+    Translation{"Rename", "重命名"},
+    Translation{"Cancel", "取消"},
+    Translation{"Delete", "删除"},
+    Translation{"Ready", "就绪"},
+    Translation{"Editor preferences", "编辑器偏好设置"},
+    Translation{"Language", "语言"},
+    Translation{"Dark", "深色"},
+    Translation{"Light", "浅色"},
+    Translation{"High contrast", "高对比度"},
+    Translation{"High Contrast", "高对比度"},
+    Translation{"Docking: On", "停靠：开启"},
+    Translation{"Docking: Off", "停靠：关闭"},
+    Translation{"UI scale", "界面缩放"},
+    Translation{"Save workspace & preferences", "保存工作区和偏好设置"},
+    Translation{"Reload workspace", "重新加载工作区"},
+    Translation{"English", "English"},
+    Translation{"中文", "中文"},
+    Translation{"No retained panel content is registered.", "未注册保留式面板内容。"},
+    Translation{"No media preview provider is registered.", "未注册媒体预览提供程序。"},
+    Translation{"Perspective", "透视"},
+    Translation{"MMB orbit · Shift+MMB pan · Wheel zoom · F frame", "中键旋转 · Shift+中键平移 · 滚轮缩放 · F 聚焦"},
+    Translation{"Resource is no longer available", "资源已不可用"},
+    Translation{"Delete this asset?", "删除此资源？"},
+};
+
+} // namespace
+
+void EditorLocalization::set_language(std::string_view language) noexcept {
+    language_ = supported(language) ? std::string(language) : "zh-CN";
+}
+
+bool EditorLocalization::supported(std::string_view language) noexcept {
+    return language == "zh-CN" || language == "en-US" || language == "en" || language == "zh";
+}
+
+std::string_view EditorLocalization::text(std::string_view english) const noexcept {
+    if (!is_chinese()) return english;
+    for (const auto& translation : kTranslations) {
+        if (translation.english == english) return translation.chinese;
+    }
+    return english;
+}
+
+} // namespace shinkou::editor

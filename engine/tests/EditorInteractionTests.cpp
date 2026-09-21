@@ -414,6 +414,12 @@ int main() {
         require(std::abs(cameraPose->local.rotation.y)>0.01f,"viewport orbit did not rotate camera");
         editor.execute_command(EditorCommand::ProjectSettings,{},world);tick();
         click("command:theme-light"); require(editor.layout().theme=="light","settings theme command failed");
+        click("command:language-en"); require(editor.layout().language=="en-US","settings English language command failed");
+        bool englishChromeVisible = false;
+        for (const auto& command : editor.editor_ui().render_list().commands())
+            if (command.type == ui::DrawCommandType::Text && command.text == "Scene Editor") englishChromeVisible = true;
+        require(englishChromeVisible, "English localization was not painted after switching language");
+        click("command:language-zh"); require(editor.layout().language=="zh-CN","settings Chinese language command failed");
         const auto settings=region("tools:settings");
         gesture.type=input::InputEventType::MouseWheel;gesture.position={settings.x+10,settings.y+10};gesture.delta.y=-20;
         fake->queue.push_back(gesture);tick();

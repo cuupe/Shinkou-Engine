@@ -15,22 +15,25 @@ void EditorUi::draw_tools_panel(const DockRect& bounds, std::string_view id,
     toolScroll_[panel] = std::clamp(toolScroll_[panel], 0.0f, std::max(0.0f, contentHeight-bounds.height));
     float y = bounds.y+12-toolScroll_[panel];
     const float x = bounds.x+12, width = std::max(0.0f,bounds.width-24);
-    const auto text = color(layout.theme == "light" ? "#30353C" : "#D7DCE4");
-    auto line = [&](std::string value) { renderList_.text({x,y,width,20},value,text,12,{},ui::TextAlign::Start,ui::TextOverflow::Ellipsis); y+=24; };
+    const auto text = color(layout.theme == "light" ? "#354252" : "#D7E1EC");
+    auto line = [&](std::string value) { renderList_.text({x,y,width,20},value,text,12,{},ui::TextAlign::Start,ui::TextOverflow::Ellipsis); y+=26; };
     auto button = [&](std::string key, std::string label, EditorCommand command, std::string target = {}, bool checked = false) {
         const auto region = "command:"+key;
         commandActions_[region] = {command,std::move(target)};
         draw_button({x,y,width,26},region,label,layout,checked); y+=32;
     };
     if (id == "settings") {
-        line("Editor preferences");
-        button("theme-dark","Dark",EditorCommand::SetDarkTheme,{},layout.theme=="dark");
-        button("theme-light","Light",EditorCommand::SetLightTheme,{},layout.theme=="light");
-        button("theme-contrast","High contrast",EditorCommand::SetHighContrastTheme,{},layout.theme=="high-contrast");
-        button("docking",layout.allowDocking ? "Docking: On" : "Docking: Off",EditorCommand::ToggleDocking);
-        for (const auto* scale : {"0.75","1.0","1.25","1.5"}) button(std::string("scale:")+scale,std::string("UI scale ")+scale,EditorCommand::SetUiScale,scale);
-        button("save-layout","Save workspace & preferences",EditorCommand::SaveLayout);
-        button("reload-layout","Reload workspace",EditorCommand::ReloadLayout);
+        line(std::string(tr("Editor preferences")));
+        button("language-title",std::string(tr("Language")),EditorCommand::None);
+        button("language-zh","中文",EditorCommand::SetChineseLanguage,{},layout.language=="zh-CN");
+        button("language-en","English",EditorCommand::SetEnglishLanguage,{},layout.language!="zh-CN");
+        button("theme-dark",std::string(tr("Dark")),EditorCommand::SetDarkTheme,{},layout.theme=="dark");
+        button("theme-light",std::string(tr("Light")),EditorCommand::SetLightTheme,{},layout.theme=="light");
+        button("theme-contrast",std::string(tr("High contrast")),EditorCommand::SetHighContrastTheme,{},layout.theme=="high-contrast");
+        button("docking",std::string(tr(layout.allowDocking ? "Docking: On" : "Docking: Off")),EditorCommand::ToggleDocking);
+        for (const auto* scale : {"0.75","1.0","1.25","1.5"}) button(std::string("scale:")+scale,std::string(tr("UI scale "))+scale,EditorCommand::SetUiScale,scale);
+        button("save-layout",std::string(tr("Save workspace & preferences")),EditorCommand::SaveLayout);
+        button("reload-layout",std::string(tr("Reload workspace")),EditorCommand::ReloadLayout);
         return;
     }
     if (id == "profiler") {
@@ -56,8 +59,8 @@ void EditorUi::draw_tools_panel(const DockRect& bounds, std::string_view id,
         return;
     }
     line("Simulation uses the Scene viewport.");
-    button("game-play","Play / Stop",EditorCommand::Play);
-    button("game-pause","Pause / Resume",EditorCommand::Pause);
+    button("game-play",std::string(tr("Play"))+" / "+std::string(tr("Stop")),EditorCommand::Play);
+    button("game-pause",std::string(tr("Pause"))+" / "+std::string(tr("Resume")),EditorCommand::Pause);
     button("game-step","Advance one frame",EditorCommand::Step);
     line("A separate game render target is not available.");
 }

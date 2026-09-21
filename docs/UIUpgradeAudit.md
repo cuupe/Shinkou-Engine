@@ -2455,3 +2455,29 @@
 
 - native D3D11 animated offscreen readback 与真实 GPU 顶点更新已通过；仍需补前后姿态像素差异 oracle，避免只证明“有绘制”而未证明姿态投影变化。
 - JOINTS_0/WEIGHTS_0 与 inverse-bind skinning、STEP/CUBICSPLINE/morph、非 D3D11 model backend、100%/125% DPI、UI frame-time/分配和内容 hash/diff 预算尚未完成。
+
+## 第 4.56 子阶段：编辑器视觉层级与中文本地化
+
+### 实现与范围
+
+- `EditorLocalization` 位于 `engine/include/shinkou/editor/EditorLocalization.h` / `engine/src/editor/EditorLocalization.cpp`，默认 `zh-CN`，支持 `en-US`，未知语言安全回退中文；未知业务字符串保持原文。
+- `EditorLayoutState.language` 已进入反射注册和布局加载校验；`SetChineseLanguage`/`SetEnglishLanguage` 经过 `EditorLayer::dispatch_command`，设置面板和工具栏均可切换。
+- retained shell 的工具栏、面板标题、标签、输入框、层级选中态、按钮层级、Asset Browser 和 Inspector token 已统一调整；没有新增底层图形 API 或绕过统一 Renderer 接口的 UI 路径。
+
+### 契约与证据
+
+- 增量构建：`shinkou_engine_sample`、`shinkou_ui_capture`、`shinkou_editor_localization_tests` 通过。
+- 定向 CTest：`shinkou_editor_ui_model_tests`、`shinkou_editor_localization_tests`、`shinkou_editor_interaction_tests` 均通过；交互测试同时验证设置面板 English -> Chinese 命令和实际 retained text 更新。
+- 原生 GPU readback：`out/qa/ui-polished-zh2` 与 `out/qa/ui-polished-light` 生成 1920x1080 final BMP；两套脚本均记录 116/116 action、0 failed action，state 分别为 `theme=dark` / `theme=light`，DPI=1.5。
+- 人工视觉复核：深色和浅色截图均可见中文工具栏、层级、视口、资源浏览器、检查器常用字段；选中对象、蓝色主按钮、tab underline、面板边界和资源树层级清晰，无明显中文裁切。
+
+### 安全、性能与视觉审计
+
+- 翻译表为静态字符串视图，语言切换不执行文件 IO、网络、shell、编译器或媒体解码；用户资源路径、对象名称和编译输出不被翻译或重写。
+- 交互命令 ID 保持英文稳定键，翻译只发生在 paint 文本和菜单宽度计算，避免语言变化破坏自动化 hit region；语言字段加入 paint key，切换不会命中旧缓存。
+- capture wrapper 因子进程把诊断行写入 stderr 被 PowerShell 记录为 `NativeCommandError`，但 `steps.jsonl` 与 BMP 已完整生成；审计结论以 116/116 action、0 failed 和 GPU child log 为准，不把 wrapper exit code 包装成通过。
+
+### 未解决风险与下一轮
+
+- Windows 原生菜单已由 `install_native_menu()` 通过 `EditorLocalization` 构建；语言切换会卸载并重建菜单。本轮像素证据主要覆盖 retained UI，原生菜单本身未纳入 client-area BMP。
+- 当前主机 DPI=150%，100%/125% 像素矩阵、CJK 字体 fallback 诊断、UI frame-time/分配、模型 skin/playback 和内容 hash/diff 仍未完成。

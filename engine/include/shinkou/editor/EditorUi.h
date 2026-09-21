@@ -4,6 +4,7 @@
 #include "shinkou/editor/AssetPreview.h"
 #include "shinkou/editor/DockLayout.h"
 #include "shinkou/editor/EditorUiModel.h"
+#include "shinkou/editor/EditorLocalization.h"
 #include "shinkou/input/InputSystem.h"
 #include "shinkou/ui/Render.h"
 #include "shinkou/ui/Ui.h"
@@ -217,6 +218,7 @@ private:
     std::uint64_t lastPaintKey_{0};
     bool paintCacheValid_{false};
     std::string activeTheme_{"dark"};
+    EditorLocalization localization_{};
     ui::Rect repaintRect_{};
     bool repaintRectValid_{false};
     bool repaintFull_{true};
@@ -296,6 +298,8 @@ private:
                             std::string_view title, const EditorLayoutState& layout);
     void draw_button(ui::Rect rect, std::string id, std::string_view label,
                      const EditorLayoutState& layout, bool primary = false);
+
+    std::string_view tr(std::string_view english) const noexcept { return localization_.text(english); }
 
     ui::ThemeColor color(std::string_view hex, ui::ThemeColor fallback = {}) const;
     static ui::Rect rect(DockRect value) noexcept;

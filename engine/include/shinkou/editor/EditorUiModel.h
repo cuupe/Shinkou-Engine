@@ -72,6 +72,8 @@ enum class EditorCommand : std::uint8_t {
     SetDarkTheme,
     SetLightTheme,
     SetHighContrastTheme,
+    SetChineseLanguage,
+    SetEnglishLanguage,
     ProjectSettings,
     Quit,
     DeleteObject,

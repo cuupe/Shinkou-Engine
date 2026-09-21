@@ -1,5 +1,6 @@
 #include "shinkou/editor/EditorLayer.h"
 #include "shinkou/editor/EditorGltfPreview.h"
+#include "shinkou/editor/EditorLocalization.h"
 
 #include "shinkou/GameObject.h"
 #include "shinkou/World.h"
@@ -121,6 +122,7 @@ void register_layout_types(reflection::TypeRegistry& registry) {
     registry.register_type(reflection::TypeBuilder<EditorLayoutState>("shinkou.editor.EditorLayoutState")
         .field("layoutVersion", &EditorLayoutState::layoutVersion)
         .field("theme", &EditorLayoutState::theme)
+        .field("language", &EditorLayoutState::language)
         .field("workspace", &EditorLayoutState::workspace)
         .field("projectRoot", &EditorLayoutState::projectRoot)
         .field("layoutFile", &EditorLayoutState::layoutFile)
@@ -481,87 +483,96 @@ void EditorLayer::install_native_menu() {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     if (!nativeWindow_ || nativeMenu_) return;
     const HWND window = static_cast<HWND>(nativeWindow_);
+    const EditorLocalization localization(layout_.language);
+    const auto item = [&](HMENU menu, UINT id, const char* label, bool enabled = true) {
+        const auto translated = std::string(localization.text(label));
+        append_native_item(menu, id, translated.c_str(), enabled);
+    };
+    const auto submenu = [&](HMENU menu, HMENU child, const char* label) {
+        const auto translated = std::string(localization.text(label));
+        append_native_submenu(menu, child, translated.c_str());
+    };
     HMENU mainMenu = CreateMenu();
     if (!mainMenu) return;
 
     HMENU fileMenu = CreatePopupMenu();
-    append_native_item(fileMenu, kNativeNewScene, "New Scene");
-    append_native_item(fileMenu, kNativeOpenScene, "Open Scene...");
-    append_native_item(fileMenu, kNativeSaveScene, "Save Scene");
-    append_native_item(fileMenu, kNativeSaveAs, "Save Scene As...");
-    append_native_item(fileMenu, kNativeSaveLayout, "Save Layout");
-    append_native_item(fileMenu, kNativeReloadLayout, "Reload Layout");
-    append_native_item(fileMenu, kNativeResetLayout, "Reset Layout");
+    item(fileMenu, kNativeNewScene, "New Scene");
+    item(fileMenu, kNativeOpenScene, "Open Scene...");
+    item(fileMenu, kNativeSaveScene, "Save Scene");
+    item(fileMenu, kNativeSaveAs, "Save Scene As...");
+    item(fileMenu, kNativeSaveLayout, "Save Layout");
+    item(fileMenu, kNativeReloadLayout, "Reload Layout");
+    item(fileMenu, kNativeResetLayout, "Reset Layout");
     AppendMenuA(fileMenu, MF_SEPARATOR, 0, nullptr);
-    append_native_item(fileMenu, kNativeExit, "Exit");
-    append_native_submenu(mainMenu, fileMenu, "File");
+    item(fileMenu, kNativeExit, "Exit");
+    submenu(mainMenu, fileMenu, "File");
 
     HMENU editMenu = CreatePopupMenu();
-    append_native_item(editMenu, kNativeUndo, "Undo");
-    append_native_item(editMenu, kNativeRedo, "Redo");
-    append_native_item(editMenu, kNativeDeleteObject, "Delete Object");
-    append_native_item(editMenu, kNativeFrameSelection, "Frame Selected");
-    append_native_item(editMenu, kNativeSettings, "Editor Settings");
-    append_native_submenu(mainMenu, editMenu, "Edit");
+    item(editMenu, kNativeUndo, "Undo");
+    item(editMenu, kNativeRedo, "Redo");
+    item(editMenu, kNativeDeleteObject, "Delete Object");
+    item(editMenu, kNativeFrameSelection, "Frame Selected");
+    item(editMenu, kNativeSettings, "Editor Settings");
+    submenu(mainMenu, editMenu, "Edit");
 
     HMENU assetsMenu = CreatePopupMenu();
-    append_native_item(assetsMenu, kNativeRefreshAssets, "Refresh");
-    append_native_submenu(mainMenu, assetsMenu, "Assets");
+    item(assetsMenu, kNativeRefreshAssets, "Refresh");
+    submenu(mainMenu, assetsMenu, "Assets");
 
     HMENU buildMenu = CreatePopupMenu();
-    append_native_item(buildMenu, kNativeBuildProject, "Build Project");
-    append_native_item(buildMenu, kNativeCancelBuild, "Cancel Build");
-    append_native_item(buildMenu, kNativeRefreshBuildTools, "Refresh Toolchains");
-    append_native_item(buildMenu, kNativeRefreshProjectFiles, "Discover Project Files");
-    append_native_item(buildMenu, kNativeAssociateProjectFile, "Associate Recommended Project");
-    append_native_item(buildMenu, kNativeGenerateClangdConfig, "Generate .clangd");
-    append_native_item(buildMenu, kNativeImportCompileCommands, "Import compile_commands.json");
-    append_native_item(buildMenu, kNativeExportCompileCommands, "Export compile_commands.json");
-    append_native_item(buildMenu, kNativeOpenVisualStudio, "Open in Visual Studio");
-    append_native_item(buildMenu, kNativeOpenRider, "Open in Rider");
-    append_native_item(buildMenu, kNativeOpenVisualStudioCode, "Open in VS Code");
-    append_native_item(buildMenu, kNativeSaveBuildProfile, "Save Build Profile");
-    append_native_item(buildMenu, kNativeReloadBuildProfile, "Reload Build Profile");
-    append_native_submenu(mainMenu, buildMenu, "Build");
+    item(buildMenu, kNativeBuildProject, "Build Project");
+    item(buildMenu, kNativeCancelBuild, "Cancel Build");
+    item(buildMenu, kNativeRefreshBuildTools, "Refresh Toolchains");
+    item(buildMenu, kNativeRefreshProjectFiles, "Discover Project Files");
+    item(buildMenu, kNativeAssociateProjectFile, "Associate Recommended Project");
+    item(buildMenu, kNativeGenerateClangdConfig, "Generate .clangd");
+    item(buildMenu, kNativeImportCompileCommands, "Import compile_commands.json");
+    item(buildMenu, kNativeExportCompileCommands, "Export compile_commands.json");
+    item(buildMenu, kNativeOpenVisualStudio, "Open in Visual Studio");
+    item(buildMenu, kNativeOpenRider, "Open in Rider");
+    item(buildMenu, kNativeOpenVisualStudioCode, "Open in VS Code");
+    item(buildMenu, kNativeSaveBuildProfile, "Save Build Profile");
+    item(buildMenu, kNativeReloadBuildProfile, "Reload Build Profile");
+    submenu(mainMenu, buildMenu, "Build");
 
     HMENU gameObjectMenu = CreatePopupMenu();
-    append_native_item(gameObjectMenu, kNativeCreateEmpty, "Create Empty");
-    append_native_item(gameObjectMenu, kNativeCreateChild, "Create Child");
+    item(gameObjectMenu, kNativeCreateEmpty, "Create Empty");
+    item(gameObjectMenu, kNativeCreateChild, "Create Child");
     HMENU create3dMenu = CreatePopupMenu();
-    append_native_item(create3dMenu, kNativeCreate3D, "3D Object (factory unavailable)", false);
-    append_native_submenu(gameObjectMenu, create3dMenu, "3D Object");
+    item(create3dMenu, kNativeCreate3D, "3D Object (factory unavailable)", false);
+    submenu(gameObjectMenu, create3dMenu, "3D Object");
     HMENU create2dMenu = CreatePopupMenu();
-    append_native_item(create2dMenu, kNativeCreate2D, "2D Object (factory unavailable)", false);
-    append_native_submenu(gameObjectMenu, create2dMenu, "2D Object");
-    append_native_item(gameObjectMenu, kNativeCreateUi, "UI Object (factory unavailable)", false);
-    append_native_submenu(mainMenu, gameObjectMenu, "GameObject");
+    item(create2dMenu, kNativeCreate2D, "2D Object (factory unavailable)", false);
+    submenu(gameObjectMenu, create2dMenu, "2D Object");
+    item(gameObjectMenu, kNativeCreateUi, "UI Object (factory unavailable)", false);
+    submenu(mainMenu, gameObjectMenu, "GameObject");
 
     HMENU componentMenu = CreatePopupMenu();
-    append_native_item(componentMenu, kNativeAddComponent, "Add Component");
-    append_native_submenu(mainMenu, componentMenu, "Component");
+    item(componentMenu, kNativeAddComponent, "Add Component");
+    submenu(mainMenu, componentMenu, "Component");
 
     HMENU windowMenu = CreatePopupMenu();
-    append_native_item(windowMenu, kNativeScenePage, "Scene");
-    append_native_item(windowMenu, kNativeGamePage, "Game");
-    append_native_item(windowMenu, kNativeHierarchyPage, "Hierarchy");
-    append_native_item(windowMenu, kNativeInspectorPage, "Inspector");
-    append_native_item(windowMenu, kNativeProjectPage, "Project");
-    append_native_item(windowMenu, kNativeConsolePage, "Console");
-    append_native_item(windowMenu, kNativeProfilerPage, "Profiler");
-    append_native_item(windowMenu, kNativeRenderGraphPage, "Render Graph");
-    append_native_item(windowMenu, kNativeBuildPage, "Build");
-    append_native_item(windowMenu, kNativeSettings, "Editor Settings");
-    append_native_submenu(mainMenu, windowMenu, "Window");
+    item(windowMenu, kNativeScenePage, "Scene");
+    item(windowMenu, kNativeGamePage, "Game");
+    item(windowMenu, kNativeHierarchyPage, "Hierarchy");
+    item(windowMenu, kNativeInspectorPage, "Inspector");
+    item(windowMenu, kNativeProjectPage, "Project");
+    item(windowMenu, kNativeConsolePage, "Console");
+    item(windowMenu, kNativeProfilerPage, "Profiler");
+    item(windowMenu, kNativeRenderGraphPage, "Render Graph");
+    item(windowMenu, kNativeBuildPage, "Build");
+    item(windowMenu, kNativeSettings, "Editor Settings");
+    submenu(mainMenu, windowMenu, "Window");
 
     HMENU themeMenu = CreatePopupMenu();
-    append_native_item(themeMenu, kNativeDarkTheme, "Dark");
-    append_native_item(themeMenu, kNativeLightTheme, "Light");
-    append_native_item(themeMenu, kNativeHighContrastTheme, "High Contrast");
-    append_native_submenu(mainMenu, themeMenu, "Theme");
+    item(themeMenu, kNativeDarkTheme, "Dark");
+    item(themeMenu, kNativeLightTheme, "Light");
+    item(themeMenu, kNativeHighContrastTheme, "High Contrast");
+    submenu(mainMenu, themeMenu, "Theme");
 
     HMENU helpMenu = CreatePopupMenu();
-    append_native_item(helpMenu, kNativeAbout, "About ShinkouEngine");
-    append_native_submenu(mainMenu, helpMenu, "Help");
+    item(helpMenu, kNativeAbout, "About ShinkouEngine");
+    submenu(mainMenu, helpMenu, "Help");
 
     SetMenu(window, mainMenu);
     DrawMenuBar(window);
@@ -985,6 +996,7 @@ bool EditorLayer::load_layout_file() {
     }
     if (loaded.layoutVersion == 0) loaded.layoutVersion = 1;
     loaded.layoutVersion = 3;
+    if (!EditorLocalization::supported(loaded.language)) loaded.language = "zh-CN";
     if (!std::isfinite(loaded.uiScale)) loaded.uiScale = 1.0f;
     loaded.uiScale = std::clamp(loaded.uiScale, 0.5f, 3.0f);
     layout_ = std::move(loaded);
@@ -1275,6 +1287,22 @@ bool EditorLayer::checkpoint(World& world) {
         if (marker != undoHistory_.end()) undoHistory_.erase(marker);
     }
     return true;
+}
+
+void EditorLayer::set_language(std::string language) {
+    if (!EditorLocalization::supported(language)) language = "zh-CN";
+    if (language == "zh") language = "zh-CN";
+    if (language == "en") language = "en-US";
+    layout_.language = std::move(language);
+    editorUi_.invalidate_layout();
+#if defined(SHINKOU_PLATFORM_WINDOWS)
+    if (nativeWindow_ && nativeMenu_) {
+        uninstall_native_menu();
+        install_native_menu();
+        editorUi_.set_native_main_menu_available(nativeMenu_ != nullptr);
+    }
+#endif
+    lastStatus_ = layout_.language == "zh-CN" ? "语言已切换为中文" : "Language changed to English";
 }
 
 void EditorLayer::reset_edit_history_for_file_operation() {
@@ -2001,6 +2029,8 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::SetDarkTheme: set_theme("dark"); break;
     case EditorCommand::SetLightTheme: set_theme("light"); break;
     case EditorCommand::SetHighContrastTheme: set_theme("high-contrast"); break;
+    case EditorCommand::SetChineseLanguage: set_language("zh-CN"); break;
+    case EditorCommand::SetEnglishLanguage: set_language("en-US"); break;
     case EditorCommand::Play: lastStatus_ = uiModel_.playing() ? "Simulation running" : "Simulation stopped"; break;
     case EditorCommand::Pause: lastStatus_ = uiModel_.paused() ? "Simulation paused" : "Simulation running"; break;
     case EditorCommand::Step: stepPending_ = true; lastStatus_ = "Advance one simulation frame"; break;

@@ -53,6 +53,7 @@ namespace editor {
 struct EditorLayoutState {
     std::uint32_t layoutVersion{3};
     std::string theme{"dark"};
+    std::string language{"zh-CN"};
     std::string workspace{"Default"};
     std::string projectRoot{"."};
     std::string layoutFile{"Saved/Editor/Layouts/Default.json"};
@@ -527,6 +528,7 @@ public:
     bool load_layout();
     void reset_layout();
     void set_theme(std::string theme);
+    void set_language(std::string language);
     void set_style_file(std::string path);
     ui::UiStyleConfig& ui_style() noexcept { return styleConfig_; }
     const ui::UiStyleConfig& ui_style() const noexcept { return styleConfig_; }

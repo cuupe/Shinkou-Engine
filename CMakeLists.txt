@@ -635,6 +635,10 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_editor_ui_model_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_ui_model_tests COMMAND shinkou_editor_ui_model_tests)
 
+        add_executable(shinkou_editor_localization_tests "${SHINKOU_TEST_ROOT}/EditorLocalizationTests.cpp")
+        target_link_libraries(shinkou_editor_localization_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_localization_tests COMMAND shinkou_editor_localization_tests)
+
         add_executable(shinkou_file_system_tests "${SHINKOU_TEST_ROOT}/FileSystemTests.cpp")
         target_link_libraries(shinkou_file_system_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_file_system_tests COMMAND shinkou_file_system_tests)

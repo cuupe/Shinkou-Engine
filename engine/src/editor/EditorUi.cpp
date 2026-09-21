@@ -20,11 +20,11 @@
 namespace shinkou::editor {
 namespace {
 
-constexpr float kToolbarHeight = 42.0f;
-constexpr float kPortableMenuHeight = 30.0f;
-constexpr float kStatusHeight = 24.0f;
-constexpr float kPanelHeaderHeight = 25.0f;
-constexpr float kRowHeight = 24.0f;
+constexpr float kToolbarHeight = 48.0f;
+constexpr float kPortableMenuHeight = 32.0f;
+constexpr float kStatusHeight = 26.0f;
+constexpr float kPanelHeaderHeight = 30.0f;
+constexpr float kRowHeight = 27.0f;
 
 DockRect inset(DockRect value, float amount) noexcept {
     value.x += amount;
@@ -1262,6 +1262,7 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     }
     if (lastStatusText_ != status) { lastStatusText_ = status; mark_full_repaint(); }
     activeTheme_ = layout.theme;
+    localization_.set_language(layout.language);
     if (inspectorObject_ != model.selected_object()) { inspectorObject_ = model.selected_object(); editFieldId_.clear(); inspectorScroll_ = 0; }
     if (model.revision() != lastModelRevision_) { mark_full_repaint(); lastModelRevision_ = model.revision(); }
     prepare_layout(layout, workspace);
@@ -1273,6 +1274,7 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     mix_key(paintKey, model.last_command() == EditorCommand::None ? 0u : static_cast<std::uint64_t>(model.last_command()));
     mix_key(paintKey, layoutGeneration_);
     mix_key(paintKey, layout.theme);
+    mix_key(paintKey, layout.language);
     mix_key(paintKey, static_cast<std::uint64_t>(layout.selectedObject));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showToolbar));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showStatusBar));
@@ -1339,15 +1341,15 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     const float height = physicalHeight_ / dpiScale_;
     const auto statusRect = ui::Rect{0.0f, height - kStatusHeight, width, kStatusHeight};
     if (layout.showStatusBar) {
-        renderList_.rect(statusRect, color(layout.theme == "light" ? "#F2F3F5" : "#1C1E22"));
-        renderList_.border(statusRect, color(layout.theme == "light" ? "#D7DADF" : "#30343A"), 1.0f);
-        renderList_.text({12.0f, statusRect.y + 3.0f, std::max(0.0f, width - 232.0f), 18.0f}, status.empty() ? "Ready" : status,
-                          color(layout.theme == "light" ? "#5D6470" : "#AAB1BC"), 12.0f,
+        renderList_.rect(statusRect, color(layout.theme == "light" ? "#EEF2F6" : "#171B21"));
+        renderList_.border(statusRect, color(layout.theme == "light" ? "#D5DDE7" : "#303A47"), 1.0f);
+        renderList_.text({14.0f, statusRect.y + 4.0f, std::max(0.0f, width - 232.0f), 18.0f}, status.empty() ? tr("Ready") : status,
+                          color(layout.theme == "light" ? "#5B6878" : "#AAB6C5"), 12.0f,
                           {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         std::ostringstream stats;
         stats << "UI " << renderList_.size() << "  |  DPI " << std::fixed << std::setprecision(2) << dpiScale_;
         renderList_.text({width - 210.0f, statusRect.y + 3.0f, 198.0f, 18.0f}, stats.str(),
-                          color(layout.theme == "light" ? "#5D6470" : "#AAB1BC"), 12.0f,
+                          color(layout.theme == "light" ? "#5B6878" : "#AAB6C5"), 12.0f,
                           {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
     }
     if (repaintFull_ || !repaintRectValid_) {
@@ -1376,12 +1378,12 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
 void EditorUi::draw_portable_menu(const EditorUiModel& model, const EditorLayoutState& layout) {
     const float width = physicalWidth_ / dpiScale_;
     const float height = physicalHeight_ / dpiScale_;
-    const auto background = color(layout.theme == "light" ? "#FFFFFF" : "#202328");
-    const auto border = color(layout.theme == "light" ? "#D7DADF" : "#30343A");
-    const auto text = color(layout.theme == "light" ? "#24282E" : "#E0E4EA");
-    const auto muted = color(layout.theme == "light" ? "#7A828D" : "#8E97A4");
-    const auto hover = color(layout.theme == "light" ? "#E8F1FC" : "#303B4A");
-    const auto active = color(layout.theme == "light" ? "#D3E3F8" : "#35557D");
+    const auto background = color(layout.theme == "light" ? "#FFFFFF" : "#1A1F26");
+    const auto border = color(layout.theme == "light" ? "#D5DDE7" : "#303A47");
+    const auto text = color(layout.theme == "light" ? "#202A36" : "#E9EEF5");
+    const auto muted = color(layout.theme == "light" ? "#748092" : "#8F9BAA");
+    const auto hover = color(layout.theme == "light" ? "#EAF3FF" : "#283849");
+    const auto active = color(layout.theme == "light" ? "#D7E9FF" : "#1F4C7F");
 
     renderList_.rect({0.0f, 0.0f, width, kPortableMenuHeight}, background);
     renderList_.border({0.0f, kPortableMenuHeight - 1.0f, width, 1.0f}, border);
@@ -1389,7 +1391,8 @@ void EditorUi::draw_portable_menu(const EditorUiModel& model, const EditorLayout
     float x = 0.0f;
     ui::Rect openHeader{};
     for (const auto& menu : model.menus()) {
-        const float labelWidth = std::clamp(24.0f + static_cast<float>(menu.label.size()) * 8.0f,
+        const auto menuLabel = tr(menu.label);
+        const float labelWidth = std::clamp(24.0f + static_cast<float>(menuLabel.size()) * 7.2f,
                                             64.0f, 156.0f);
         const ui::Rect header{x, 0.0f, std::min(labelWidth, std::max(0.0f, width - x)), kPortableMenuHeight};
         const auto id = std::string("menu:") + menu.id;
@@ -1398,7 +1401,7 @@ void EditorUi::draw_portable_menu(const EditorUiModel& model, const EditorLayout
         if (hotRegion_ == id || openMenuId_ == menu.id)
             renderList_.rect(header, activeRegion_ == id ? active : hover, 4.0f);
         renderList_.text({header.x + 12.0f, header.y + 5.0f,
-                          std::max(0.0f, header.width - 20.0f), 18.0f}, menu.label, text, 13.0f,
+                          std::max(0.0f, header.width - 20.0f), 18.0f}, menuLabel, text, 13.0f,
                           {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         x += labelWidth;
         if (x >= width) break;
@@ -1415,7 +1418,7 @@ void EditorUi::draw_portable_menu(const EditorUiModel& model, const EditorLayout
     for (const auto& item : menuIt->items) {
         if (item.separator) popupHeight += 9.0f;
         else {
-            popupWidth = std::max(popupWidth, 36.0f + static_cast<float>(item.label.size()) * 7.0f +
+            popupWidth = std::max(popupWidth, 36.0f + static_cast<float>(tr(item.label).size()) * 7.0f +
                                    (item.shortcut.empty() ? 0.0f : 86.0f));
             popupHeight += 28.0f;
         }
@@ -1446,7 +1449,7 @@ void EditorUi::draw_portable_menu(const EditorUiModel& model, const EditorLayout
         const auto itemColor = item.enabled ? text : muted;
         renderList_.text({row.x + 10.0f, row.y + 5.0f,
                           std::max(0.0f, row.width - (item.shortcut.empty() ? 18.0f : 104.0f)), 18.0f},
-                          item.label, itemColor, 12.0f, {}, ui::TextAlign::Start,
+                          tr(item.label), itemColor, 12.0f, {}, ui::TextAlign::Start,
                           ui::TextOverflow::Ellipsis);
         if (!item.shortcut.empty())
             renderList_.text({row.right() - 94.0f, row.y + 5.0f, 84.0f, 18.0f}, item.shortcut,
@@ -1462,24 +1465,30 @@ void EditorUi::draw_toolbar(const EditorUiModel& model, const render::Renderer& 
     const float width = physicalWidth_ / dpiScale_;
     const float menuHeight = nativeMainMenuAvailable_ ? 0.0f : kPortableMenuHeight;
     const auto bar = ui::Rect{0.0f, menuHeight, width, kToolbarHeight};
-    const auto panel = color(layout.theme == "light" ? "#F0F1F3" : "#25272B");
+    const auto panel = color(layout.theme == "light" ? "#FFFFFF" : "#1D232B");
     renderList_.rect(bar, panel);
-    renderList_.border({0.0f, bar.y + bar.height - 1.0f, bar.width, 1.0f}, color(layout.theme == "light" ? "#D7DADF" : "#30343A"));
+    renderList_.border({0.0f, bar.y + bar.height - 1.0f, bar.width, 1.0f}, color(layout.theme == "light" ? "#D5DDE7" : "#303A47"));
+    renderList_.border({0.0f, bar.y, 4.0f, bar.height}, color(layout.theme == "light" ? "#4D8DDA" : "#4C9AFF"));
     float x = 12.0f;
-    const auto button = [&](std::string_view id, std::string_view label, EditorCommand command, bool primary = false) {
+    const auto button = [&](std::string_view id, std::string_view label, EditorCommand command, float width, bool primary = false) {
         const auto key = command_key(id);
         commandActions_[key] = {command, {}};
-        draw_button({x, bar.y + 8.0f, label == "Save" ? 64.0f : 68.0f, 26.0f}, key, label, layout, primary);
-        x += label == "Save" ? 72.0f : 76.0f;
+        draw_button({x, bar.y + 10.0f, width, 28.0f}, key, tr(label), layout, primary);
+        x += width + 8.0f;
     };
-    button("play", model.playing() ? "Stop" : "Play", EditorCommand::Play, true);
-    button("pause", model.paused() ? "Resume" : "Pause", EditorCommand::Pause);
-    button("step", "Step", EditorCommand::Step);
-    x += 8.0f;
-    button("save", "Save", EditorCommand::SaveScene);
-    button("build", "Build", EditorCommand::BuildProject);
-    button("reset", "Reset", EditorCommand::ResetLayout);
-    renderList_.text({x + 12.0f, bar.y + 12.0f, 300.0f, 18.0f}, renderer.last_error().empty() ? "Scene Editor" : "Renderer diagnostic",
+    button("play", model.playing() ? "Stop" : "Play", EditorCommand::Play, 70.0f, true);
+    button("pause", model.paused() ? "Resume" : "Pause", EditorCommand::Pause, 70.0f);
+    button("step", "Step", EditorCommand::Step, 62.0f);
+    renderList_.border({x + 2.0f, bar.y + 10.0f, 1.0f, 28.0f}, color(layout.theme == "light" ? "#D5DDE7" : "#364354"));
+    x += 14.0f;
+    button("save", "Save", EditorCommand::SaveScene, 66.0f);
+    button("build", "Build", EditorCommand::BuildProject, 70.0f);
+    button("reset", "Reset", EditorCommand::ResetLayout, 70.0f);
+    const auto languageId = command_key("language");
+    commandActions_[languageId] = {layout.language == "zh-CN" ? EditorCommand::SetEnglishLanguage : EditorCommand::SetChineseLanguage, {}};
+    draw_button({std::max(x + 12.0f, width - 96.0f), bar.y + 10.0f, 82.0f, 28.0f}, languageId,
+                 layout.language == "zh-CN" ? "English" : "中文", layout);
+    renderList_.text({x + 16.0f, bar.y + 15.0f, std::max(0.0f, width - x - 124.0f), 18.0f}, renderer.last_error().empty() ? tr("Scene Editor") : tr("Renderer diagnostic"),
                       renderer.last_error().empty() ? color(layout.theme == "light" ? "#69717D" : "#9BA3AF") : color("#F29B8F"), 12.0f);
 }
 
@@ -1490,7 +1499,7 @@ void EditorUi::draw_dock(const EditorUiModel& model, const std::vector<FileEntry
     if (!workspace_) return;
     const auto result = workspace_->layout(dockArea_, dockOptions_);
     for (const auto& panel : result.panels) if (panel.renderable && panel.tabIndex != DockWorkspace::npos)
-        renderList_.rect({panel.rect.x,panel.rect.y-25,panel.rect.width,25},color(layout.theme == "light" ? "#F0F1F3" : "#25272B"));
+        renderList_.rect({panel.rect.x,panel.rect.y-kPanelHeaderHeight,panel.rect.width,kPanelHeaderHeight},color(layout.theme == "light" ? "#F7F9FB" : "#1D232B"));
     draw_tabs(result, layout);
     draw_splitters(result, layout);
     for (const auto& panel : result.panels) {
@@ -1522,8 +1531,8 @@ void EditorUi::draw_dock(const EditorUiModel& model, const std::vector<FileEntry
 void EditorUi::draw_panel_frame(const DockPanelLayout& panel, const EditorLayoutState& layout) {
     const auto bounds = rect(panel.rect);
     const bool viewport = panel.panelId == "viewport";
-    const auto surface = color(layout.theme == "light" ? "#FFFFFF" : "#27292E");
-    const auto border = color(layout.theme == "high-contrast" ? "#FFFFFF" : layout.theme == "light" ? "#D5D8DE" : "#363A42");
+    const auto surface = color(layout.theme == "light" ? "#FFFFFF" : "#202730");
+    const auto border = color(layout.theme == "high-contrast" ? "#FFFFFF" : layout.theme == "light" ? "#D5DDE7" : "#354252");
     if (panel.floating) {
         const auto shadow = ui::Rect{bounds.x - 4.0f, bounds.y - 4.0f, bounds.width + 8.0f, bounds.height + 8.0f};
         renderList_.rect(shadow, color(layout.theme == "light" ? "#00000018" : "#00000055"), 6.0f);
@@ -1542,10 +1551,10 @@ void EditorUi::draw_panel_frame(const DockPanelLayout& panel, const EditorLayout
         const bool headerPressed = panel.floating && activeRegion_ == std::string("floating-header:") + panel.panelId;
         renderList_.rect(header, headerPressed ? color(layout.theme == "light" ? "#D3E3F8" : "#35557D") :
                                 headerHovered ? color(layout.theme == "light" ? "#E8F1FC" : "#303B4A") :
-                                color(layout.theme == "light" ? "#F3F4F6" : "#2B2E33"));
+                                color(layout.theme == "light" ? "#F5F8FB" : "#252D37"));
         renderList_.border({header.x, header.bottom() - 1.0f, header.width, 1.0f}, border);
-        renderList_.text({header.x + 10.0f, header.y + 3.0f, std::max(0.0f, header.width - 20.0f), 18.0f}, panel.title,
-                          color(layout.theme == "light" ? "#464C55" : "#C8CDD5"), 12.0f, {},
+        renderList_.text({header.x + 12.0f, header.y + 6.0f, std::max(0.0f, header.width - 20.0f), 18.0f}, tr(panel.title),
+                          color(layout.theme == "light" ? "#3A4654" : "#DCE5F0"), 12.0f, {},
                           ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
     }
 }
@@ -1556,15 +1565,15 @@ void EditorUi::draw_tabs(const DockLayoutResult& result, const EditorLayoutState
         const auto id = path_key("tab", tab.stackPath) + ":" + std::to_string(tab.tabIndex);
         tabActions_[id] = {tab.stackPath, tab.tabIndex, tab.panelId};
         set_region(id, bounds);
-        const auto background = tab.active ? color(layout.theme == "light" ? "#FFFFFF" : "#27292E") :
-            color(layout.theme == "light" ? "#E7E9ED" : "#232529");
+        const auto background = tab.active ? color(layout.theme == "light" ? "#FFFFFF" : "#202730") :
+            color(layout.theme == "light" ? "#F0F3F7" : "#1A2027");
         renderList_.rect(bounds, background);
-        if (tab.active) renderList_.border({bounds.x, bounds.bottom() - 2.0f, bounds.width, 2.0f}, color("#3B82F6"));
+        if (tab.active) renderList_.border({bounds.x, bounds.bottom() - 3.0f, bounds.width, 3.0f}, color("#4C9AFF"));
         if (tab.panelId == draggedPanelId_ && tabDragActive_)
             renderList_.border({bounds.x + 1.0f, bounds.y + 1.0f, std::max(0.0f, bounds.width - 2.0f), std::max(0.0f, bounds.height - 2.0f)}, color("#78A9E8"), 1.0f, 3.0f);
         const float closeWidth = tab.closeable ? 22.0f : 0.0f;
         renderList_.text({bounds.x + 10.0f, bounds.y + 3.0f,
-                          std::max(0.0f, bounds.width - 18.0f - closeWidth), 18.0f}, tab.title,
+                          std::max(0.0f, bounds.width - 18.0f - closeWidth), 18.0f}, tr(tab.title),
                           tab.active ? color(layout.theme == "light" ? "#252A31" : "#E4E8EE") : color(layout.theme == "light" ? "#68717D" : "#929AA6"), 12.0f, {},
                           ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         if (tab.closeable && bounds.width >= 42.0f) {
@@ -1599,15 +1608,15 @@ void EditorUi::draw_hierarchy(const DockRect& value, const EditorUiModel& model,
     const auto filter = ui::Rect{bounds.x, bounds.y, std::max(0.0f, bounds.width - 52.0f), 26.0f};
     filterText_ = model.object_filter();
     set_region("hierarchy.filter", filter, true);
-    renderList_.rect(filter, color(layout.theme == "light" ? "#F1F2F4" : "#1E2024"), 5.0f);
-    renderList_.border(filter, color(layout.theme == "light" ? "#D3D7DD" : "#393D45"), 1.0f, 5.0f);
-    renderList_.text({filter.x + 9.0f, filter.y + 4.0f, filter.width - 18.0f, 18.0f}, filterText_.empty() ? "Filter" : filterText_,
+    renderList_.rect(filter, color(layout.theme == "light" ? "#F1F5F9" : "#171C22"), 5.0f);
+    renderList_.border(filter, color(layout.theme == "light" ? "#CBD6E2" : "#354252"), 1.0f, 5.0f);
+    renderList_.text({filter.x + 9.0f, filter.y + 4.0f, filter.width - 18.0f, 18.0f}, filterText_.empty() ? tr("Filter") : filterText_,
                       filterText_.empty() ? color(layout.theme == "light" ? "#8A929D" : "#737C89") : color(layout.theme == "light" ? "#353A42" : "#E2E6EC"), 12.0f,
                       {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
     const auto add = command_key("create-empty");
     commandActions_[add] = {EditorCommand::CreateEmpty, {}};
     draw_button({bounds.x + bounds.width - 44.0f, bounds.y, 44.0f, 26.0f}, add, "+", layout);
-    draw_input(filter, "hierarchy.filter", filterText_.empty() ? "Filter objects" : filterText_, layout);
+    draw_input(filter, "hierarchy.filter", filterText_.empty() ? tr("Filter objects") : filterText_, layout);
     DockRect list{bounds.x, bounds.y+36, bounds.width, std::max(0.0f,bounds.height-36)};
     set_region("hierarchy.background", rect(list), true);
     hierarchyPageHeight_ = list.height;
@@ -1635,7 +1644,10 @@ void EditorUi::draw_hierarchy_node(const DockRect& value, const EditorObjectTree
         set_region("object-toggle:" + std::to_string(node.id), toggle);
         renderList_.text(toggle, collapsedObjects_.count(node.id) ? ">" : "v", color("#98A1AD"), 11);
     }
-    if (node.selected) renderList_.rect(row, color(layout.theme == "light" ? "#DCEBFF" : "#243B5A"), 4.0f);
+    if (node.selected) {
+        renderList_.rect(row, color(layout.theme == "light" ? "#DCEBFF" : "#183B63"), 4.0f);
+        renderList_.border({row.x, row.y, 3.0f, row.height}, color("#4C9AFF"), 0.0f, 2.0f);
+    }
     const std::string label = std::string(node.active ? "" : "· ") + node.name;
     const float textX = row.x + 22.0f + static_cast<float>(depth) * 14.0f;
     renderList_.text({textX, row.y + 3.0f,
@@ -1659,9 +1671,9 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
         const auto muted = color(layout.theme == "light" ? "#707884" : "#9AA3AF");
         const auto border = color(layout.theme == "light" ? "#D7DADF" : "#363A42");
         if (found == files.end()) {
-            renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, "Asset", muted, 11.0f);
+            renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, tr("Asset"), muted, 11.0f);
             renderList_.text({bounds.x, bounds.y + 26.0f, bounds.width, 20.0f},
-                             "Resource is no longer available", text, 12.0f,
+                             tr("Resource is no longer available"), text, 12.0f,
                              {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
             return;
         }
@@ -1678,10 +1690,10 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                           std::max(0.0f, bounds.width - 54.0f), 22.0f}, found->name, text, 13.0f,
                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         renderList_.text({bounds.x + 54.0f, bounds.y + 45.0f,
-                          std::max(0.0f, bounds.width - 54.0f), 18.0f}, asset_type_name(kind), accent, 11.0f,
+                          std::max(0.0f, bounds.width - 54.0f), 18.0f}, tr(asset_type_name(kind)), accent, 11.0f,
                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         renderList_.border({bounds.x, bounds.y + 72.0f, bounds.width, 1.0f}, border);
-        renderList_.text({bounds.x, bounds.y + 84.0f, bounds.width, 18.0f}, "Location", muted, 10.0f);
+        renderList_.text({bounds.x, bounds.y + 84.0f, bounds.width, 18.0f}, tr("Location"), muted, 10.0f);
         renderList_.text({bounds.x, bounds.y + 103.0f, bounds.width, 18.0f}, found->relativePath.generic_string(), text, 11.0f,
                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         const float previewTop = bounds.y + 132.0f;
@@ -1914,7 +1926,7 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
         return;
     }
     if (model.selected_object() == 0) {
-        renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, "Select an object to inspect it.", color(layout.theme == "light" ? "#7B838E" : "#929AA6"), 12.0f);
+        renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, tr("Select an object to inspect it."), color(layout.theme == "light" ? "#7B838E" : "#929AA6"), 12.0f);
         return;
     }
     set_region("inspector.background", rect(bounds), true);
@@ -1937,7 +1949,7 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
         const auto id = "field:" + field.id;
         inspectorFields_[id] = field;
         if (y + rowHeight > bounds.y && y < bounds.y + bounds.height) {
-            renderList_.text({bounds.x,y,bounds.width,18}, field.label, color(layout.theme == "light" ? "#59616E" : "#AAB2BE"), 11);
+            renderList_.text({bounds.x,y,bounds.width,18}, tr(field.label), color(layout.theme == "light" ? "#59616E" : "#AAB2BE"), 11);
             const ui::Rect input{bounds.x,y+20,bounds.width,26};
             const bool audioTransport = field.id.size() >= 15 &&
                 field.id.compare(field.id.size() - 15, 15, ":audioTransport") == 0;
@@ -1954,11 +1966,11 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 commandActions_[play] = {EditorCommand::MediaPlay, target};
                 commandActions_[pause] = {EditorCommand::MediaPause, target};
                 commandActions_[stop] = {EditorCommand::MediaStop, target};
-                draw_button({input.x, input.y, buttonWidth, input.height}, play, "Play", layout,
+                draw_button({input.x, input.y, buttonWidth, input.height}, play, tr("Play"), layout,
                             field.value == "Playing");
-                draw_button({input.x + buttonWidth + gap, input.y, buttonWidth, input.height}, pause, "Pause", layout,
+                draw_button({input.x + buttonWidth + gap, input.y, buttonWidth, input.height}, pause, tr("Pause"), layout,
                             field.value == "Paused");
-                draw_button({input.x + (buttonWidth + gap) * 2.0f, input.y, buttonWidth, input.height}, stop, "Stop", layout,
+                draw_button({input.x + (buttonWidth + gap) * 2.0f, input.y, buttonWidth, input.height}, stop, tr("Stop"), layout,
                             false);
             } else if (audioTimeline) {
                 renderList_.text({bounds.x + bounds.width - 108.0f, y, 108.0f, 18.0f}, field.value,
@@ -2013,7 +2025,7 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 const float controlsY = input.y + 18.0f;
                 draw_button({input.x, controlsY, buttonWidth, input.height}, back, "-5 s", layout, false);
                 draw_button({input.x + buttonWidth + gap, controlsY, buttonWidth, input.height}, forward, "+5 s", layout, false);
-            } else if (field.boolean && field.editable) draw_button(input,id,field.value == "true" ? "On" : "Off",layout,field.value == "true");
+            } else if (field.boolean && field.editable) draw_button(input,id,field.value == "true" ? tr("On") : tr("Off"),layout,field.value == "true");
             else if (field.editable && field.choices && !field.choices->empty()) {
                 std::string label = field.value.empty() ? "None" : field.value;
                 const auto selected = std::find_if(field.choices->begin(), field.choices->end(),
@@ -2080,7 +2092,7 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
         inspectorChoiceScroll_ = 0.0f;
     }
     if (!editError_.empty()) renderList_.text({bounds.x,bounds.y+bounds.height-22,bounds.width,20},editError_,color("#F29B8F"),11);
-    renderList_.text({bounds.x,y,bounds.width,20}, "Add component", color("#98A1AD"),12); y += 28;
+    renderList_.text({bounds.x,y,bounds.width,20}, tr("Add component"), color("#98A1AD"),12); y += 28;
     for (const auto& type : model.component_types()) {
         if (y+26 > bounds.y && y < bounds.y+bounds.height) draw_button({bounds.x,y,bounds.width,26},"component-add:"+type,type,layout);
         y += 30;
@@ -2099,9 +2111,9 @@ void EditorUi::draw_viewport(const DockRect& value, const EditorUiModel&, const 
     renderList_.line({bounds.x + bounds.width * 0.5f, bounds.y}, {bounds.x + bounds.width * 0.5f, bottom}, color("#4C87D744"), 1.0f);
     renderList_.line({bounds.x, bounds.y + bounds.height * 0.5f}, {right, bounds.y + bounds.height * 0.5f}, color("#4C87D744"), 1.0f);
     const float modeStart = std::max(bounds.x+8,right-142);
-    draw_button({modeStart,bounds.y+8,134,24},"mode:next",viewMode_+" >",layout);
+    draw_button({modeStart,bounds.y+8,134,24},"mode:next",std::string(tr(viewMode_))+" >",layout);
     const float titleWidth = std::max(0.0f, modeStart - bounds.x - 24.0f);
-    renderList_.text({bounds.x + 12.0f, bounds.y + 12.0f, titleWidth, 18.0f}, "Scene Viewport",
+    renderList_.text({bounds.x + 12.0f, bounds.y + 12.0f, titleWidth, 18.0f}, tr("Scene Viewport"),
                      color(layout.theme == "light" ? "#DDE2E8" : "#A6AFBC"), 12.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
     if (assetDragActive_ && !assetDragPath_.empty() &&
@@ -2116,7 +2128,7 @@ void EditorUi::draw_viewport(const DockRect& value, const EditorUiModel&, const 
                          dropColor, 11.0f, {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
     }
     renderList_.text({bounds.x + 12.0f, bottom - 26.0f, std::max(0.0f, bounds.width - 24.0f), 18.0f},
-                     "MMB orbit · Shift+MMB pan · Wheel zoom · F frame", color("#9AA3AF"), 11.0f,
+                     tr("MMB orbit · Shift+MMB pan · Wheel zoom · F frame"), color("#9AA3AF"), 11.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
 }
 
@@ -2192,12 +2204,12 @@ void EditorUi::rebuild_asset_index(const std::vector<FileEntry>& files) {
 
 void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& files, const EditorLayoutState& layout) {
     const auto bounds = inset(value, 10.0f);
-    const auto border = color(layout.theme == "light" ? "#D3D7DD" : "#393D45");
-    const auto surface = color(layout.theme == "light" ? "#F5F6F8" : "#202226");
-    const auto text = color(layout.theme == "light" ? "#3F464F" : "#CBD1DA");
-    const auto muted = color(layout.theme == "light" ? "#7A828D" : "#8F98A5");
-    const auto hover = color(layout.theme == "light" ? "#E8F1FC" : "#303B4A");
-    const auto selected = color(layout.theme == "light" ? "#DCEBFF" : "#243B5A");
+    const auto border = color(layout.theme == "light" ? "#CBD6E2" : "#354252");
+    const auto surface = color(layout.theme == "light" ? "#F5F8FB" : "#1A2027");
+    const auto text = color(layout.theme == "light" ? "#354252" : "#D7E1EC");
+    const auto muted = color(layout.theme == "light" ? "#748092" : "#8F9BAA");
+    const auto hover = color(layout.theme == "light" ? "#EAF3FF" : "#283849");
+    const auto selected = color(layout.theme == "light" ? "#D7E9FF" : "#183B63");
     const bool compact = bounds.width < 620.0f;
     const float toolbarHeight = compact ? 64.0f : 34.0f;
     const float controlHeight = 26.0f;
@@ -2210,11 +2222,11 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
     renderList_.rect(searchInput, surface, 4.0f);
     renderList_.border(searchInput, border, 1.0f, 4.0f);
     renderList_.text({searchInput.x + 8.0f, searchInput.y + 4.0f, std::max(0.0f, searchInput.width - 16.0f), 18.0f},
-                     assetFilter_.empty() ? "Search assets" : assetFilter_,
+                     assetFilter_.empty() ? tr("Search assets") : assetFilter_,
                      assetFilter_.empty() ? muted : text, 11.0f, {}, ui::TextAlign::Start,
                      ui::TextOverflow::Ellipsis);
 
-    draw_input(searchInput, "assets.filter", assetFilter_.empty() ? "Search assets" : assetFilter_, layout);
+    draw_input(searchInput, "assets.filter", assetFilter_.empty() ? tr("Search assets") : assetFilter_, layout);
     const std::string directoryLabel = assetDirectory_.empty() ? "Project" : assetDirectory_.generic_string();
     const float buttonWidth = 56.0f;
     const float refreshWidth = 70.0f;
@@ -2227,13 +2239,13 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
     }
     const float controlsY = compact ? bounds.y + 29.0f : bounds.y + 3.0f;
     draw_button({bounds.x + bounds.width - controlsWidth, controlsY, refreshWidth, controlHeight},
-                "asset-refresh", "Refresh", layout);
+                "asset-refresh", tr("Refresh"), layout);
     draw_button({bounds.x + bounds.width - buttonWidth * 3.0f - 8.0f, controlsY, buttonWidth, controlHeight},
-                "asset-view:small", "Small", layout, assetView_ == EditorAssetView::SmallList);
+                "asset-view:small", tr("Small"), layout, assetView_ == EditorAssetView::SmallList);
     draw_button({bounds.x + bounds.width - buttonWidth * 2.0f - 4.0f, controlsY, buttonWidth, controlHeight},
-                "asset-view:large", "Large", layout, assetView_ == EditorAssetView::LargeIcons);
+                "asset-view:large", tr("Large"), layout, assetView_ == EditorAssetView::LargeIcons);
     draw_button({bounds.x + bounds.width - buttonWidth, controlsY, buttonWidth, controlHeight},
-                "asset-view:tree", "Tree", layout, assetView_ == EditorAssetView::Tree);
+                "asset-view:tree", tr("Tree"), layout, assetView_ == EditorAssetView::Tree);
     float contentTop = toolbar.bottom() + 5.0f;
     if (assetEditActive_) {
         const auto edit = ui::Rect{bounds.x, contentTop, std::max(0.0f, bounds.width - 86.0f), 28.0f};
@@ -2245,7 +2257,7 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
                          ui::TextOverflow::Ellipsis);
         draw_input(edit, "asset.rename", assetEditText_, layout);
         if (runtime_.focused() != ensure_region("asset.rename", true)) runtime_.focus(ensure_region("asset.rename", true));
-        const auto hint = assetEditAction_ == EditorAssetAction::NewFolder ? "Create folder" : "Rename";
+        const auto hint = assetEditAction_ == EditorAssetAction::NewFolder ? tr("Create folder") : tr("Rename");
         renderList_.text({edit.right() + 8.0f, edit.y + 5.0f, 72.0f, 18.0f}, hint, muted, 11.0f,
                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         contentTop += 34.0f;
@@ -2373,13 +2385,13 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
     if (assetItems_.empty()) {
         const auto searchFilter = lower_text(assetFilter_);
         renderList_.text({bounds.x + 8.0f, contentTop + 8.0f, std::max(0.0f, bounds.width - 16.0f), 20.0f},
-                         searchFilter.empty() ? "This folder is empty" : "No matching assets", muted, 11.0f,
+                         searchFilter.empty() ? tr("This folder is empty") : tr("No matching assets"), muted, 11.0f,
                          {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
     }
     renderList_.end_clip(); regionClip_ = panelClip;
     if (!assetDirectory_.empty()) {
         const auto parent = ui::Rect{bounds.x, bounds.y + bounds.height - navigationFooterHeight, 66.0f, 24.0f};
-        draw_button(parent, "asset-parent", "Up", layout);
+        draw_button(parent, "asset-parent", tr("Up"), layout);
     }
     if (maxScroll > 0.0f && listHeight > 8.0f) {
         const float railWidth = 12.0f;
@@ -2399,13 +2411,13 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
         const auto confirm = ui::Rect{bounds.x, bounds.y + bounds.height - 34.0f, bounds.width, 30.0f};
         renderList_.rect(confirm, color(layout.theme == "light" ? "#FFF4E5" : "#3A2D21"), 4.0f);
         renderList_.text({confirm.x + 8.0f, confirm.y + 5.0f, std::max(0.0f, confirm.width - 152.0f), 18.0f},
-                         std::string("Delete ") + std::filesystem::path(assetDeletePath_).filename().string() + "?",
+                         std::string(tr("Delete this asset?")) + "  " + std::filesystem::path(assetDeletePath_).filename().string(),
                          color(layout.theme == "light" ? "#805A24" : "#E6B66D"), 11.0f, {},
                          ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         draw_button({confirm.right() - 136.0f, confirm.y + 2.0f, 62.0f, 26.0f},
-                    "asset-delete-cancel", "Cancel", layout);
+                    "asset-delete-cancel", tr("Cancel"), layout);
         draw_button({confirm.right() - 68.0f, confirm.y + 2.0f, 62.0f, 26.0f},
-                    "asset-delete-confirm", "Delete", layout, true);
+                    "asset-delete-confirm", tr("Delete"), layout, true);
     }
 }
 
@@ -2981,13 +2993,13 @@ void EditorUi::draw_button(ui::Rect bounds, std::string id, std::string_view lab
     const bool hovered = hotRegion_ == id;
     const bool pressed = activeRegion_ == id;
     const bool focused = runtime_.focused() == ensure_region(id, true);
-    const auto fill = primary ? color(pressed ? "#245FAE" : hovered ? "#3278D0" : "#2E6FBE") :
-        color(layout.theme == "light" ? (pressed ? "#D2D5DA" : hovered ? "#E4E6EA" : "#F1F2F4") :
-              (pressed ? "#3A3E46" : hovered ? "#33373F" : "#2C2F35"));
+    const auto fill = primary ? color(pressed ? "#2D6CB5" : hovered ? "#3D87DE" : "#3579C7") :
+        color(layout.theme == "light" ? (pressed ? "#D8E4F0" : hovered ? "#EAF2FB" : "#F4F7FA") :
+              (pressed ? "#344556" : hovered ? "#2B3948" : "#25303B"));
     const bool highContrast = layout.theme == "high-contrast";
-    const auto foreground = highContrast && pressed ? color("#000000") : primary ? color("#FFFFFF") : color(layout.theme == "light" ? "#454B54" : "#D7DCE4");
-    renderList_.rect(bounds, highContrast && pressed ? color("#FFFFFF") : highContrast && hovered ? color("#0066CC") : fill, 5.0f);
-    renderList_.border(bounds, color(highContrast ? "#FFFFFF" : layout.theme == "light" ? "#D0D4DA" : "#41464F"), 1.0f, 5.0f);
+    const auto foreground = highContrast && pressed ? color("#000000") : primary ? color("#FFFFFF") : color(layout.theme == "light" ? "#314052" : "#DDE7F2");
+    renderList_.rect(bounds, highContrast && pressed ? color("#FFFFFF") : highContrast && hovered ? color("#0066CC") : fill, 4.0f);
+    renderList_.border(bounds, color(highContrast ? "#FFFFFF" : layout.theme == "light" ? "#C8D5E2" : "#3A4A5C"), 1.0f, 4.0f);
     if (focused) {
         const auto focusColor = primary ? color("#8DBBFF") : color(layout.theme == "light" ? "#2E6FBE" : "#78A9E8");
         renderList_.border({bounds.x - 1.0f, bounds.y - 1.0f, bounds.width + 2.0f, bounds.height + 2.0f}, focusColor, 1.0f, 6.0f);

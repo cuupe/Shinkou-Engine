@@ -1408,6 +1408,26 @@
 
 下一入口：在真实 animated fixture 的 native readback 证据稳定后，补 skin/joint weights 与 inverse-bind 矩阵；并并行完成重叠几何 depth pixel oracle、100%/125% DPI 矩阵、内容 hash/diff 和 UI 分配预算。
 
+### 第 4.56 子阶段：编辑器视觉层级与中文本地化
+
+目标：把当前 retained 编辑器从“功能可见”提升到可长期使用的专业工具界面，并让中文用户可以直接工作；本轮只增强现有 `EditorUi`/`EditorLayer` 统一路径，不引入 DX11 专用 UI、UIKit 旁路或新的渲染后端依赖。
+
+实现范围：
+
+- 统一深色/浅色的工具栏、标签栏、面板头、输入控件、选中态、焦点态和分隔线 token；增加留白、标题区高度和列表行高，降低控件堆叠感。
+- 新增 `EditorLocalization`，默认 `zh-CN`，支持 `en-US`；菜单、工具栏、面板标题、资源浏览器、检查器常用字段和场景视口提示从统一表查询，资源名称、路径、编译器诊断和用户内容保持原文。
+- `EditorLayoutState.language` 进入反射序列化；设置面板提供中文/英文切换，工具栏提供快速切换按钮；切换通过 `EditorCommand` 回到 `EditorLayer`，立即失效 retained paint cache 并可保存布局。
+- 非目标：本轮不翻译用户项目内容、资产文件名、外部工具输出，不实现在线语言包、第三方字体下载或新的底层 UI 后端。
+
+审计与验证安排：
+
+- 单元：语言表默认中文、英文回退、非法语言回退和未知字符串透传。
+- 集成：设置面板切换英文/中文后检查布局字段和 retained text 更新；现有资源操作、预览、AudioSource、Build、Recovery、撤销/重做和 resize 继续回归。
+- 视觉：真实 GPU readback 分别捕获 dark/light，检查中文字符、选中态、面板边界和 150% DPI 下无明显裁切。
+- 安全/性能：翻译查询为静态 bounded 表，paint 不读盘、不启动进程、不访问 renderer backend；语言字段参与 paint key，切换后重新绘制一次。
+
+下一入口：补充媒体/Build/Recovery 文案和 CJK 字体 fallback 诊断；随后进入窄窗口布局、UI 分配/frame-time 基线和内容 diff/hash 审计。
+
 ### 第 4.54 子阶段：原生输入兜底与完整交互性能证据
 
 目标：消除冷启动窗口在 SDL 文本输入不可用时的编辑阻塞，并让完整原生交互脚本与性能审计都能给出可复核结果。
