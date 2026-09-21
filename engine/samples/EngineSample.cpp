@@ -95,6 +95,7 @@ struct AudioFixtureCleanup final {
 
 int main(int argc, char** argv) {
     shinkou::EngineConfig config;
+    config.enablePhysics = true;
     config.renderBackend = shinkou::render::BackendApi::Vulkan;
     bool recoverRequested = false;
     bool editorRequested = true;
@@ -221,7 +222,8 @@ int main(int argc, char** argv) {
             position.value = position.value + velocity.value * dt;
         });
     });
-    engine.physics().create_body({{0, 2, 0}, {0, 0, 0}, {0.5f, 0.5f, 0.5f}, 1, true});
+    if (auto* physics = engine.physics())
+        physics->create_body({{0, 2, 0}, {0, 0, 0}, {0.5f, 0.5f, 0.5f}, 1, true});
 
     shinkou::render::BufferDesc uploadBuffer;
     uploadBuffer.size = 16;

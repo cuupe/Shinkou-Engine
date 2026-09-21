@@ -12,8 +12,8 @@ struct VertexOutput {
 
 VertexOutput VSMain(float3 position : POSITION, uint instanceId : SV_InstanceID) {
     VertexOutput output;
-    float4 worldPosition = mul(float4(position, 1.0), instanceModels[instanceId]);
-    output.position = mul(worldPosition, viewProjection);
+    float4 worldPosition = mul(instanceModels[instanceId], float4(position, 1.0));
+    output.position = mul(viewProjection, worldPosition);
     output.uv = position.xy * 0.5 + 0.5;
     return output;
 }

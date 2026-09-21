@@ -169,7 +169,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
             " device is not ready";
         return state;
     }
-    if (capabilities.api != render::BackendApi::DirectX11) {
+    if (!capabilities.supportsEditorModelRendering) {
         state.status = "GPU model scene fallback: " + backend_label(capabilities.api) +
             " scene shader path is pending; references remain in the World";
         return state;

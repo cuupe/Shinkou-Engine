@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shinkou/Math.h"
+#include "shinkou/animation/Animation.h"
 #include "shinkou/editor/FileSystem.h"
 #include "shinkou/ui/Ui.h"
 
@@ -54,10 +55,21 @@ struct EditorModelMaterialPreview {
     bool doubleSided{false};
 };
 
+struct EditorModelNodePreview {
+    std::string name;
+    std::int32_t parent{-1};
+    std::int32_t mesh{-1};
+    animation::BoneIndex bone{animation::InvalidBone};
+};
+
 struct EditorModelAnimationPreview {
     std::string name;
     std::size_t channelCount{0};
     std::size_t samplerCount{0};
+    std::size_t playableChannelCount{0};
+    float duration{0.0f};
+    bool cpuPlayable{false};
+    std::shared_ptr<const animation::AnimationClip> cpuClip{};
 };
 
 struct EditorModelPreviewSnapshot {
@@ -98,6 +110,11 @@ struct EditorModelPreviewSnapshot {
     std::shared_ptr<const std::vector<EditorModelTexturePreview>> textures{};
     std::shared_ptr<const std::vector<EditorModelImagePreview>> images{};
     std::shared_ptr<const std::vector<EditorModelTextureArtifact>> imageArtifacts{};
+    std::shared_ptr<const std::vector<EditorModelNodePreview>> nodes{};
+    std::shared_ptr<const animation::Skeleton> animationSkeleton{};
+    // One entry per flattened vertex. InvalidBone means that the source
+    // geometry is not attached to a previewable glTF node.
+    std::shared_ptr<const std::vector<animation::BoneIndex>> vertexBones{};
     std::shared_ptr<const std::vector<EditorModelAnimationPreview>> animations{};
     // Each adjacent pair is a normalized wireframe segment in [0, 1].
     std::shared_ptr<const std::vector<ui::Vec2>> wireSegments{};

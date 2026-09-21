@@ -72,6 +72,17 @@ bool resource_matches(const Renderer& renderer, ResourceHandle handle, ResourceK
     return true;
 }
 
+bool index_range_matches(const ResourceDesc& description, std::uint32_t firstIndex,
+                         std::uint32_t indexCount) noexcept {
+    const auto* buffer = std::get_if<BufferDesc>(&description);
+    constexpr std::size_t indexBytes = sizeof(std::uint32_t);
+    if (!buffer || indexCount == 0 || firstIndex > std::numeric_limits<std::size_t>::max() / indexBytes ||
+        indexCount > std::numeric_limits<std::size_t>::max() / indexBytes) return false;
+    const auto firstByte = static_cast<std::size_t>(firstIndex) * indexBytes;
+    const auto countBytes = static_cast<std::size_t>(indexCount) * indexBytes;
+    return firstByte <= buffer->size && countBytes <= buffer->size - firstByte;
+}
+
 bool is_instance_binding(const DescriptorBinding& binding) {
     return binding.type == DescriptorType::StructuredBuffer &&
         (binding.name == "instances" || binding.name == "instanceModels" || binding.name == "instanceBuffer");
@@ -157,6 +168,8 @@ void RenderScene::extract(const World& world, const Renderer& renderer, float as
         item.indexBuffer = mesh.indexBuffer;
         item.material = mesh.material;
         item.indexCount = mesh.indexCount;
+        item.firstIndex = mesh.firstIndex;
+        item.vertexOffset = mesh.vertexOffset;
         item.transform = transform_matrix(transform.local);
         if (view_.camera && view_.projection.farPlane > 0.0f) {
             const auto distance = math::Length(transform.local.position - view_.transform.position);
@@ -174,7 +187,8 @@ void RenderScene::extract(const World& world, const Renderer& renderer, float as
         }
         if (!resource_matches(renderer, item.vertexBuffer, ResourceKind::Buffer, &item.vertexDescription) ||
             !resource_matches(renderer, item.indexBuffer, ResourceKind::Buffer, &item.indexDescription) ||
-            !resource_matches(renderer, item.material, ResourceKind::Material, &item.materialDescription)) return;
+            !resource_matches(renderer, item.material, ResourceKind::Material, &item.materialDescription) ||
+            !index_range_matches(item.indexDescription, item.firstIndex, item.indexCount)) return;
         item.gpuDriven = mesh.gpuDriven && has_structured_instance_binding(item);
         item.boundsCenter = mesh.boundsCenter;
         item.boundsRadius = std::max(0.001f, mesh.boundsRadius);
@@ -320,6 +334,10 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
         return lhs->entity.id < rhs->entity.id;
     });
     std::unordered_set<std::uint64_t> seenGpuBatches;
+    // A scene target is shared by all material/mesh batches.  Only the first
+    // graphics pass may clear it; clearing on every batch makes the last
+    // material group erase all previously rendered objects.
+    bool colorTargetCleared = false;
     for (std::size_t offset = 0; offset < sortedMeshes.size();) {
         const auto material = sortedMeshes[offset]->material;
         const auto vertexBuffer = sortedMeshes[offset]->vertexBuffer;
@@ -351,7 +369,8 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
             }
             std::vector<std::uint8_t> argumentBytes(batch.size() * sizeof(GpuDrawArguments));
             for (std::size_t index = 0; index < batch.size(); ++index) {
-                const GpuDrawArguments arguments{batch[index].item.indexCount, 1u, 0u, 0,
+                const GpuDrawArguments arguments{batch[index].item.indexCount, 1u,
+                    batch[index].item.firstIndex, batch[index].item.vertexOffset,
                     static_cast<std::uint32_t>(index)};
                 std::memcpy(argumentBytes.data() + index * sizeof(arguments), &arguments, sizeof(arguments));
             }
@@ -427,7 +446,8 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
                     backend.bind_material(gpuMaterial);
                     backend.bind_uniform_buffer(sceneBuffer, 2, 0);
                     backend.draw_mesh_indirect(draw);
-                });
+                }, RenderQueue::Graphics, true, !colorTargetCleared);
+            colorTargetCleared = true;
             continue;
         }
         auto batchMaterialDescription = std::get<MaterialDesc>(batch.front().item.materialDescription);
@@ -447,9 +467,19 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
             {sceneBuffer_, ResourceUsage::ShaderRead}
         };
         if (lightBuffer_ && hasLightsBinding) accesses.push_back({lightBuffer_, ResourceUsage::ShaderRead});
+        // A material batch may contain many entities sharing one mesh. The
+        // graph contract allows one access entry per resource in a pass, so
+        // register shared vertex/index buffers once while retaining every
+        // per-object uniform buffer for the draw loop below.
+        std::unordered_set<std::uint32_t> vertexResources;
+        std::unordered_set<std::uint32_t> indexResources;
+        vertexResources.reserve(batch.size());
+        indexResources.reserve(batch.size());
         for (const auto& mesh : batch) {
-            accesses.push_back({mesh.item.vertexBuffer, ResourceUsage::VertexBuffer});
-            accesses.push_back({mesh.item.indexBuffer, ResourceUsage::IndexBuffer});
+            if (vertexResources.insert(mesh.item.vertexBuffer.id).second)
+                accesses.push_back({mesh.item.vertexBuffer, ResourceUsage::VertexBuffer});
+            if (indexResources.insert(mesh.item.indexBuffer.id).second)
+                accesses.push_back({mesh.item.indexBuffer, ResourceUsage::IndexBuffer});
             accesses.push_back({mesh.objectBuffer, ResourceUsage::ShaderRead});
         }
         if (depthTarget) accesses.push_back({depthTarget, ResourceUsage::DepthStencil});
@@ -459,9 +489,11 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
                 backend.bind_uniform_buffer(sceneBuffer, 2, 0);
                 for (const auto& mesh : batch) {
                     backend.bind_uniform_buffer(mesh.objectBuffer, 3, 0);
-                    backend.draw_mesh({mesh.item.vertexBuffer, mesh.item.indexBuffer, mesh.item.indexCount, mesh.item.transform});
+                    backend.draw_mesh({mesh.item.vertexBuffer, mesh.item.indexBuffer, mesh.item.indexCount,
+                        mesh.item.transform, mesh.item.firstIndex, mesh.item.vertexOffset});
                 }
-            });
+            }, RenderQueue::Graphics, true, !colorTargetCleared);
+        colorTargetCleared = true;
     }
 
     for (auto it = objectBuffers_.begin(); it != objectBuffers_.end();) {
@@ -514,7 +546,8 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
             for (const auto& sprite : batch) {
                 backend.draw_sprite({sprite.texture, sprite.position, sprite.size, sprite.rotation});
             }
-        }, RenderQueue::Graphics, true);
+        }, RenderQueue::Graphics, true, !colorTargetCleared);
+        colorTargetCleared = true;
     }
 }
 
@@ -595,7 +628,8 @@ void ForwardRenderer::build_shadows(Renderer& renderer, const RenderScene& scene
             backend.set_viewport(static_cast<float>(cascade.atlasX), static_cast<float>(cascade.atlasY),
                 static_cast<float>(cascade.atlasSize), static_cast<float>(cascade.atlasSize));
             for (const auto& mesh : scene.meshes()) {
-                backend.draw_mesh({mesh.vertexBuffer, mesh.indexBuffer, mesh.indexCount, mesh.transform});
+                backend.draw_mesh({mesh.vertexBuffer, mesh.indexBuffer, mesh.indexCount, mesh.transform,
+                    mesh.firstIndex, mesh.vertexOffset});
             }
         }, RenderQueue::Graphics, true, cascade.index == 0);
     }

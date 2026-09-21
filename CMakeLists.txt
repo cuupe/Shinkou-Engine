@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(SHINKOU_BUILD_SAMPLE "Build the engine sample" ON)
+option(SHINKOU_BUILD_PHYSICS_VISUALIZER "Build the standalone rendered rigid-body visualizer" ON)
 option(SHINKOU_BUILD_SHADER_SCENE_TEST "Build the standalone reference multi-pass shader scene test" ON)
 option(SHINKOU_FETCH_DEPENDENCIES "Fetch optional third-party dependencies" OFF)
 option(SHINKOU_ENABLE_SDL3_INPUT "Enable SDL3 event input" ON)
@@ -18,12 +19,16 @@ option(SHINKOU_INPUT_FETCH_SDL3 "Fetch SDL3 source for the private ShinkouInput 
 set(SHINKOU_INPUT_SDL3_SOURCE_DIR "" CACHE PATH "Optional local SDL3 source directory for ShinkouInput")
 option(SHINKOU_ENABLE_MINIAUDIO "Enable miniaudio integration when available" ON)
 option(SHINKOU_ENABLE_PHYSX "Enable PhysX integration when available" ON)
+set(SHINKOU_PHYSX_ROOT "" CACHE PATH "PhysX SDK root containing include and lib directories")
+set(SHINKOU_PHYSX_LIBRARY_DIR "" CACHE PATH "PhysX SDK library directory override")
 option(SHINKOU_ENABLE_IMGUI "Enable ImGui editor integration when available" ON)
 option(SHINKOU_ENABLE_LUA "Enable Lua scripting integration when available" ON)
 option(SHINKOU_ENABLE_PYTHON "Enable Python scripting integration when available" ON)
 option(SHINKOU_ENABLE_CSHARP "Enable .NET/C# capability detection" ON)
 option(SHINKOU_BUILD_TESTS "Build engine tests" ON)
 option(SHINKOU_BUILD_BENCHMARKS "Build engine microbenchmarks" OFF)
+option(SHINKOU_BUILD_PHYSICS_EXAMPLE "Build the standalone physics library example" ON)
+option(SHINKOU_BUILD_PHYSICS_PERFORMANCE_TEST "Build the PhysX dense performance test" ON)
 option(SHINKOU_BUILD_AUDIO_MIXER_TEST "Build the native Win32 audio mixer test utility" ON)
 option(SHINKOU_ENABLE_AVX2 "Enable AVX2 math kernels for supported targets" OFF)
 
@@ -41,13 +46,45 @@ if(SHINKOU_ENABLE_SDL3_INPUT)
     add_subdirectory("${SHINKOU_ENGINE_ROOT}/input" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_input" EXCLUDE_FROM_ALL)
 endif()
 
+add_subdirectory("${SHINKOU_ENGINE_ROOT}/physics" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_physics")
+
+# PhysX is a shared runtime on the supported native builds. Keep executable
+# output directories self-contained so examples and tools run directly after
+# a build, without requiring the user to edit PATH manually.
+function(shinkou_copy_physx_runtime target_name)
+    if(NOT WIN32 OR NOT SHINKOU_WITH_PHYSX OR NOT SHINKOU_PHYSX_ROOT OR NOT TARGET ${target_name})
+        return()
+    endif()
+    file(GLOB_RECURSE SHINKOU_PHYSX_RUNTIME_DLLS LIST_DIRECTORIES false
+        "${SHINKOU_PHYSX_ROOT}/bin/*.dll"
+        "${SHINKOU_PHYSX_ROOT}/lib/*.dll")
+    foreach(SHINKOU_PHYSX_RUNTIME_DLL IN LISTS SHINKOU_PHYSX_RUNTIME_DLLS)
+        get_filename_component(SHINKOU_PHYSX_RUNTIME_NAME
+            "${SHINKOU_PHYSX_RUNTIME_DLL}" NAME)
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${SHINKOU_PHYSX_RUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:${target_name}>/${SHINKOU_PHYSX_RUNTIME_NAME}"
+            VERBATIM)
+    endforeach()
+endfunction()
+
 file(GLOB_RECURSE SHINKOU_ENGINE_SOURCES CONFIGURE_DEPENDS
     "${SHINKOU_ENGINE_ROOT}/src/*.cpp")
+list(FILTER SHINKOU_ENGINE_SOURCES EXCLUDE REGEX "/engine/src/physics/")
+# Keep the standalone visualizer build independent from an editor translation
+# unit that is being completed in another task, while still linking its small
+# file-history data implementation below.
+list(FILTER SHINKOU_ENGINE_SOURCES EXCLUDE REGEX "FileHistory\\.cpp$")
 
 add_library(shinkou_engine STATIC ${SHINKOU_ENGINE_SOURCES})
+# The parallel physics worktree temporarily filters this editor data unit from
+# the source glob; keep the engine target link-complete in that configuration.
+target_sources(shinkou_engine PRIVATE
+    "${SHINKOU_ENGINE_ROOT}/src/editor/FileHistory.cpp")
 set_target_properties(shinkou_engine PROPERTIES OUTPUT_NAME shinkou_engine EXPORT_NAME Engine)
 add_library(ShinkouEngine::Engine ALIAS shinkou_engine)
-target_link_libraries(shinkou_engine PUBLIC shinkou_assets)
+target_link_libraries(shinkou_engine PUBLIC shinkou_assets shinkou_physics)
 if(WIN32)
     target_link_libraries(shinkou_engine PRIVATE comdlg32 shell32)
 endif()
@@ -100,12 +137,6 @@ if(SHINKOU_WITH_VULKAN)
     endif()
 endif()
 
-if(SHINKOU_WITH_PHYSX)
-    target_include_directories(shinkou_engine PRIVATE "${PHYSX_INCLUDE_DIR}")
-    target_link_libraries(shinkou_engine PRIVATE ${PHYSX_LIBRARIES})
-    target_compile_definitions(shinkou_engine PRIVATE SHINKOU_WITH_PHYSX=1)
-endif()
-
 if(SHINKOU_WITH_IMGUI)
     target_include_directories(shinkou_engine PRIVATE "${IMGUI_INCLUDE_DIR}")
     if(IMGUI_LIBRARY)
@@ -145,11 +176,133 @@ if(SHINKOU_WITH_CSHARP)
     )
 endif()
 
+if(SHINKOU_BUILD_PHYSICS_VISUALIZER)
+    set(SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT
+        "${SHINKOU_ENGINE_ROOT}/physics/examples/shaders")
+    set(SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/shinkou_physics_visualizer_shaders")
+    set(SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUTS)
+    find_program(SHINKOU_PHYSICS_VISUALIZER_DXC_EXECUTABLE NAMES dxc dxc.exe)
+    find_program(SHINKOU_PHYSICS_VISUALIZER_GLSLC_EXECUTABLE NAMES glslc glslc.exe)
+    if(SHINKOU_PHYSICS_VISUALIZER_DXC_EXECUTABLE)
+        add_custom_command(
+            OUTPUT
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_vs.dxil"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_ps.dxil"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_vs.dxil"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_ps.dxil"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_DXC_EXECUTABLE}" -E MeshVS -T vs_6_0
+                -Fo "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_vs.dxil"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer.hlsl"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_DXC_EXECUTABLE}" -E MeshPS -T ps_6_0
+                -Fo "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_ps.dxil"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer.hlsl"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_DXC_EXECUTABLE}" -E PresentVS -T vs_6_0
+                -Fo "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_vs.dxil"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer.hlsl"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_DXC_EXECUTABLE}" -E PresentPS -T ps_6_0
+                -Fo "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_ps.dxil"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer.hlsl"
+            DEPENDS "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer.hlsl"
+            VERBATIM)
+        list(APPEND SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUTS
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_vs.dxil"
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_ps.dxil"
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_vs.dxil"
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_ps.dxil")
+    endif()
+    if(SHINKOU_PHYSICS_VISUALIZER_GLSLC_EXECUTABLE)
+        add_custom_command(
+            OUTPUT
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_vs.spv"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_ps.spv"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_vs.spv"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_ps.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_GLSLC_EXECUTABLE}" -fshader-stage=vert
+                -o "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_vs.spv"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_mesh.vert"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_GLSLC_EXECUTABLE}" -fshader-stage=frag
+                -o "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_ps.spv"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_mesh.frag"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_GLSLC_EXECUTABLE}" -fshader-stage=vert
+                -o "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_vs.spv"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_present.vert"
+            COMMAND "${SHINKOU_PHYSICS_VISUALIZER_GLSLC_EXECUTABLE}" -fshader-stage=frag
+                -o "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_ps.spv"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_present.frag"
+            DEPENDS
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_mesh.vert"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_mesh.frag"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_present.vert"
+                "${SHINKOU_PHYSICS_VISUALIZER_SHADER_ROOT}/physics_visualizer_present.frag"
+            VERBATIM)
+        list(APPEND SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUTS
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_vs.spv"
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_mesh_ps.spv"
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_vs.spv"
+            "${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}/physics_visualizer_present_ps.spv")
+    endif()
+    add_executable(shinkou_physics_visualizer
+        "${SHINKOU_ENGINE_ROOT}/physics/examples/PhysicsVisualizer.cpp")
+    target_sources(shinkou_physics_visualizer PRIVATE
+        "${SHINKOU_ENGINE_ROOT}/src/editor/FileHistory.cpp")
+    set_target_properties(shinkou_physics_visualizer PROPERTIES OUTPUT_NAME shinkou_physics_visualizer)
+    target_link_libraries(shinkou_physics_visualizer PRIVATE shinkou_engine)
+    target_compile_definitions(shinkou_physics_visualizer PRIVATE
+        SHINKOU_PHYSICS_SHADER_DIR="${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUT_DIR}")
+    if(SHINKOU_WITH_IMGUI)
+        # The standalone visualizer owns its ImGui context and input bridge;
+        # keep this opt-in so the physics library remains UI-independent.
+        target_include_directories(shinkou_physics_visualizer PRIVATE "${IMGUI_INCLUDE_DIR}")
+        target_compile_definitions(shinkou_physics_visualizer PRIVATE SHINKOU_PHYSICS_VISUALIZER_WITH_IMGUI=1)
+        if(TARGET shinkou_imgui)
+            target_link_libraries(shinkou_physics_visualizer PRIVATE shinkou_imgui)
+        elseif(IMGUI_LIBRARY)
+            target_link_libraries(shinkou_physics_visualizer PRIVATE "${IMGUI_LIBRARY}")
+        endif()
+    endif()
+    if(SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUTS)
+        add_custom_target(shinkou_physics_visualizer_shaders
+            DEPENDS ${SHINKOU_PHYSICS_VISUALIZER_SHADER_OUTPUTS})
+        add_dependencies(shinkou_physics_visualizer shinkou_physics_visualizer_shaders)
+    endif()
+    if(WIN32)
+        target_link_libraries(shinkou_physics_visualizer PRIVATE ws2_32)
+    endif()
+    if(MINGW)
+        target_link_options(shinkou_physics_visualizer PRIVATE
+            -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+        get_filename_component(SHINKOU_MINGW_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        foreach(SHINKOU_RUNTIME_DLL libwinpthread-1.dll)
+            if(EXISTS "${SHINKOU_MINGW_BIN}/${SHINKOU_RUNTIME_DLL}")
+                add_custom_command(TARGET shinkou_physics_visualizer POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${SHINKOU_MINGW_BIN}/${SHINKOU_RUNTIME_DLL}"
+                        "$<TARGET_FILE_DIR:shinkou_physics_visualizer>/${SHINKOU_RUNTIME_DLL}"
+                    VERBATIM)
+            endif()
+        endforeach()
+    endif()
+    shinkou_copy_physx_runtime(shinkou_physics_visualizer)
+endif()
+
 if(WIN32)
     target_link_libraries(shinkou_engine PUBLIC d3d11 d3d12 dxgi d3dcompiler dxguid d2d1 dwrite windowscodecs mfplat mfreadwrite mfuuid propsys gdi32 ws2_32)
-    target_compile_definitions(shinkou_engine PRIVATE SHINKOU_PLATFORM_WINDOWS=1)
+    # Keep the Windows SDK from defining min/max macros in the engine's
+    # portable C++ sources. This is especially important for the editor
+    # translation units, which are also compiled into non-editor tools such as
+    # the physics visualizer.
+    target_compile_definitions(shinkou_engine PRIVATE
+        SHINKOU_PLATFORM_WINDOWS=1
+        NOMINMAX=1
+        WIN32_LEAN_AND_MEAN=1)
 
     if(SHINKOU_BUILD_AUDIO_MIXER_TEST)
+        # This executable owns a normal Win32 window and uses only the
+        # AudioSystem API. It intentionally does not create an Engine window,
+        # renderer, swap chain, or any DX11/DX12/Vulkan presentation surface.
         add_executable(shinkou_audio_mixer_test WIN32
             "${CMAKE_CURRENT_SOURCE_DIR}/Tools/AudioMixerTest/AudioMixerTest.cpp")
         target_compile_features(shinkou_audio_mixer_test PRIVATE cxx_std_17)
@@ -170,36 +323,52 @@ if(SHINKOU_BUILD_SAMPLE)
     set(SHINKOU_SAMPLE_SHADER_OUTPUTS)
     if(SHINKOU_DXC_EXECUTABLE)
         add_custom_command(
-            OUTPUT "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.dxil"
+            OUTPUT "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_vs.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_ps.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_vs.dxil" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_ps.dxil"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}"
             COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E VSMain -T vs_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/sample.hlsl"
             COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E VSMain -T vs_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/sample_mesh.hlsl"
             COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E PSMain -T ps_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/sample.hlsl"
             COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E CSMain -T cs_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/gpu_culling.hlsl"
-            DEPENDS "${SHINKOU_SAMPLE_ROOT}/shaders/sample.hlsl" "${SHINKOU_SAMPLE_ROOT}/shaders/sample_mesh.hlsl" "${SHINKOU_SAMPLE_ROOT}/shaders/gpu_culling.hlsl"
+            COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E VSMain -T vs_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_vs.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/ocean.hlsl"
+            COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E PSMain -T ps_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_ps.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/ocean.hlsl"
+            COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E VSMain -T vs_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_vs.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/buoy.hlsl"
+            COMMAND "${SHINKOU_DXC_EXECUTABLE}" -E PSMain -T ps_6_0 -Fo "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_ps.dxil" "${SHINKOU_SAMPLE_ROOT}/shaders/buoy.hlsl"
+            DEPENDS "${SHINKOU_SAMPLE_ROOT}/shaders/sample.hlsl" "${SHINKOU_SAMPLE_ROOT}/shaders/sample_mesh.hlsl" "${SHINKOU_SAMPLE_ROOT}/shaders/gpu_culling.hlsl" "${SHINKOU_SAMPLE_ROOT}/shaders/ocean.hlsl" "${SHINKOU_SAMPLE_ROOT}/shaders/buoy.hlsl"
             VERBATIM
         )
         list(APPEND SHINKOU_SAMPLE_SHADER_OUTPUTS
             "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.dxil"
             "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.dxil"
-            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.dxil")
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.dxil"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_vs.dxil"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_ps.dxil"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_vs.dxil"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_ps.dxil")
             list(APPEND SHINKOU_SAMPLE_SHADER_OUTPUTS "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.dxil")
     endif()
     if(SHINKOU_GLSLC_EXECUTABLE)
         add_custom_command(
-            OUTPUT "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.spv"
+            OUTPUT "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_vs.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_ps.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_vs.spv" "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_ps.spv"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}"
             COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=vert -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/sample.vert"
             COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=vert -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/sample_mesh.vert"
             COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=frag -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/sample.frag"
             COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=comp -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/gpu_culling.comp"
-            DEPENDS "${SHINKOU_SAMPLE_ROOT}/shaders/sample.vert" "${SHINKOU_SAMPLE_ROOT}/shaders/sample_mesh.vert" "${SHINKOU_SAMPLE_ROOT}/shaders/sample.frag" "${SHINKOU_SAMPLE_ROOT}/shaders/gpu_culling.comp"
+            COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=vert -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_vs.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/ocean.vert"
+            COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=frag -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_ps.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/ocean.frag"
+            COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=vert -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_vs.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/buoy.vert"
+            COMMAND "${SHINKOU_GLSLC_EXECUTABLE}" -fshader-stage=frag -o "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_ps.spv" "${SHINKOU_SAMPLE_ROOT}/shaders/buoy.frag"
+            DEPENDS "${SHINKOU_SAMPLE_ROOT}/shaders/sample.vert" "${SHINKOU_SAMPLE_ROOT}/shaders/sample_mesh.vert" "${SHINKOU_SAMPLE_ROOT}/shaders/sample.frag" "${SHINKOU_SAMPLE_ROOT}/shaders/gpu_culling.comp" "${SHINKOU_SAMPLE_ROOT}/shaders/ocean.vert" "${SHINKOU_SAMPLE_ROOT}/shaders/ocean.frag" "${SHINKOU_SAMPLE_ROOT}/shaders/buoy.vert" "${SHINKOU_SAMPLE_ROOT}/shaders/buoy.frag"
             VERBATIM
         )
         list(APPEND SHINKOU_SAMPLE_SHADER_OUTPUTS
             "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_vs.spv"
             "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_mesh_vs.spv"
-            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.spv")
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/sample_ps.spv"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_vs.spv"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/ocean_ps.spv"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_vs.spv"
+            "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/buoy_ps.spv")
             list(APPEND SHINKOU_SAMPLE_SHADER_OUTPUTS "${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}/gpu_culling.spv")
     endif()
     if(SHINKOU_SAMPLE_SHADER_OUTPUTS)
@@ -214,8 +383,28 @@ if(SHINKOU_BUILD_SAMPLE)
     target_compile_definitions(shinkou_engine_sample PRIVATE
         SHINKOU_SAMPLE_SHADER_DIR="${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}"
         SHINKOU_SAMPLE_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_executable(shinkou_ocean_demo "${SHINKOU_SAMPLE_ROOT}/OceanSample.cpp")
+    set_target_properties(shinkou_ocean_demo PROPERTIES OUTPUT_NAME shinkou_ocean_demo)
+    target_link_libraries(shinkou_ocean_demo PRIVATE shinkou_engine)
+    if(WIN32)
+        target_link_libraries(shinkou_ocean_demo PRIVATE ws2_32)
+    endif()
+    target_compile_definitions(shinkou_ocean_demo PRIVATE
+        SHINKOU_SAMPLE_SHADER_DIR="${SHINKOU_SAMPLE_SHADER_OUTPUT_DIR}"
+        SHINKOU_SAMPLE_SOURCE_DIR="${SHINKOU_SAMPLE_ROOT}")
+    if(SHINKOU_WITH_IMGUI)
+        target_include_directories(shinkou_ocean_demo PRIVATE "${IMGUI_INCLUDE_DIR}")
+        target_compile_definitions(shinkou_ocean_demo PRIVATE SHINKOU_OCEAN_WITH_IMGUI=1)
+        if(TARGET shinkou_imgui)
+            target_link_libraries(shinkou_ocean_demo PRIVATE shinkou_imgui)
+        elseif(IMGUI_LIBRARY)
+            target_link_libraries(shinkou_ocean_demo PRIVATE "${IMGUI_LIBRARY}")
+        endif()
+    endif()
     if(MINGW)
         target_link_options(shinkou_engine_sample PRIVATE
+            -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+        target_link_options(shinkou_ocean_demo PRIVATE
             -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
         get_filename_component(SHINKOU_MINGW_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
         foreach(SHINKOU_RUNTIME_DLL libwinpthread-1.dll)
@@ -225,11 +414,17 @@ if(SHINKOU_BUILD_SAMPLE)
                         "${SHINKOU_MINGW_BIN}/${SHINKOU_RUNTIME_DLL}"
                         "$<TARGET_FILE_DIR:shinkou_engine_sample>/${SHINKOU_RUNTIME_DLL}"
                     VERBATIM)
+                add_custom_command(TARGET shinkou_ocean_demo POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${SHINKOU_MINGW_BIN}/${SHINKOU_RUNTIME_DLL}"
+                        "$<TARGET_FILE_DIR:shinkou_ocean_demo>/${SHINKOU_RUNTIME_DLL}"
+                    VERBATIM)
             endif()
         endforeach()
     endif()
     if(TARGET shinkou_sample_shaders)
         add_dependencies(shinkou_engine_sample shinkou_sample_shaders)
+        add_dependencies(shinkou_ocean_demo shinkou_sample_shaders)
     endif()
 endif()
 
@@ -348,6 +543,10 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_render_graph_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_render_graph_tests COMMAND shinkou_render_graph_tests)
 
+        add_executable(shinkou_render_geometry_tests "${SHINKOU_TEST_ROOT}/RenderGeometryTests.cpp")
+        target_link_libraries(shinkou_render_geometry_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_render_geometry_tests COMMAND shinkou_render_geometry_tests)
+
         add_executable(shinkou_gpu_memory_allocator_tests "${SHINKOU_TEST_ROOT}/GpuMemoryAllocatorTests.cpp")
         target_link_libraries(shinkou_gpu_memory_allocator_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_gpu_memory_allocator_tests COMMAND shinkou_gpu_memory_allocator_tests)
@@ -427,6 +626,10 @@ if(SHINKOU_BUILD_TESTS)
         add_executable(shinkou_math_tests "${SHINKOU_TEST_ROOT}/MathTests.cpp")
         target_link_libraries(shinkou_math_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_math_tests COMMAND shinkou_math_tests)
+
+        add_executable(shinkou_physics_world_tests "${SHINKOU_TEST_ROOT}/PhysicsWorldTests.cpp")
+        target_link_libraries(shinkou_physics_world_tests PRIVATE shinkou_physics)
+        add_test(NAME shinkou_physics_world_tests COMMAND shinkou_physics_world_tests)
 
         add_executable(shinkou_editor_ui_model_tests "${SHINKOU_TEST_ROOT}/EditorUiModelTests.cpp")
         target_link_libraries(shinkou_editor_ui_model_tests PRIVATE shinkou_engine)
@@ -571,7 +774,7 @@ if(SHINKOU_BUILD_TESTS)
             shinkou_render_graph_tests shinkou_gpu_memory_allocator_tests shinkou_texture_model_tests shinkou_texture_backend_mapping_tests shinkou_pbr_render_pipeline_tests shinkou_lighting_pipeline_tests shinkou_shader_pipeline_library_tests shinkou_render_capture_budget_tests shinkou_advanced_render_features_tests shinkou_render_feature_graph_builder_tests shinkou_renderer_diagnostics_service_tests shinkou_render_graph_scheduler_tests shinkou_queue_sync_tests
             shinkou_render_feature_graph_builder_tests shinkou_descriptor_allocator_tests
             shinkou_audio_tests shinkou_assets_tests shinkou_input_tests
-            shinkou_game_object_tests shinkou_reflection_tests shinkou_animation_tests shinkou_math_tests
+            shinkou_game_object_tests shinkou_reflection_tests shinkou_animation_tests shinkou_math_tests shinkou_physics_world_tests
             shinkou_editor_ui_model_tests shinkou_file_system_tests shinkou_editor_command_bus_tests shinkou_editor_selection_tests shinkou_render_view_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_asset_icon_library_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests shinkou_editor_compile_commands_tests shinkou_editor_asset_index_tests shinkou_editor_audio_preview_tests shinkou_editor_image_preview_tests shinkou_editor_video_preview_tests
             shinkou_editor_model_preview_tests shinkou_editor_model_preview_scene_tests shinkou_editor_model_preview_renderer_tests shinkou_editor_gltf_preview_tests shinkou_math_parallel_tests shinkou_math_advanced_tests shinkou_network_tests)
         if(SHINKOU_WITH_SPDLOG)
@@ -604,6 +807,10 @@ endif()
 if(SHINKOU_BUILD_BENCHMARKS)
     add_executable(shinkou_math_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/MathBenchmarks.cpp")
     target_link_libraries(shinkou_math_benchmarks PRIVATE shinkou_engine)
+    add_executable(shinkou_render_geometry_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/RenderGeometryBenchmarks.cpp")
+    target_link_libraries(shinkou_render_geometry_benchmarks PRIVATE shinkou_engine)
+    add_executable(shinkou_physics_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/PhysicsBenchmarks.cpp")
+    target_link_libraries(shinkou_physics_benchmarks PRIVATE shinkou_physics)
     add_executable(shinkou_object_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/ObjectBenchmarks.cpp")
     target_link_libraries(shinkou_object_benchmarks PRIVATE shinkou_engine)
     if(SHINKOU_ENABLE_AVX2)
@@ -619,14 +826,18 @@ if(SHINKOU_BUILD_BENCHMARKS)
     endif()
     if(MSVC)
         target_compile_options(shinkou_math_benchmarks PRIVATE /O2)
+        target_compile_options(shinkou_render_geometry_benchmarks PRIVATE /O2)
         target_compile_options(shinkou_object_benchmarks PRIVATE /O2)
+        target_compile_options(shinkou_physics_benchmarks PRIVATE /O2)
     else()
         target_compile_options(shinkou_math_benchmarks PRIVATE -O3)
+        target_compile_options(shinkou_render_geometry_benchmarks PRIVATE -O3)
         target_compile_options(shinkou_object_benchmarks PRIVATE -O3)
+        target_compile_options(shinkou_physics_benchmarks PRIVATE -O3)
     endif()
 endif()
 
-install(TARGETS shinkou_engine shinkou_assets
+install(TARGETS shinkou_physics shinkou_engine shinkou_assets
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
@@ -639,7 +850,11 @@ message(STATUS "ShinkouEngine optional capabilities:")
 message(STATUS "  SDL3 input DLL: ${SHINKOU_ENABLE_SDL3_INPUT}")
 message(STATUS "  spdlog:     ${SHINKOU_WITH_SPDLOG}")
 message(STATUS "  Vulkan:     ${SHINKOU_WITH_VULKAN}")
+message(STATUS "  Physics library: ON")
+message(STATUS "  Physics example: ${SHINKOU_BUILD_PHYSICS_EXAMPLE}")
 message(STATUS "  PhysX:      ${SHINKOU_WITH_PHYSX}")
+message(STATUS "  PhysX Extensions: ${SHINKOU_WITH_PHYSX_EXTENSIONS}")
+message(STATUS "  PhysX Cooking: ${SHINKOU_WITH_PHYSX_COOKING}")
 message(STATUS "  ImGui:      ${SHINKOU_WITH_IMGUI}")
 message(STATUS "  miniaudio:  ${SHINKOU_WITH_MINIAUDIO}")
 message(STATUS "  Lua:        ${SHINKOU_WITH_LUA}")

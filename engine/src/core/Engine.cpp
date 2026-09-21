@@ -1,7 +1,6 @@
 #include <cstdlib>
 #include "shinkou/Engine.h"
 #include "shinkou/ui/Performance.h"
-#include "shinkou/physics/SimplePhysicsWorld.h"
 #include <algorithm>
 #include <chrono>
 #include <thread>
@@ -30,7 +29,8 @@ audio::AudioConfig audio_config_for(const EngineConfig& config) {
 } // namespace
 
 Engine::Engine(const EngineConfig& config)
-    : config_(config), assets_(asset_config_for(config)), renderer_(config.renderBackend), physics_(std::make_unique<physics::SimplePhysicsWorld>()),
+    : config_(config), assets_(asset_config_for(config)), renderer_(config.renderBackend),
+      physics_(config.enablePhysics ? physics::create_physics_world(config.physics) : nullptr),
       audio_(audio::create_audio_backend(), audio_config_for(config)), network_(config.network), input_(input::create_sdl3_input_backend()),
       scripts_(scripting::create_runtime(scripting::Language::CSharp)) {
     if (!log::initialize(config_.logging)) return;
@@ -70,7 +70,7 @@ bool Engine::initialize() {
         });
         editor_.set_display_size(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_), window_.dpi_scale());
         window_.set_menu_command_handler([this](std::uint32_t command) {
-            if (command == 49001 && std::getenv("SHINKOU_UI_CAPTURE_PATH") && renderer_.backend()) renderer_.backend()->request_ui_capture();
+            if (command == 49001 && std::getenv("SHINKOU_UI_CAPTURE_PATH")) renderer_.request_ui_capture();
             else editor_.handle_native_menu_command(command, world_);
         });
     }
@@ -82,7 +82,7 @@ bool Engine::initialize() {
     }
     if (config_.editor && !config_.editorProjectRoot.empty())
         editor_.set_project_root(config_.editorProjectRoot);
-    if (!physics_ || !audio_.initialize() || !input_.initialize() || !scripts_.initialize()) {
+    if (!audio_.initialize() || !input_.initialize() || !scripts_.initialize()) {
         SHINKOU_LOG_ERROR("Engine subsystem initialization failed");
         shutdown();
         return false;
@@ -151,7 +151,7 @@ void Engine::tick(Seconds dt) {
         return;
     }
     if (!config_.editor || editor_.consume_simulation_step()) {
-        physics_->step(lastDeltaSeconds_);
+        if (physics_) physics_->step(lastDeltaSeconds_);
         world_.update(lastDeltaSeconds_);
     }
     audio_.update(lastDeltaSeconds_);

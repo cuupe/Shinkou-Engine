@@ -19,10 +19,10 @@ VertexOutput VSMain(uint vertexId : SV_VertexID) {
     };
     VertexOutput output;
     const float4 localPosition = float4(positions[vertexId], 0.0, 1.0);
-    const float4 worldPosition = mul(localPosition, model);
+    const float4 worldPosition = mul(model, localPosition);
     output.position = cameraPositionAndFlags.w > 1.5
         ? localPosition
-        : mul(worldPosition, viewProjection);
+        : mul(viewProjection, worldPosition);
     output.uv = positions[vertexId] * 0.5 + 0.5;
     return output;
 }

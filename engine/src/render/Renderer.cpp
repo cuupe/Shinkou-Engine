@@ -44,6 +44,11 @@ bool rect_inside(const EditorViewportRect& child, const EditorViewportRect& pare
 
 std::string pipeline_cache_key(const PipelineDesc& description) {
     std::string key;
+    // Pipeline names are identity, not presentation metadata: Vulkan binds a
+    // native pipeline to the active render pass, so two separately named
+    // logical pipelines must not alias even when their fixed state matches.
+    key += description.name;
+    key.push_back(':');
     key += std::to_string(description.vertexShader);
     key.push_back(':');
     key += std::to_string(description.fragmentShader);
@@ -80,18 +85,29 @@ std::string shader_cache_key(const ShaderDesc& description, BackendApi backend) 
     return std::to_string(shader_variant_hash(description, backend));
 }
 
+bool same_handle(ResourceHandle left, ResourceHandle right) noexcept {
+    return left.id != 0 && left.id == right.id && left.kind == right.kind;
+}
+
+bool binding_references(const DescriptorBinding& binding, ResourceHandle handle) noexcept {
+    if (same_handle(binding.resource, handle)) return true;
+    return std::any_of(binding.resources.begin(), binding.resources.end(),
+        [handle](ResourceHandle resource) { return same_handle(resource, handle); });
+}
+
 void retain_buffer_update(BufferDesc& description, const BufferUpdate& update) {
     if (!description.retainCpuCopy) return;
     if (description.initialData.size() != description.size) description.initialData.resize(description.size, 0);
     std::copy(update.data.begin(), update.data.end(), description.initialData.begin() + static_cast<std::ptrdiff_t>(update.offset));
 }
 
-std::size_t texture_bytes_per_pixel(std::string_view format) {
-    return format == "rgba16f" ? 8u : 4u;
+std::size_t texture_bytes_per_pixel(const TextureDesc& description) {
+    return texture_format_bytes_per_pixel(texture_format_of(description));
 }
 
 bool retain_cpu_generated_mips(TextureDesc& description) {
-    if (!description.retainCpuCopy || description.format != "rgba8" || description.layers != 1 || description.mipLevels <= 1) return false;
+    if (!description.retainCpuCopy || texture_format_of(description) != TextureFormat::RGBA8Unorm ||
+        description.layers != 1 || description.mipLevels <= 1) return false;
     const auto baseWidth = description.width;
     const auto baseHeight = description.height;
     const auto baseSize = static_cast<std::size_t>(baseWidth) * baseHeight * 4u;
@@ -146,7 +162,8 @@ void retain_texture_update(TextureDesc& description, const TextureUpdate& update
     if (!description.retainCpuCopy) return;
     const auto mipWidth = std::max(1u, description.width >> update.mipLevel);
     const auto mipHeight = std::max(1u, description.height >> update.mipLevel);
-    const auto bytesPerPixel = texture_bytes_per_pixel(description.format);
+    const auto bytesPerPixel = texture_bytes_per_pixel(description);
+    if (bytesPerPixel == 0) return;
     const auto fullPitch = static_cast<std::size_t>(mipWidth) * bytesPerPixel;
     const auto existing = std::find_if(description.initialSubresources.begin(), description.initialSubresources.end(),
         [&](const TextureDesc::SubresourceData& subresource) {
@@ -459,7 +476,15 @@ bool Renderer::restore_persistent_state(IRenderBackend& backend) {
 
 Renderer::~Renderer() {
     if (!backend_) return;
+    // Persistent resources are destroyed before the backend itself.  Wait for
+    // all submitted work first; Vulkan explicitly forbids destroying buffers,
+    // descriptor sets, or pipelines still referenced by a command buffer.
+    backend_->wait_idle();
     if (imguiReady_) backend_->shutdown_imgui();
+    for (const auto& table : persistentBindlessTables_) {
+        if (table.backendHandle) backend_->destroy_bindless_table(table.backendHandle);
+    }
+    persistentBindlessTables_.clear();
     while (!persistentResources_.empty()) {
         backend_->destroy_resource(persistentResources_.back().handle);
         persistentResources_.pop_back();
@@ -572,6 +597,7 @@ bool Renderer::initialize_imgui() {
 }
 
 void Renderer::shutdown_imgui() {
+    if (backend_ && imguiReady_) backend_->wait_idle();
     if (backend_) backend_->shutdown_imgui();
     imguiReady_ = false;
     imguiDrawData_ = nullptr;
@@ -633,11 +659,18 @@ bool Renderer::resize(std::uint32_t width, std::uint32_t height) {
 }
 
 ResourceHandle Renderer::create_texture(const TextureDesc& description) {
-    if (description.width == 0 || description.height == 0 || description.layers == 0 || description.mipLevels == 0) {
-        lastError_ = "texture dimensions, layers, and mipLevels must be non-zero";
+    if (description.width == 0 || description.height == 0 || description.layers == 0) {
+        lastError_ = "texture dimensions and layers must be non-zero";
         return {};
     }
     auto persistentDescription = description;
+    if (persistentDescription.mipLevels == 0) {
+        persistentDescription.mipLevels = texture_full_mip_count(persistentDescription);
+        if (persistentDescription.mipLevels == 0) {
+            lastError_ = "texture mip chain is empty";
+            return {};
+        }
+    }
     if (persistentDescription.generateMips) retain_cpu_generated_mips(persistentDescription);
     const auto handle = allocate_persistent_resource(ResourceKind::Texture2D);
     if (!handle) { lastError_ = "persistent resource handle space is exhausted"; return {}; }
@@ -665,14 +698,22 @@ ResourceHandle Renderer::create_sampler(const SamplerDesc& description) {
 }
 
 ResourceHandle Renderer::create_depth_stencil(const TextureDesc& description) {
-    if (description.width == 0 || description.height == 0 || description.layers == 0 || description.mipLevels == 0) {
-        lastError_ = "depth-stencil dimensions, layers, and mipLevels must be non-zero";
+    if (description.width == 0 || description.height == 0 || description.layers == 0) {
+        lastError_ = "depth-stencil dimensions and layers must be non-zero";
         return {};
+    }
+    auto persistentDescription = description;
+    if (persistentDescription.mipLevels == 0) {
+        persistentDescription.mipLevels = texture_full_mip_count(persistentDescription);
+        if (persistentDescription.mipLevels == 0) {
+            lastError_ = "depth-stencil mip chain is empty";
+            return {};
+        }
     }
     const auto handle = allocate_persistent_resource(ResourceKind::DepthStencil);
     if (!handle) { lastError_ = "persistent resource handle space is exhausted"; return {}; }
-    persistentResources_.push_back({handle, description});
-    if (backend_ && initialized_ && !backend_->create_resource(handle, description)) {
+    persistentResources_.push_back({handle, persistentDescription});
+    if (backend_ && initialized_ && !backend_->create_resource(handle, persistentDescription)) {
         lastError_ = backend_->last_error();
         backend_->destroy_resource(handle);
         persistentResources_.pop_back();
@@ -938,6 +979,32 @@ void Renderer::destroy_resource(ResourceHandle handle) {
         lastError_ = "destroy_resource received an unknown persistent resource handle";
         return;
     }
+    const auto referencedByPersistentResource = std::any_of(persistentResources_.begin(), persistentResources_.end(),
+        [handle](const PersistentResource& resource) {
+            if (same_handle(resource.handle, handle)) return false;
+            if (resource.handle.kind == ResourceKind::Pipeline && handle.kind == ResourceKind::Shader) {
+                const auto* pipeline = std::get_if<PipelineDesc>(&resource.description);
+                return pipeline && (pipeline->vertexShader == handle.id || pipeline->fragmentShader == handle.id ||
+                    pipeline->computeShader == handle.id);
+            }
+            if (resource.handle.kind == ResourceKind::Material) {
+                const auto* material = std::get_if<MaterialDesc>(&resource.description);
+                if (!material) return false;
+                if (same_handle(material->pipeline, handle)) return true;
+                return std::any_of(material->bindings.begin(), material->bindings.end(),
+                    [handle](const DescriptorBinding& binding) { return binding_references(binding, handle); });
+            }
+            return false;
+        });
+    const auto referencedByBindlessTable = std::any_of(persistentBindlessTables_.begin(), persistentBindlessTables_.end(),
+        [handle](const PersistentBindlessTable& table) {
+            return std::any_of(table.entries.begin(), table.entries.end(),
+                [handle](const auto& entry) { return same_handle(entry.second, handle); });
+        });
+    if (referencedByPersistentResource || referencedByBindlessTable) {
+        lastError_ = "cannot destroy a persistent resource while it is referenced by another renderer resource";
+        return;
+    }
     if (initialized_ && backend_) backend_->destroy_resource(handle);
     persistentResources_.erase(std::remove_if(persistentResources_.begin(), persistentResources_.end(),
         [handle](const PersistentResource& resource) {
@@ -989,9 +1056,9 @@ bool Renderer::update_texture(const TextureUpdate& update) {
     auto* texture = std::get_if<TextureDesc>(&found->description);
     const auto mipWidth = texture ? std::max(1u, texture->width >> update.mipLevel) : 0u;
     const auto mipHeight = texture ? std::max(1u, texture->height >> update.mipLevel) : 0u;
-    const auto bytesPerPixel = texture ? texture_bytes_per_pixel(texture->format) : 0u;
+    const auto bytesPerPixel = texture ? texture_bytes_per_pixel(*texture) : 0u;
     const auto sourcePitch = update.rowPitch == 0 ? static_cast<std::size_t>(update.width) * bytesPerPixel : update.rowPitch;
-    if (!texture || update.mipLevel >= texture->mipLevels || update.layer >= texture->layers || update.data.empty() ||
+    if (!texture || bytesPerPixel == 0 || update.mipLevel >= texture->mipLevels || update.layer >= texture->layers || update.data.empty() ||
         update.width == 0 || update.height == 0 || update.x > mipWidth || update.y > mipHeight ||
         update.width > mipWidth - update.x || update.height > mipHeight - update.y ||
         sourcePitch < static_cast<std::size_t>(update.width) * bytesPerPixel ||
@@ -1027,8 +1094,8 @@ bool Renderer::read_texture(const TextureReadbackRequest& request, TextureReadba
     const auto mipHeight = std::max(1u, texture->height >> request.mipLevel);
     const auto readWidth = request.width == 0 ? mipWidth : request.width;
     const auto readHeight = request.height == 0 ? mipHeight : request.height;
-    const auto bytesPerPixel = texture_bytes_per_pixel(texture->format);
-    if (request.x > mipWidth || request.y > mipHeight || readWidth == 0 || readHeight == 0 ||
+    const auto bytesPerPixel = texture_bytes_per_pixel(*texture);
+    if (bytesPerPixel == 0 || request.x > mipWidth || request.y > mipHeight || readWidth == 0 || readHeight == 0 ||
         readWidth > mipWidth - request.x || readHeight > mipHeight - request.y ||
         readWidth > std::numeric_limits<std::size_t>::max() / bytesPerPixel ||
         readWidth * bytesPerPixel > std::numeric_limits<std::size_t>::max() / readHeight ||
@@ -1171,6 +1238,31 @@ const RenderCapabilities Renderer::capabilities() const noexcept {
 
 const RenderStats Renderer::stats() const noexcept {
     return backend_ ? backend_->stats() : RenderStats{};
+}
+
+bool Renderer::execute_graph(RenderGraph& graph, std::string* error) {
+    if (error) error->clear();
+    if (!backend_ || !initialized_) {
+        const auto reason = lastError_.empty() ? std::string("renderer is not initialized") : lastError_;
+        if (error) *error = reason;
+        lastError_ = reason;
+        return false;
+    }
+    graph.execute(*backend_, error);
+    if (error && !error->empty()) {
+        lastError_ = *error;
+        return false;
+    }
+    if (!backend_->last_error().empty()) {
+        lastError_ = backend_->last_error();
+        if (error) *error = lastError_;
+        return false;
+    }
+    return true;
+}
+
+void Renderer::request_ui_capture() noexcept {
+    if (backend_ && initialized_) backend_->request_ui_capture();
 }
 
 void Renderer::submit() {

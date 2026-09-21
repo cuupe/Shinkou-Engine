@@ -33,6 +33,10 @@ struct MeshRendererComponent {
     bool gpuDriven{false};
     math::Vec3 boundsCenter{};
     float boundsRadius{1.0f};
+    // Range within shared geometry buffers. Appended to preserve existing
+    // aggregate initialization at call sites.
+    std::uint32_t firstIndex{0};
+    std::int32_t vertexOffset{0};
 };
 
 struct SpriteRendererComponent {
@@ -124,6 +128,8 @@ struct MeshRenderItem {
     bool gpuDriven{false};
     math::Vec3 boundsCenter{};
     float boundsRadius{1.0f};
+    std::uint32_t firstIndex{0};
+    std::int32_t vertexOffset{0};
 };
 
 struct SpriteRenderItem {

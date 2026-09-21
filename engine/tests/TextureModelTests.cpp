@@ -127,7 +127,11 @@ int main() {
 
     if (texture_format_from_name("RGBA16FLOAT") != TextureFormat::RGBA16Float ||
         texture_format_name(TextureFormat::D24UnormS8Uint) != "d24s8" ||
-        texture_full_mip_count(volume) != 8) return 11;
+        texture_full_mip_count(volume) != 8 ||
+        texture_format_of(TextureDesc{1, 1, 1, 1, "rgba8", false, false, {}, false, "linear", false, {}, true,
+            TextureDimension::Texture2D, 1, TextureFormat::RGBA16Float}) != TextureFormat::RGBA16Float ||
+        texture_format_bytes_per_pixel(TextureFormat::RGBA16Float) != 8u ||
+        texture_format_bytes_per_pixel(TextureFormat::BC7RGBAUnorm) != 0u) return 11;
 
     std::cout << "texture model tests passed\n";
     return 0;

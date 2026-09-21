@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <utility>
 #include <vector>
 
 int main() {
@@ -55,9 +56,28 @@ int main() {
     allocator.release_transient_alias_plan(plan);
     assert(!plan.materialized);
 
+    const std::vector<TransientResourceRequest> incompatibleRequests{
+        {10, 128, 32, 0, 0, 0, 0, 0, 100},
+        {11, 128, 32, 0, 1, 1, 1, 1, 200},
+    };
+    TransientAliasPlanOptions compatibilityOptions;
+    compatibilityOptions.canAlias = [](const auto& left, const auto& right) {
+        return left.compatibilityKey == right.compatibilityKey;
+    };
+    const auto incompatiblePlan = allocator.plan_transient_aliases(incompatibleRequests, compatibilityOptions);
+    assert(incompatiblePlan.valid);
+    assert(incompatiblePlan.aliasCount == 0);
+    assert(incompatiblePlan.slots.size() == 2);
+
     const auto invalid = allocator.plan_transient_aliases({{5, 8, 3, 0, 0, 0}});
     assert(!invalid.valid);
     assert(!invalid.error.empty());
+
+    GpuMemoryAllocator movedFrom({256, 512});
+    GpuMemoryAllocator movedTo(std::move(movedFrom));
+    assert(movedFrom.reset(GpuMemoryLifetime::Transient) == 0);
+    assert(movedFrom.stats().committedBytes == 0);
+    assert(movedTo.allocate(32, 16));
 
     std::cout << "gpu memory allocator tests passed\n";
     return 0;

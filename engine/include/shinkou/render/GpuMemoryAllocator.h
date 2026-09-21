@@ -101,6 +101,10 @@ struct TransientResourceRequest {
     std::size_t lastUse{0};
     std::size_t firstPass{0};
     std::size_t lastPass{0};
+    // Full descriptor identity used by the render graph. memoryType selects
+    // the allocator pool; this field prevents hash truncation or pool-level
+    // collisions from turning into unsafe resource aliasing.
+    std::uint64_t compatibilityKey{0};
 };
 
 struct TransientAliasPlanOptions {

@@ -38,6 +38,7 @@
 #include <imgui.h>
 #if defined(SHINKOU_PLATFORM_WINDOWS)
 #include <backends/imgui_impl_dx11.h>
+#include <backends/imgui_impl_dx12.h>
 #endif
 #if defined(SHINKOU_WITH_VULKAN)
 #include <backends/imgui_impl_vulkan.h>
@@ -93,10 +94,20 @@ const char* descriptor_type_name(DescriptorType type) {
     return "unknown";
 }
 
+std::uint32_t descriptor_binding_resource_count(const DescriptorBinding& binding) noexcept {
+    const auto count = binding.resources.empty()
+        ? (binding.resource ? std::size_t{1} : std::size_t{0})
+        : binding.resources.size();
+    return count > std::numeric_limits<std::uint32_t>::max()
+        ? 0u : static_cast<std::uint32_t>(count);
+}
+
 bool shader_binding_matches(const ShaderBinding& reflected, const DescriptorBinding& requested) {
+    const auto resourceCount = descriptor_binding_resource_count(requested);
     return reflected.slot == requested.slot && reflected.space == requested.space &&
-        reflected.type == descriptor_type_name(requested.type) && reflected.count == requested.count &&
-        reflected.unbounded == requested.unbounded;
+        reflected.type == descriptor_type_name(requested.type) &&
+        reflected.unbounded == requested.unbounded &&
+        (reflected.unbounded ? resourceCount != 0u : reflected.count == resourceCount);
 }
 
 bool validate_backend_shader_layout(const std::vector<ShaderBinding>& bindings, std::string& error) {
@@ -125,7 +136,11 @@ bool is_supported_color_format(std::string_view format) {
 }
 
 bool is_supported_pipeline_depth_format(std::string_view format) {
-    return format == "d24s8" || format == "none";
+    return format == "d24s8" || format == "d32f" || format == "none";
+}
+
+bool is_supported_sample_count(std::uint32_t sampleCount) {
+    return sampleCount == 1 || sampleCount == 2 || sampleCount == 4 || sampleCount == 8;
 }
 
 bool resource_description_matches_kind(ResourceKind kind, const ResourceDesc& description) {
@@ -170,6 +185,29 @@ bool prepare_backend_texture(const TextureDesc& description, BackendApi backend,
     }
     plan = mapped.plan;
     return true;
+}
+
+bool indirect_arguments_fit(std::size_t bufferSize, const IndirectMeshDraw& draw) noexcept {
+    constexpr std::size_t commandBytes = sizeof(std::uint32_t) * 5u;
+    // The backend contract uses the native five-DWORD indexed draw command.
+    // D3D12 encodes the stride in the command signature, so accepting a
+    // larger caller stride would make the three backends interpret the same
+    // argument buffer differently.
+    if (draw.maxDrawCount == 0 || draw.stride != commandBytes || draw.argumentOffset > bufferSize ||
+        bufferSize - draw.argumentOffset < commandBytes) return false;
+    const auto lastCommand = static_cast<std::size_t>(draw.maxDrawCount - 1u);
+    const auto remaining = bufferSize - draw.argumentOffset - commandBytes;
+    return lastCommand <= remaining / draw.stride;
+}
+
+bool indexed_range_fits(std::size_t bufferSize, std::uint32_t firstIndex,
+                        std::uint32_t indexCount) noexcept {
+    constexpr std::size_t indexBytes = sizeof(std::uint32_t);
+    if (indexCount == 0 || firstIndex > std::numeric_limits<std::size_t>::max() / indexBytes ||
+        indexCount > std::numeric_limits<std::size_t>::max() / indexBytes) return false;
+    const auto firstByte = static_cast<std::size_t>(firstIndex) * indexBytes;
+    const auto countBytes = static_cast<std::size_t>(indexCount) * indexBytes;
+    return firstByte <= bufferSize && countBytes <= bufferSize - firstByte;
 }
 }
 
@@ -401,12 +439,14 @@ class DirectX11Backend final : public IRenderBackend {
         UINT stride{0};
         bool indexBuffer{false};
         bool constantBuffer{false};
+        std::size_t logicalSize{0};
         std::size_t size{0};
         DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
         std::uint32_t width{1};
         std::uint32_t height{1};
         std::uint32_t mipLevels{1};
         std::uint32_t layers{1};
+        std::uint32_t sampleCount{1};
         bool generateMips{false};
         ResourceUsage usage{ResourceUsage::Unknown};
         bool alias{false};
@@ -419,13 +459,15 @@ class DirectX11Backend final : public IRenderBackend {
         ResourceRecord(ResourceRecord&& other) noexcept
             : kind(other.kind), resource(other.resource), srv(other.srv), uav(other.uav), rtv(other.rtv), dsv(other.dsv), sampler(other.sampler),
               vertexShader(other.vertexShader), pixelShader(other.pixelShader), computeShader(other.computeShader),
-              inputLayout(other.inputLayout), shaderBytecode(std::move(other.shaderBytecode)), blendState(other.blendState), depthState(other.depthState), rasterState(other.rasterState), stride(other.stride), indexBuffer(other.indexBuffer), constantBuffer(other.constantBuffer), size(other.size),
-              format(other.format), width(other.width), height(other.height), mipLevels(other.mipLevels), layers(other.layers), generateMips(other.generateMips), usage(other.usage),
-              pipeline(std::move(other.pipeline)), material(std::move(other.material)), shaderBindings(std::move(other.shaderBindings)) {
+              inputLayout(other.inputLayout), shaderBytecode(std::move(other.shaderBytecode)), blendState(other.blendState), depthState(other.depthState), rasterState(other.rasterState), stride(other.stride), indexBuffer(other.indexBuffer), constantBuffer(other.constantBuffer), logicalSize(other.logicalSize), size(other.size),
+              format(other.format), width(other.width), height(other.height), mipLevels(other.mipLevels), layers(other.layers), sampleCount(other.sampleCount), generateMips(other.generateMips), usage(other.usage),
+              alias(other.alias), pipeline(std::move(other.pipeline)), material(std::move(other.material)), shaderBindings(std::move(other.shaderBindings)) {
             other.resource = nullptr; other.srv = nullptr; other.uav = nullptr; other.rtv = nullptr; other.dsv = nullptr;
             other.sampler = nullptr;
             other.vertexShader = nullptr; other.pixelShader = nullptr; other.computeShader = nullptr;
             other.inputLayout = nullptr; other.blendState = nullptr; other.depthState = nullptr; other.rasterState = nullptr;
+            other.alias = false;
+            other.logicalSize = 0;
         }
         ~ResourceRecord() {
             if (computeShader) computeShader->Release();
@@ -453,6 +495,8 @@ class DirectX11Backend final : public IRenderBackend {
     bool vsync_{true};
     std::uint32_t width_{1280};
     std::uint32_t height_{720};
+    std::uint32_t currentRenderTarget_{0};
+    std::uint32_t currentDepthTarget_{0};
     std::unordered_map<std::uint32_t, ResourceRecord> resources_;
     std::unordered_map<ID3D11Resource*, ResourceUsage> resourceUsages_;
     std::vector<bool> submittedQueueBatches_;
@@ -1264,7 +1308,6 @@ public:
     }
     void render_imgui(ImDrawData* drawData) override {
         if (!drawData || !context_ || !renderTarget_) return;
-        ImGui_ImplDX11_NewFrame();
         context_->OMSetRenderTargets(1, &renderTarget_, nullptr);
         ImGui_ImplDX11_RenderDrawData(drawData);
     }
@@ -1377,6 +1420,7 @@ public:
 #endif
         capabilities_.supportsEditorViewportScissor = true;
         capabilities_.supportsEditorOffscreenTarget = true;
+        capabilities_.supportsEditorModelRendering = true;
         capabilities_.supportsTextureReadback = true;
         capabilities_.supportsCompute = true;
         capabilities_.supportsMultiDrawIndirect = true;
@@ -1445,6 +1489,16 @@ public:
     static std::size_t bytes_per_pixel(DXGI_FORMAT format) {
         return format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8u : 4u;
     }
+    static bool block_compressed_format(DXGI_FORMAT format) noexcept {
+        return format == DXGI_FORMAT_BC1_UNORM || format == DXGI_FORMAT_BC3_UNORM ||
+            format == DXGI_FORMAT_BC5_UNORM || format == DXGI_FORMAT_BC6H_UF16 ||
+            format == DXGI_FORMAT_BC7_UNORM;
+    }
+    static UINT depth_clear_flags(DXGI_FORMAT format) noexcept {
+        return static_cast<UINT>(D3D11_CLEAR_DEPTH) |
+            (format == DXGI_FORMAT_D24_UNORM_S8_UINT
+                ? static_cast<UINT>(D3D11_CLEAR_STENCIL) : 0u);
+    }
     bool create_resource(ResourceHandle handle, const ResourceDesc& description) override {
         if (!handle || !resource_description_matches_kind(handle.kind, description)) {
             lastError_ = "D3D11 resource handle and description kind do not match";
@@ -1454,6 +1508,7 @@ public:
         ResourceRecord record;
         record.kind = handle.kind;
         bool pipelineValidationFailed = false;
+        bool resourceCreationFailed = false;
         std::visit([&](const auto& desc) {
             using T = std::decay_t<decltype(desc)>;
             if constexpr (std::is_same_v<T, TextureDesc>) {
@@ -1475,11 +1530,20 @@ public:
                 if (desc.renderTarget) texture.BindFlags |= D3D11_BIND_RENDER_TARGET;
                 if (generateMips) texture.BindFlags |= D3D11_BIND_RENDER_TARGET;
                 record.generateMips = generateMips;
-                D3D11_SUBRESOURCE_DATA data{};
-                data.pSysMem = desc.initialData.empty() || generateMips ? nullptr : desc.initialData.data();
-                data.SysMemPitch = static_cast<UINT>(plan.width * bytes_per_pixel(texture.Format));
+                record.sampleCount = plan.sampleCount;
+                record.format = texture.Format;
+                record.width = texture.Width;
+                record.height = texture.Height;
+                record.mipLevels = texture.MipLevels;
+                record.layers = texture.ArraySize;
+                // Do not pass a single D3D11_SUBRESOURCE_DATA record here.
+                // CreateTexture2D expects one record per mip/layer, while the
+                // public TextureDesc upload represents the base subresource.
+                // Upload it through update_texture after the resource exists;
+                // this avoids native reads past the caller's byte vector for
+                // arrays and mipmapped textures.
                 ID3D11Texture2D* native = nullptr;
-                if (SUCCEEDED(device_->CreateTexture2D(&texture, data.pSysMem ? &data : nullptr, &native))) {
+                if (SUCCEEDED(device_->CreateTexture2D(&texture, nullptr, &native))) {
                     record.resource = native;
                     // D24/D32 resources are depth-stencil-only in this path.
                     // Creating an SRV for them is invalid unless the texture
@@ -1501,8 +1565,14 @@ public:
                 sampler.MaxLOD = D3D11_FLOAT32_MAX;
                 device_->CreateSamplerState(&sampler, &record.sampler);
             } else if constexpr (std::is_same_v<T, BufferDesc>) {
+                if (desc.size > std::numeric_limits<UINT>::max() || desc.stride > std::numeric_limits<UINT>::max()) {
+                    lastError_ = "D3D11 buffer dimensions exceed API limits";
+                    resourceCreationFailed = true;
+                    return;
+                }
                 record.stride = static_cast<UINT>(desc.stride);
                 record.indexBuffer = desc.indexBuffer;
+                record.logicalSize = desc.size;
                 record.size = desc.size;
                 record.constantBuffer = desc.uniformBuffer && !desc.vertexBuffer && !desc.indexBuffer &&
                     !desc.indirectBuffer && !desc.structuredBuffer && !desc.storageBuffer;
@@ -1523,12 +1593,23 @@ public:
                 // untyped upload buffers as ordinary buffers.
                 if (record.constantBuffer) {
                     buffer.BindFlags |= D3D11_BIND_CONSTANT_BUFFER;
+                    if (buffer.ByteWidth > std::numeric_limits<UINT>::max() - 15u) {
+                        lastError_ = "D3D11 constant buffer size exceeds API limits";
+                        resourceCreationFailed = true;
+                        return;
+                    }
                     buffer.ByteWidth = static_cast<UINT>((buffer.ByteWidth + 15u) & ~15u);
                     record.size = buffer.ByteWidth;
                 }
                 D3D11_SUBRESOURCE_DATA data{};
                 std::vector<std::uint8_t> alignedInitialData;
                 if (!desc.initialData.empty()) {
+                    if (desc.initialData.size() > desc.size ||
+                        (!record.constantBuffer && desc.initialData.size() < buffer.ByteWidth)) {
+                        lastError_ = "D3D11 buffer initial data does not cover the native resource";
+                        resourceCreationFailed = true;
+                        return;
+                    }
                     if ((buffer.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0 &&
                         desc.initialData.size() < buffer.ByteWidth) {
                         alignedInitialData.resize(buffer.ByteWidth, 0);
@@ -1564,7 +1645,7 @@ public:
                     device_->CreateComputeShader(compiled.bytecode.data(), compiled.bytecode.size(), nullptr, &record.computeShader);
                 }
             } else if constexpr (std::is_same_v<T, PipelineDesc>) {
-                if (desc.sampleCount != 1 || desc.colorFormats.size() > 8 ||
+                if (!is_supported_sample_count(desc.sampleCount) || desc.colorFormats.size() > 8 ||
                     !is_supported_color_format(desc.colorFormat) || !is_supported_pipeline_depth_format(desc.depthFormat) ||
                     std::any_of(desc.colorFormats.begin(), desc.colorFormats.end(),
                         [](const std::string& format) { return !is_supported_color_format(format); }) ||
@@ -1614,13 +1695,19 @@ public:
                         const D3D11_INPUT_ELEMENT_DESC positionAndTexture[] = {
                             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
                             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0}};
+                        const D3D11_INPUT_ELEMENT_DESC positionAndNormal[] = {
+                            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+                            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0}};
                         const D3D11_INPUT_ELEMENT_DESC positionTextureAndNormal[] = {
                             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
                             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
                             {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0}};
-                        const auto* input = desc.vertexNormals ? positionTextureAndNormal :
-                            (desc.vertexTextureCoordinates ? positionAndTexture : positionOnly);
-                        const auto inputCount = desc.vertexNormals ? 3u : (desc.vertexTextureCoordinates ? 2u : 1u);
+                        const auto* input = desc.vertexNormals
+                            ? (desc.vertexTextureCoordinates ? positionTextureAndNormal : positionAndNormal)
+                            : (desc.vertexTextureCoordinates ? positionAndTexture : positionOnly);
+                        const auto inputCount = desc.vertexNormals
+                            ? (desc.vertexTextureCoordinates ? 3u : 2u)
+                            : (desc.vertexTextureCoordinates ? 2u : 1u);
                         device_->CreateInputLayout(input, inputCount, vertex->second.shaderBytecode.data(), vertex->second.shaderBytecode.size(), &record.inputLayout);
                     }
                 }
@@ -1628,7 +1715,7 @@ public:
                 record.material = desc;
             }
         }, description);
-        if (pipelineValidationFailed) return false;
+        if (pipelineValidationFailed || resourceCreationFailed) return false;
         resources_.emplace(handle.id, std::move(record));
         ++stats_.resourceCreates;
         if (const auto* texture = std::get_if<TextureDesc>(&description); texture && !texture->initialData.empty()) {
@@ -1636,16 +1723,26 @@ public:
                 ? texture_format_from_name(texture->format) : texture->formatKind;
             const auto uploaded = update_texture({handle, 0, 0, texture->width, texture->height,
                 static_cast<std::size_t>(texture->width) * bytes_per_pixel(format_of(texture_format_name(textureFormat))), texture->initialData});
-            if (!uploaded) lastError_ = "D3D11 initial texture upload failed";
+            if (!uploaded) {
+                if (lastError_.empty()) lastError_ = "D3D11 initial texture upload failed";
+                else lastError_ = "D3D11 initial texture upload failed: " + lastError_;
+                destroy_resource(handle);
+                return false;
+            }
             else if (texture->generateMips && (texture->mipLevels == 0 || texture->mipLevels > 1) && !generate_mips(handle)) {
-                lastError_ = "D3D11 initial texture mip generation failed";
+                if (lastError_.empty()) lastError_ = "D3D11 initial texture mip generation failed";
+                else lastError_ = "D3D11 initial texture mip generation failed: " + lastError_;
+                destroy_resource(handle);
+                return false;
             }
         }
         if (const auto* texture = std::get_if<TextureDesc>(&description); texture) {
             for (const auto& subresource : texture->initialSubresources) {
                 if (!update_texture({handle, subresource.mipLevel, subresource.layer, subresource.width,
                     subresource.height, subresource.rowPitch, subresource.data})) {
-                    lastError_ = "D3D11 initial texture subresource upload failed";
+                    if (lastError_.empty()) lastError_ = "D3D11 initial texture subresource upload failed";
+                    else lastError_ = "D3D11 initial texture subresource upload failed: " + lastError_;
+                    destroy_resource(handle);
                     return false;
                 }
             }
@@ -1665,6 +1762,26 @@ public:
             !created->second.pixelShader && !created->second.computeShader) {
             if (lastError_.empty()) lastError_ = "D3D11 shader creation failed";
             return false;
+        }
+        if (handle.kind == ResourceKind::Texture2D || handle.kind == ResourceKind::DepthStencil) {
+            const auto* texture = std::get_if<TextureDesc>(&description);
+            const auto format = texture ? (texture->formatKind == TextureFormat::Unknown
+                ? texture_format_from_name(texture->format) : texture->formatKind) : TextureFormat::Unknown;
+            const bool depth = handle.kind == ResourceKind::DepthStencil || texture_format_is_depth(format);
+            if (!created->second.resource || (depth && !created->second.dsv) || (!depth && !created->second.srv) ||
+                (texture && texture->storage && !depth && !created->second.uav) ||
+                (texture && texture->renderTarget && !created->second.rtv)) {
+                lastError_ = "D3D11 texture view creation failed";
+                return false;
+            }
+        }
+        if (handle.kind == ResourceKind::Pipeline) {
+            const auto* pipeline = std::get_if<PipelineDesc>(&description);
+            if (!created->second.rasterState || !created->second.blendState || !created->second.depthState ||
+                (pipeline && pipeline->vertexInput && !created->second.inputLayout)) {
+                lastError_ = "D3D11 pipeline state creation failed";
+                return false;
+            }
         }
         if (created->second.resource) resourceUsages_[created->second.resource] = ResourceUsage::Unknown;
         return true;
@@ -1692,6 +1809,7 @@ public:
         alias.stride = source->second.stride;
         alias.indexBuffer = source->second.indexBuffer;
         alias.constantBuffer = source->second.constantBuffer;
+        alias.logicalSize = source->second.logicalSize;
         alias.size = source->second.size;
         alias.format = source->second.format;
         alias.width = source->second.width;
@@ -1715,16 +1833,27 @@ public:
             lastError_ = "D3D11 buffer handle or resource kind is invalid";
             return false;
         }
-        if (!it->second.resource) { lastError_ = "D3D12 buffer has no native resource"; return false; }
-        if (update.data.empty() || update.offset + update.data.size() > it->second.size) { lastError_ = "D3D12 buffer update exceeds resource size"; return false; }
+        if (!it->second.resource) { lastError_ = "D3D11 buffer has no native resource"; return false; }
+        const auto logicalSize = it->second.constantBuffer ? it->second.logicalSize : it->second.size;
+        if (update.data.empty() || update.offset > logicalSize ||
+            update.data.size() > logicalSize - update.offset) {
+            lastError_ = "D3D11 buffer update exceeds resource size";
+            return false;
+        }
         if (it->second.constantBuffer) {
             // D3D11 drops constant-buffer updates that specify a destination
             // region. Constant buffers must be replaced as one aligned block.
-            if (update.offset != 0 || update.data.size() != it->second.size) {
-                lastError_ = "D3D11 constant-buffer updates must cover the complete aligned buffer";
+            if (update.offset != 0 || update.data.size() != it->second.logicalSize) {
+                lastError_ = "D3D11 constant-buffer updates must cover the complete logical buffer";
                 return false;
             }
-            context_->UpdateSubresource(it->second.resource, 0, nullptr, update.data.data(), 0, 0);
+            if (it->second.logicalSize == it->second.size) {
+                context_->UpdateSubresource(it->second.resource, 0, nullptr, update.data.data(), 0, 0);
+            } else {
+                std::vector<std::uint8_t> aligned(it->second.size, 0);
+                std::copy(update.data.begin(), update.data.end(), aligned.begin());
+                context_->UpdateSubresource(it->second.resource, 0, nullptr, aligned.data(), 0, 0);
+            }
             return true;
         }
         D3D11_BOX box{};
@@ -1754,6 +1883,10 @@ public:
         auto* texture = static_cast<ID3D11Texture2D*>(it->second.resource);
         D3D11_TEXTURE2D_DESC description{};
         texture->GetDesc(&description);
+        if (block_compressed_format(description.Format)) {
+            lastError_ = "D3D11 compressed texture updates require block-compressed upload metadata";
+            return false;
+        }
         if (update.mipLevel >= description.MipLevels || update.layer >= description.ArraySize ||
             update.x > std::max(1u, description.Width >> update.mipLevel) ||
             update.y > std::max(1u, description.Height >> update.mipLevel) ||
@@ -1762,7 +1895,12 @@ public:
         D3D11_BOX box{update.x, update.y, 0, update.x + update.width, update.y + update.height, 1};
         const auto pixelSize = bytes_per_pixel(description.Format);
         const auto pitch = update.rowPitch == 0 ? static_cast<std::size_t>(update.width) * pixelSize : update.rowPitch;
-        if (pitch < static_cast<std::size_t>(update.width) * pixelSize || pitch * update.height > update.data.size()) return false;
+        if (pitch < static_cast<std::size_t>(update.width) * pixelSize ||
+            pitch > std::numeric_limits<std::size_t>::max() / update.height ||
+            pitch * update.height > update.data.size() || pitch > std::numeric_limits<UINT>::max()) {
+            lastError_ = "D3D11 texture update pitch exceeds resource limits";
+            return false;
+        }
         context_->UpdateSubresource(it->second.resource, D3D11CalcSubresource(update.mipLevel, update.layer, description.MipLevels),
             &box, update.data.data(), static_cast<UINT>(pitch), 0);
         return true;
@@ -1918,12 +2056,20 @@ public:
         if (!context_) return;
         if (target) {
             const auto it = resources_.find(target.id);
-            if (it != resources_.end() && it->second.rtv) {
-                context_->OMSetRenderTargets(1, &it->second.rtv, nullptr);
+            if (target.kind != ResourceKind::Texture2D || it == resources_.end() || !it->second.rtv) {
+                lastError_ = "D3D11 render target handle has no valid render-target view";
                 return;
             }
+            context_->OMSetRenderTargets(1, &it->second.rtv, nullptr);
+            currentRenderTarget_ = target.id;
+            currentDepthTarget_ = 0;
+            return;
         }
-        if (renderTarget_) context_->OMSetRenderTargets(1, &renderTarget_, depthView_);
+        if (renderTarget_) {
+            context_->OMSetRenderTargets(1, &renderTarget_, depthView_);
+            currentRenderTarget_ = 0;
+            currentDepthTarget_ = 0;
+        }
     }
     void set_render_targets(ResourceHandle color, ResourceHandle depth) override {
         if (!context_) return;
@@ -1933,7 +2079,20 @@ public:
         const auto colorIt = resources_.find(color.id);
         const auto depthIt = resources_.find(depth.id);
         if (!editorBackbuffer && color && colorIt != resources_.end() && colorIt->second.rtv) rtv = colorIt->second.rtv;
-        if (depth && depthIt != resources_.end() && depthIt->second.dsv) dsv = depthIt->second.dsv;
+        if (!editorBackbuffer && color && (color.kind != ResourceKind::Texture2D ||
+            colorIt == resources_.end() || !colorIt->second.rtv)) {
+            lastError_ = "D3D11 color target handle has no valid render-target view";
+            return;
+        }
+        if (depth) {
+            if (depth.kind != ResourceKind::DepthStencil || depthIt == resources_.end() || !depthIt->second.dsv) {
+                lastError_ = "D3D11 depth target handle has no valid depth-stencil view";
+                return;
+            }
+            dsv = depthIt->second.dsv;
+        }
+        currentRenderTarget_ = color ? color.id : 0;
+        currentDepthTarget_ = depth ? depth.id : 0;
         context_->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);
     }
     bool bind_editor_render_target(ResourceHandle color, ResourceHandle depth,
@@ -1953,6 +2112,7 @@ public:
             rtv = colorIt->second.rtv;
         }
         ID3D11DepthStencilView* dsv = nullptr;
+        auto depthFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
         if (depth) {
             const auto depthIt = resources_.find(depth.id);
             if (depth.kind != ResourceKind::DepthStencil || depthIt == resources_.end() ||
@@ -1961,14 +2121,17 @@ public:
                 return false;
             }
             dsv = depthIt->second.dsv;
+            depthFormat = depthIt->second.format;
         }
         context_->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);
+        currentRenderTarget_ = color ? color.id : 0;
+        currentDepthTarget_ = depth ? depth.id : 0;
         if (clearAttachments && rtv) {
             constexpr float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             context_->ClearRenderTargetView(rtv, clear);
         }
         if (clearAttachments && dsv) {
-            context_->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+            context_->ClearDepthStencilView(dsv, depth_clear_flags(depthFormat), 1.0f, 0);
         }
         return true;
     }
@@ -1991,7 +2154,7 @@ public:
                     const auto depthResource = resources_.find(depth.id);
                     if (depthResource != resources_.end() && depthResource->second.dsv) {
                         context_->ClearDepthStencilView(depthResource->second.dsv,
-                            D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+                            depth_clear_flags(depthResource->second.format), 1.0f, 0);
                     }
                 }
             }
@@ -2004,20 +2167,36 @@ public:
         }
         for (std::size_t index = 0; index < colors.size() && index < rtvs.size(); ++index) {
             const auto it = resources_.find(colors[index].id);
-            rtvs[index] = editorBackbuffer && index == 0 ? renderTarget_ : (it != resources_.end() ? it->second.rtv : nullptr);
+            if (editorBackbuffer && index == 0) {
+                rtvs[index] = renderTarget_;
+            } else {
+                if (colors[index].kind != ResourceKind::Texture2D || it == resources_.end() || !it->second.rtv) {
+                    lastError_ = "D3D11 color attachment has no valid render-target view";
+                    return;
+                }
+                rtvs[index] = it->second.rtv;
+            }
         }
         ID3D11DepthStencilView* dsv = nullptr;
+        auto depthFormat = DXGI_FORMAT_UNKNOWN;
         if (depth) {
             const auto it = resources_.find(depth.id);
-            if (it != resources_.end() && it->second.dsv) dsv = it->second.dsv;
+            if (depth.kind != ResourceKind::DepthStencil || it == resources_.end() || !it->second.dsv) {
+                lastError_ = "D3D11 depth attachment has no valid depth-stencil view";
+                return;
+            }
+            dsv = it->second.dsv;
+            depthFormat = it->second.format;
         }
         context_->OMSetRenderTargets(static_cast<UINT>(std::min<std::size_t>(colors.size(), rtvs.size())),
             rtvs.data(), dsv);
+        currentRenderTarget_ = colors.empty() ? 0 : colors.front().id;
+        currentDepthTarget_ = depth ? depth.id : 0;
         if (clearAttachments) {
             constexpr float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
             for (const auto rtv : rtvs) if (rtv) context_->ClearRenderTargetView(rtv, clear);
             if (depth && dsv) context_->ClearDepthStencilView(dsv,
-                D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+                depth_clear_flags(depthFormat), 1.0f, 0);
         }
     }
     void set_viewport(float x, float y, float width, float height, float minDepth, float maxDepth) override {
@@ -2066,6 +2245,8 @@ public:
     void begin_frame() override {
         ++stats_.frames;
         submittedQueueBatches_.clear();
+        currentRenderTarget_ = 0;
+        currentDepthTarget_ = 0;
         if (device_) {
             const auto reason = device_->GetDeviceRemovedReason();
             if (reason == DXGI_ERROR_DEVICE_REMOVED || reason == DXGI_ERROR_DEVICE_RESET) {
@@ -2133,6 +2314,30 @@ public:
             return;
         }
         boundPipeline_ = &pipeline->second;
+        if (!boundPipeline_->pipeline.computeShader) {
+            const auto colorTarget = resources_.find(currentRenderTarget_);
+            const auto depthTarget = resources_.find(currentDepthTarget_);
+            const auto expectedColorFormat = format_of(boundPipeline_->pipeline.colorFormats.empty()
+                ? std::string_view(boundPipeline_->pipeline.colorFormat)
+                : std::string_view(boundPipeline_->pipeline.colorFormats.front()));
+            const auto expectedDepthFormat = format_of(boundPipeline_->pipeline.depthFormat);
+            if (colorTarget != resources_.end() &&
+                (colorTarget->second.kind != ResourceKind::Texture2D ||
+                 colorTarget->second.format != expectedColorFormat ||
+                 colorTarget->second.sampleCount != boundPipeline_->pipeline.sampleCount)) {
+                lastError_ = "D3D11 pipeline color format or sample count does not match the active render target";
+                boundPipeline_ = nullptr;
+                return;
+            }
+            if (depthTarget != resources_.end() &&
+                (depthTarget->second.kind != ResourceKind::DepthStencil ||
+                 depthTarget->second.format != expectedDepthFormat ||
+                 depthTarget->second.sampleCount != boundPipeline_->pipeline.sampleCount)) {
+                lastError_ = "D3D11 pipeline depth format or sample count does not match the active depth target";
+                boundPipeline_ = nullptr;
+                return;
+            }
+        }
         ID3D11VertexShader* vs = nullptr;
         ID3D11PixelShader* ps = nullptr;
         ID3D11ComputeShader* cs = nullptr;
@@ -2336,13 +2541,17 @@ public:
         }
         auto vertex = resources_.find(draw.vertexBuffer.id);
         auto index = resources_.find(draw.indexBuffer.id);
-        if (vertex != resources_.end() && index != resources_.end() && vertex->second.resource && index->second.resource) {
+        if (vertex != resources_.end() && index != resources_.end() &&
+            draw.vertexBuffer.kind == ResourceKind::Buffer && draw.indexBuffer.kind == ResourceKind::Buffer &&
+            vertex->second.kind == ResourceKind::Buffer && index->second.kind == ResourceKind::Buffer &&
+            vertex->second.resource && index->second.resource &&
+            indexed_range_fits(index->second.size, draw.firstIndex, draw.indexCount)) {
             auto* vb = static_cast<ID3D11Buffer*>(vertex->second.resource);
             auto* ib = static_cast<ID3D11Buffer*>(index->second.resource);
             UINT offset = 0;
             if (vb) context_->IASetVertexBuffers(0, 1, &vb, &vertex->second.stride, &offset);
             if (ib) context_->IASetIndexBuffer(ib, DXGI_FORMAT_R32_UINT, 0);
-            context_->DrawIndexed(draw.indexCount, 0, 0);
+            context_->DrawIndexed(draw.indexCount, draw.firstIndex, draw.vertexOffset);
             return;
         }
         lastError_ = "D3D11 mesh draw buffers are invalid";
@@ -2370,7 +2579,11 @@ public:
         const auto index = resources_.find(draw.indexBuffer.id);
         const auto arguments = resources_.find(draw.argumentBuffer.id);
         if (vertex == resources_.end() || index == resources_.end() || arguments == resources_.end() ||
-            !vertex->second.resource || !index->second.resource || !arguments->second.resource) {
+            draw.vertexBuffer.kind != ResourceKind::Buffer || draw.indexBuffer.kind != ResourceKind::Buffer ||
+            draw.argumentBuffer.kind != ResourceKind::Buffer || vertex->second.kind != ResourceKind::Buffer ||
+            index->second.kind != ResourceKind::Buffer || arguments->second.kind != ResourceKind::Buffer ||
+            !vertex->second.resource || !index->second.resource || !arguments->second.resource ||
+            !indirect_arguments_fit(arguments->second.size, draw)) {
             lastError_ = "D3D11 indirect draw references an invalid buffer";
             return;
         }
@@ -2381,7 +2594,8 @@ public:
         context_->IASetVertexBuffers(0, 1, &vb, &vertex->second.stride, &offset);
         context_->IASetIndexBuffer(ib, DXGI_FORMAT_R32_UINT, 0);
         for (std::uint32_t index = 0; index < draw.maxDrawCount; ++index) {
-            context_->DrawIndexedInstancedIndirect(args, static_cast<UINT>(draw.argumentOffset + index * draw.stride));
+            const auto byteOffset = draw.argumentOffset + static_cast<std::size_t>(index) * draw.stride;
+            context_->DrawIndexedInstancedIndirect(args, static_cast<UINT>(byteOffset));
             ++stats_.drawCalls;
             ++stats_.meshCalls;
             ++stats_.indirectDrawCalls;
@@ -2475,6 +2689,7 @@ class DirectX12Backend final : public IRenderBackend {
         std::size_t size{0};
         UINT stride{0};
         bool indexBuffer{false};
+        bool uploadHeap{false};
         DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
         std::uint32_t width{1};
         std::uint32_t height{1};
@@ -2524,7 +2739,7 @@ class DirectX12Backend final : public IRenderBackend {
         ResourceRecord(const ResourceRecord&) = delete;
         ResourceRecord& operator=(const ResourceRecord&) = delete;
         ResourceRecord(ResourceRecord&& other) noexcept
-            : kind(other.kind), resource(other.resource), pipeline(std::move(other.pipeline)), material(std::move(other.material)), shaderBytecode(std::move(other.shaderBytecode)), shaderBindings(std::move(other.shaderBindings)), state(other.state), size(other.size), stride(other.stride), indexBuffer(other.indexBuffer),
+            : kind(other.kind), resource(other.resource), pipeline(std::move(other.pipeline)), material(std::move(other.material)), shaderBytecode(std::move(other.shaderBytecode)), shaderBindings(std::move(other.shaderBindings)), state(other.state), size(other.size), stride(other.stride), indexBuffer(other.indexBuffer), uploadHeap(other.uploadHeap),
               format(other.format), width(other.width), height(other.height), mipLevels(other.mipLevels), layers(other.layers), baseTextureData(std::move(other.baseTextureData)),
               gpuAllocation(other.gpuAllocation), nativeDescription(other.nativeDescription), clearValue(other.clearValue),
               hasClearValue(other.hasClearValue), placedResource(other.placedResource),
@@ -2565,6 +2780,7 @@ class DirectX12Backend final : public IRenderBackend {
             size = other.size;
             stride = other.stride;
             indexBuffer = other.indexBuffer;
+            uploadHeap = other.uploadHeap;
             format = other.format;
             width = other.width;
             height = other.height;
@@ -2664,6 +2880,8 @@ class DirectX12Backend final : public IRenderBackend {
     std::vector<UINT> freeRtvSlots_;
     std::vector<UINT> freeDsvSlots_;
     std::uint32_t currentRenderTarget_{0};
+    std::uint32_t currentDepthTarget_{0};
+    DXGI_FORMAT swapchainFormat_{DXGI_FORMAT_UNKNOWN};
     struct BindlessTableRecord { std::uint32_t baseIndex{0}; std::uint32_t capacity{0}; };
     std::unordered_map<std::uint32_t, BindlessTableRecord> bindlessTables_;
     std::vector<std::pair<std::uint64_t, BindlessTableRecord>> retiredBindlessTables_;
@@ -2671,6 +2889,7 @@ class DirectX12Backend final : public IRenderBackend {
     std::uint32_t boundBindlessTable_{0};
     std::uint32_t frameIndex_{0};
     bool frameActive_{false};
+    bool vsync_{true};
     std::uint32_t width_{1280};
     std::uint32_t height_{720};
     std::unordered_map<std::uint32_t, ResourceRecord> resources_;
@@ -2784,6 +3003,36 @@ class DirectX12Backend final : public IRenderBackend {
         infoQueue->ClearStoredMessages();
         infoQueue->Release();
     }
+#if defined(SHINKOU_WITH_IMGUI)
+    static void allocate_imgui_srv(ImGui_ImplDX12_InitInfo* info,
+                                   D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+                                   D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle) {
+        if (cpuHandle) cpuHandle->ptr = 0;
+        if (gpuHandle) gpuHandle->ptr = 0;
+        if (!info || !cpuHandle || !gpuHandle) return;
+        auto* backend = static_cast<DirectX12Backend*>(info->UserData);
+        if (!backend || !backend->srvHeap_ || backend->srvStride_ == 0) return;
+        UINT slot = 0;
+        if (!backend->take_srv_slot(slot)) return;
+        *cpuHandle = backend->srvHeap_->GetCPUDescriptorHandleForHeapStart();
+        cpuHandle->ptr += static_cast<SIZE_T>(slot) * backend->srvStride_;
+        *gpuHandle = backend->srvHeap_->GetGPUDescriptorHandleForHeapStart();
+        gpuHandle->ptr += static_cast<UINT64>(slot) * backend->srvStride_;
+    }
+    static void release_imgui_srv(ImGui_ImplDX12_InitInfo* info,
+                                  D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle,
+                                  D3D12_GPU_DESCRIPTOR_HANDLE) {
+        if (!info || cpuHandle.ptr == 0) return;
+        auto* backend = static_cast<DirectX12Backend*>(info->UserData);
+        if (!backend || !backend->srvHeap_ || backend->srvStride_ == 0) return;
+        const auto heapStart = backend->srvHeap_->GetCPUDescriptorHandleForHeapStart().ptr;
+        if (cpuHandle.ptr < heapStart) return;
+        const auto byteOffset = cpuHandle.ptr - heapStart;
+        if (byteOffset % backend->srvStride_ != 0) return;
+        const auto slot = static_cast<UINT>(byteOffset / backend->srvStride_);
+        if (slot < 1024u) backend->release_srv_slot(slot);
+    }
+#endif
 public:
     ~DirectX12Backend() override {
         if (queue_ && fence_ && fenceEvent_ && fenceValue_ > 0) {
@@ -2828,6 +3077,30 @@ public:
     RenderCapabilities capabilities() const noexcept override { return capabilities_; }
     std::string last_error() const override { return lastError_; }
     void clear_error() override { lastError_.clear(); }
+#if defined(SHINKOU_WITH_IMGUI)
+    bool initialize_imgui() override {
+        if (!device_ || !queue_ || !srvHeap_ || !swapChain_ || !ImGui::GetCurrentContext()) return false;
+        ImGui_ImplDX12_InitInfo info{};
+        info.Device = device_;
+        info.CommandQueue = queue_;
+        info.NumFramesInFlight = static_cast<int>(std::max<std::size_t>(2, backBuffers_.size()));
+        info.RTVFormat = swapchainFormat_;
+        info.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        info.UserData = this;
+        info.SrvDescriptorHeap = srvHeap_;
+        info.SrvDescriptorAllocFn = &allocate_imgui_srv;
+        info.SrvDescriptorFreeFn = &release_imgui_srv;
+        return ImGui_ImplDX12_Init(&info);
+    }
+    void shutdown_imgui() override {
+        if (ImGui::GetCurrentContext()) ImGui_ImplDX12_Shutdown();
+    }
+    void render_imgui(ImDrawData* drawData) override {
+        if (!drawData || !frameActive_ || !commandList_ || !swapChain_) return;
+        set_render_target({});
+        ImGui_ImplDX12_RenderDrawData(drawData, commandList_);
+    }
+#endif
     bool initialize(const RenderBackendConfig& config) override {
         if (std::getenv("SHINKOU_D3D12_DEBUG") != nullptr) {
             ID3D12Debug* debug = nullptr;
@@ -2863,6 +3136,7 @@ public:
                 device1->Release();
             }
         }
+        vsync_ = config.vsync;
         width_ = config.width;
         height_ = config.height;
         D3D12_COMMAND_QUEUE_DESC desc{};
@@ -2919,6 +3193,7 @@ public:
             // Direct2D DXGI-surface interop requires a BGRA-compatible
             // backbuffer on the Windows path.
             swapDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                swapchainFormat_ = swapDesc.Format;
                 swapDesc.SampleDesc.Count = 1;
                 swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
                 swapDesc.BufferCount = 2;
@@ -3073,6 +3348,11 @@ public:
         if (format == "bc6h") return DXGI_FORMAT_BC6H_UF16;
         if (format == "bc7") return DXGI_FORMAT_BC7_UNORM;
         return DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+    static bool block_compressed_format(DXGI_FORMAT format) noexcept {
+        return format == DXGI_FORMAT_BC1_UNORM || format == DXGI_FORMAT_BC3_UNORM ||
+            format == DXGI_FORMAT_BC5_UNORM || format == DXGI_FORMAT_BC6H_UF16 ||
+            format == DXGI_FORMAT_BC7_UNORM;
     }
     bool take_srv_slot(UINT& slot) {
         if (!freeSrvSlots_.empty()) { slot = freeSrvSlots_.back(); freeSrvSlots_.pop_back(); return true; }
@@ -3278,7 +3558,12 @@ public:
         if (!srvHeap_ || !cpuSrvHeap_ || !record.resource) return false;
         UINT slot = 0;
         if (!take_srv_slot(slot)) return false;
-        const auto alignedSize = (static_cast<UINT>(std::max<std::size_t>(sizeBytes, 1)) + 255u) & ~255u;
+        const auto requestedSize = std::max<std::size_t>(sizeBytes, 1);
+        if (requestedSize > std::numeric_limits<UINT>::max() - 255u) {
+            release_srv_slot(slot);
+            return false;
+        }
+        const auto alignedSize = (static_cast<UINT>(requestedSize) + 255u) & ~255u;
         auto sourceCpu = cpuSrvHeap_->GetCPUDescriptorHandleForHeapStart();
         sourceCpu.ptr += static_cast<SIZE_T>(slot) * cpuSrvStride_;
         auto gpu = srvHeap_->GetGPUDescriptorHandleForHeapStart();
@@ -3382,6 +3667,8 @@ public:
         destroy_resource(handle);
         ResourceRecord record;
         record.kind = handle.kind;
+        bool descriptorCreationFailed = false;
+        bool resourceCreationFailed = false;
         std::visit([&](const auto& desc) {
             using T = std::decay_t<decltype(desc)>;
             if constexpr (std::is_same_v<T, TextureDesc>) {
@@ -3440,11 +3727,14 @@ public:
                         srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
                         srv.Texture2D.MipLevels = native.MipLevels;
                     }
-                    allocate_srv(record, srv);
-                    if (desc.storage) allocate_uav(record);
+                    if (!allocate_srv(record, srv)) descriptorCreationFailed = true;
+                    if (desc.storage && !allocate_uav(record)) descriptorCreationFailed = true;
                     if (desc.renderTarget && rtvHeap_) {
                         UINT slot = 0;
-                        if (!take_rtv_slot(slot)) return;
+                        if (!take_rtv_slot(slot)) {
+                            resourceCreationFailed = true;
+                            return;
+                        }
                         auto rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
                         rtv.ptr += static_cast<SIZE_T>(slot) * rtvStride_;
                         device_->CreateRenderTargetView(record.resource, nullptr, rtv);
@@ -3454,7 +3744,10 @@ public:
                     }
                 } else if (record.resource && depth && dsvHeap_) {
                     UINT slot = 0;
-                    if (!take_dsv_slot(slot)) return;
+                    if (!take_dsv_slot(slot)) {
+                        resourceCreationFailed = true;
+                        return;
+                    }
                     auto dsv = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
                     dsv.ptr += static_cast<SIZE_T>(slot) * dsvStride_;
                     device_->CreateDepthStencilView(record.resource, nullptr, dsv);
@@ -3463,9 +3756,15 @@ public:
                     record.dsvValid = true;
                 }
             } else if constexpr (std::is_same_v<T, SamplerDesc>) {
-                if (!samplerHeap_) return;
+                if (!samplerHeap_) {
+                    resourceCreationFailed = true;
+                    return;
+                }
                 UINT slot = 0;
-                if (!take_sampler_slot(slot)) return;
+                if (!take_sampler_slot(slot)) {
+                    resourceCreationFailed = true;
+                    return;
+                }
                 D3D12_SAMPLER_DESC sampler{};
                 sampler.Filter = desc.filter == "nearest" ? D3D12_FILTER_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
                 sampler.AddressU = desc.addressU == "clamp" ? D3D12_TEXTURE_ADDRESS_MODE_CLAMP : D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -3483,12 +3782,29 @@ public:
                 record.samplerIndex = slot;
                 record.samplerValid = true;
             } else if constexpr (std::is_same_v<T, BufferDesc>) {
+                if (desc.size > std::numeric_limits<UINT>::max() || desc.stride > std::numeric_limits<UINT>::max() ||
+                    (desc.structuredBuffer && desc.stride != 0 && desc.size / desc.stride > std::numeric_limits<UINT>::max())) {
+                    lastError_ = "D3D12 buffer dimensions exceed view limits";
+                    resourceCreationFailed = true;
+                    return;
+                }
                 record.size = desc.size;
                 record.stride = static_cast<UINT>(desc.stride);
                 record.indexBuffer = desc.indexBuffer;
                 D3D12_RESOURCE_DESC native{};
                 native.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-                native.Width = std::max<std::uint64_t>(desc.size, 1);
+                const bool constantBuffer = desc.uniformBuffer && !desc.vertexBuffer && !desc.indexBuffer &&
+                    !desc.indirectBuffer && !desc.structuredBuffer && !desc.storageBuffer;
+                auto nativeWidth = std::max<std::uint64_t>(desc.size, 1);
+                if (constantBuffer) {
+                    if (nativeWidth > std::numeric_limits<std::uint64_t>::max() - 255u) {
+                        lastError_ = "D3D12 constant buffer size exceeds alignment limits";
+                        resourceCreationFailed = true;
+                        return;
+                    }
+                    nativeWidth = (nativeWidth + 255u) & ~std::uint64_t{255u};
+                }
+                native.Width = nativeWidth;
                 native.Height = 1;
                 native.DepthOrArraySize = 1;
                 native.MipLevels = 1;
@@ -3497,6 +3813,7 @@ public:
                 if (desc.storageBuffer) native.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
                 D3D12_HEAP_PROPERTIES heap{};
                 heap.Type = (desc.initialData.empty() || desc.storageBuffer) ? D3D12_HEAP_TYPE_DEFAULT : D3D12_HEAP_TYPE_UPLOAD;
+                record.uploadHeap = heap.Type == D3D12_HEAP_TYPE_UPLOAD;
                 if (desc.indirectBuffer) record.state = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
                 else if (!desc.initialData.empty()) record.state = D3D12_RESOURCE_STATE_GENERIC_READ;
                 record.nativeDescription = native;
@@ -3532,10 +3849,13 @@ public:
                     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
                     srv.Buffer.NumElements = static_cast<UINT>(desc.size / desc.stride);
                     srv.Buffer.StructureByteStride = static_cast<UINT>(desc.stride);
-                    allocate_srv(record, srv);
+                    if (!allocate_srv(record, srv)) descriptorCreationFailed = true;
                 }
-                if (record.resource && desc.storageBuffer) allocate_uav(record);
-                if (record.resource && !desc.vertexBuffer && !desc.indexBuffer) allocate_cbv(record, desc.size);
+                if (record.resource && desc.storageBuffer && !allocate_uav(record)) descriptorCreationFailed = true;
+                if (record.resource && desc.uniformBuffer && !desc.vertexBuffer && !desc.indexBuffer &&
+                    !desc.indirectBuffer && !desc.structuredBuffer && !desc.storageBuffer) {
+                    if (!allocate_cbv(record, desc.size)) descriptorCreationFailed = true;
+                }
             } else if constexpr (std::is_same_v<T, ShaderDesc>) {
                 const auto compiled = shaderCompiler_->compile(desc, BackendApi::DirectX12);
                 if (compiled.valid) {
@@ -3557,7 +3877,12 @@ public:
         ++stats_.resourceCreates;
         if (const auto* buffer = std::get_if<BufferDesc>(&description);
             buffer && buffer->storageBuffer && !buffer->initialData.empty()) {
-            update_buffer({handle, 0, buffer->initialData});
+            if (!update_buffer({handle, 0, buffer->initialData})) {
+                if (lastError_.empty()) lastError_ = "D3D12 initial buffer upload failed";
+                else lastError_ = "D3D12 initial buffer upload failed: " + lastError_;
+                destroy_resource(handle);
+                return false;
+            }
         }
         if (const auto* texture = std::get_if<TextureDesc>(&description); texture && !texture->initialData.empty()) {
             const auto textureFormat = texture->formatKind == TextureFormat::Unknown
@@ -3565,21 +3890,35 @@ public:
             const auto bytesPerPixel = textureFormat == TextureFormat::RGBA16Float ? 8u : 4u;
             if (!update_texture({handle, 0, 0, texture->width, texture->height,
                 static_cast<std::size_t>(texture->width) * bytesPerPixel, texture->initialData})) {
-                lastError_ = "D3D12 initial texture upload failed";
+                if (lastError_.empty()) lastError_ = "D3D12 initial texture upload failed";
+                else lastError_ = "D3D12 initial texture upload failed: " + lastError_;
+                destroy_resource(handle);
+                return false;
             } else if (texture->generateMips && (texture->mipLevels == 0 || texture->mipLevels > 1) && !generate_mips(handle)) {
-                lastError_ = "D3D12 initial texture mip generation failed";
+                if (lastError_.empty()) lastError_ = "D3D12 initial texture mip generation failed";
+                else lastError_ = "D3D12 initial texture mip generation failed: " + lastError_;
+                destroy_resource(handle);
+                return false;
             }
         }
         if (const auto* texture = std::get_if<TextureDesc>(&description); texture) {
             for (const auto& subresource : texture->initialSubresources) {
                 if (!update_texture({handle, subresource.mipLevel, subresource.layer, subresource.width,
                     subresource.height, subresource.rowPitch, subresource.data})) {
-                    lastError_ = "D3D12 initial texture subresource upload failed";
+                    if (lastError_.empty()) lastError_ = "D3D12 initial texture subresource upload failed";
+                    else lastError_ = "D3D12 initial texture subresource upload failed: " + lastError_;
+                    destroy_resource(handle);
                     return false;
                 }
             }
         }
         const auto created = resources_.find(handle.id);
+        if (resourceCreationFailed || descriptorCreationFailed) {
+            lastError_ = resourceCreationFailed ? "D3D12 resource creation failed" :
+                "D3D12 descriptor creation failed for resource";
+            if (created != resources_.end()) destroy_resource(handle);
+            return false;
+        }
         if (created == resources_.end() ||
             ((handle.kind == ResourceKind::Texture2D || handle.kind == ResourceKind::DepthStencil || handle.kind == ResourceKind::Buffer) &&
              !created->second.resource)) {
@@ -3609,6 +3948,7 @@ public:
         alias.state = source->second.state;
         alias.size = source->second.size;
         alias.format = source->second.format;
+        alias.uploadHeap = source->second.uploadHeap;
         alias.width = source->second.width;
         alias.height = source->second.height;
         alias.mipLevels = source->second.mipLevels;
@@ -3647,10 +3987,15 @@ public:
             return false;
         }
         if (!it->second.resource) { lastError_ = "D3D12 buffer has no native resource"; return false; }
-        if (update.data.empty() || update.offset + update.data.size() > it->second.size) { lastError_ = "D3D12 buffer update exceeds resource size"; return false; }
+        if (update.data.empty() || update.offset > it->second.size ||
+            update.data.size() > it->second.size - update.offset) {
+            lastError_ = "D3D12 buffer update exceeds resource size";
+            return false;
+        }
         void* mapped = nullptr;
         D3D12_RANGE range{0, 0};
-        if (SUCCEEDED(it->second.resource->Map(0, &range, &mapped))) {
+        const auto mapResult = it->second.resource->Map(0, &range, &mapped);
+        if (SUCCEEDED(mapResult)) {
             std::memcpy(static_cast<std::uint8_t*>(mapped) + update.offset, update.data.data(), update.data.size());
             it->second.resource->Unmap(0, nullptr);
             return true;
@@ -3673,7 +4018,7 @@ public:
         const HRESULT uploadResult = device_->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload));
         if (FAILED(uploadResult)) {
-            lastError_ = "D3D12 staging buffer creation failed hr=" + std::to_string(static_cast<long long>(uploadResult));
+            append_d3d12_diagnostics("staging buffer creation", uploadResult);
             return false;
         }
         if (FAILED(upload->Map(0, &range, &mapped))) {
@@ -3706,18 +4051,36 @@ public:
         after.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
         after.Transition.StateAfter = it->second.state;
         list->ResourceBarrier(1, &after);
-        list->Close();
+        if (FAILED(list->Close())) {
+            list->Release();
+            allocator->Release();
+            upload->Release();
+            lastError_ = "D3D12 staging buffer command list close failed";
+            return false;
+        }
         ID3D12CommandList* lists[] = {list};
         queue_->ExecuteCommandLists(1, lists);
         ++fenceValue_;
-        queue_->Signal(fence_, fenceValue_);
+        if (FAILED(queue_->Signal(fence_, fenceValue_))) {
+            list->Release();
+            allocator->Release();
+            upload->Release();
+            lastError_ = "D3D12 staging buffer fence signal failed";
+            return false;
+        }
         if (uploadBatchActive_) {
             pendingUploads_.push_back({fenceValue_, allocator, list, upload});
             return true;
         }
         if (fence_->GetCompletedValue() < fenceValue_) {
-            fence_->SetEventOnCompletion(fenceValue_, fenceEvent_);
-            WaitForSingleObject(fenceEvent_, INFINITE);
+            if (FAILED(fence_->SetEventOnCompletion(fenceValue_, fenceEvent_)) ||
+                WaitForSingleObject(fenceEvent_, INFINITE) != WAIT_OBJECT_0) {
+                list->Release();
+                allocator->Release();
+                upload->Release();
+                lastError_ = "D3D12 staging buffer fence wait failed";
+                return false;
+            }
         }
         list->Release();
         allocator->Release();
@@ -3727,12 +4090,20 @@ public:
     bool update_texture(const TextureUpdate& update) override {
         const auto it = resources_.find(update.texture.id);
         if (update.texture.kind != ResourceKind::Texture2D || it == resources_.end() || it->second.kind != ResourceKind::Texture2D ||
-            !it->second.resource || update.data.empty() || update.width == 0 || update.height == 0 || frameActive_) {
+            !it->second.resource || update.data.empty() || update.width == 0 || update.height == 0 || frameActive_ ||
+            !queue_ || !fence_ || !fenceEvent_) {
             lastError_ = "D3D12 texture handle or update data is invalid";
             return false;
         }
         auto& resource = it->second;
-        if (resource.kind == ResourceKind::DepthStencil || update.mipLevel >= resource.mipLevels || update.layer >= resource.layers) return false;
+        if (resource.kind == ResourceKind::DepthStencil || update.mipLevel >= resource.mipLevels || update.layer >= resource.layers) {
+            lastError_ = "D3D12 texture update targets an invalid subresource";
+            return false;
+        }
+        if (block_compressed_format(resource.format)) {
+            lastError_ = "D3D12 compressed texture updates require block-compressed upload metadata";
+            return false;
+        }
         const auto bytesPerPixel = resource.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8u : 4u;
         const auto sourcePitch = update.rowPitch == 0 ? static_cast<std::size_t>(update.width) * bytesPerPixel : update.rowPitch;
         if (update.x > std::max(1u, resource.width >> update.mipLevel) ||
@@ -3740,17 +4111,35 @@ public:
             update.width > std::max(1u, resource.width >> update.mipLevel) - update.x ||
             update.height > std::max(1u, resource.height >> update.mipLevel) - update.y ||
             sourcePitch < static_cast<std::size_t>(update.width) * bytesPerPixel ||
-            sourcePitch * update.height > update.data.size()) return false;
-        if (update.mipLevel == 0 && update.layer == 0 && bytesPerPixel == 4) {
+            sourcePitch > std::numeric_limits<std::size_t>::max() / update.height ||
+            sourcePitch * update.height > update.data.size()) {
+            lastError_ = "D3D12 texture update exceeds resource limits";
+            return false;
+        }
+        std::vector<std::uint8_t> updatedBaseTextureData;
+        const bool updatesRetainedBase = update.mipLevel == 0 && update.layer == 0 && bytesPerPixel == 4;
+        if (updatesRetainedBase) {
             const auto fullSize = static_cast<std::size_t>(resource.width) * resource.height * 4u;
-            if (resource.baseTextureData.size() != fullSize) resource.baseTextureData.assign(fullSize, 0);
+            updatedBaseTextureData = resource.baseTextureData;
+            if (updatedBaseTextureData.size() != fullSize) updatedBaseTextureData.assign(fullSize, 0);
             for (std::uint32_t row = 0; row < update.height; ++row) {
                 const auto destinationOffset = (static_cast<std::size_t>(update.y + row) * resource.width + update.x) * 4u;
-                std::memcpy(resource.baseTextureData.data() + destinationOffset, update.data.data() + row * sourcePitch,
+                std::memcpy(updatedBaseTextureData.data() + destinationOffset, update.data.data() + row * sourcePitch,
                     static_cast<std::size_t>(update.width) * 4u);
             }
         }
-        const auto rowPitch = (static_cast<std::size_t>(update.width) * bytesPerPixel + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u) & ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u);
+        const auto rowBytes = static_cast<std::size_t>(update.width) * bytesPerPixel;
+        if (rowBytes > std::numeric_limits<std::size_t>::max() - (D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u)) {
+            lastError_ = "D3D12 texture update row pitch overflows";
+            return false;
+        }
+        const auto rowPitch = (rowBytes + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u) &
+            ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1u);
+        if (rowPitch > std::numeric_limits<UINT>::max() ||
+            update.height > std::numeric_limits<std::size_t>::max() / rowPitch) {
+            lastError_ = "D3D12 texture update footprint exceeds resource limits";
+            return false;
+        }
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
         footprint.Footprint.Format = resource.format;
         footprint.Footprint.Width = update.width;
@@ -3769,10 +4158,17 @@ public:
         uploadDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         ID3D12Resource* upload = nullptr;
         if (FAILED(device_->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)))) return false;
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)))) {
+            lastError_ = "D3D12 texture staging buffer creation failed";
+            return false;
+        }
         void* mapped = nullptr;
         D3D12_RANGE readRange{0, 0};
-        if (FAILED(upload->Map(0, &readRange, &mapped))) { upload->Release(); return false; }
+        if (FAILED(upload->Map(0, &readRange, &mapped))) {
+            upload->Release();
+            lastError_ = "D3D12 texture staging buffer map failed";
+            return false;
+        }
         for (std::uint32_t row = 0; row < update.height; ++row) {
             std::memcpy(static_cast<std::uint8_t*>(mapped) + row * rowPitch,
                 update.data.data() + row * sourcePitch, std::min<std::size_t>(sourcePitch, rowPitch));
@@ -3807,20 +4203,34 @@ public:
         after.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
         after.Transition.StateAfter = resource.state;
         list->ResourceBarrier(1, &after);
-        list->Close();
+        if (FAILED(list->Close())) {
+            list->Release(); allocator->Release(); upload->Release();
+            lastError_ = "D3D12 texture staging command list close failed";
+            return false;
+        }
         ID3D12CommandList* lists[] = {list};
         queue_->ExecuteCommandLists(1, lists);
         ++fenceValue_;
-        queue_->Signal(fence_, fenceValue_);
+        if (FAILED(queue_->Signal(fence_, fenceValue_))) {
+            list->Release(); allocator->Release(); upload->Release();
+            lastError_ = "D3D12 texture staging fence signal failed";
+            return false;
+        }
         if (uploadBatchActive_) {
+            if (updatesRetainedBase) resource.baseTextureData = std::move(updatedBaseTextureData);
             pendingUploads_.push_back({fenceValue_, allocator, list, upload});
             return true;
         }
         if (fence_->GetCompletedValue() < fenceValue_) {
-            fence_->SetEventOnCompletion(fenceValue_, fenceEvent_);
-            WaitForSingleObject(fenceEvent_, INFINITE);
+            if (FAILED(fence_->SetEventOnCompletion(fenceValue_, fenceEvent_)) ||
+                WaitForSingleObject(fenceEvent_, INFINITE) != WAIT_OBJECT_0) {
+                list->Release(); allocator->Release(); upload->Release();
+                lastError_ = "D3D12 texture staging fence wait failed";
+                return false;
+            }
         }
         list->Release(); allocator->Release(); upload->Release();
+        if (updatesRetainedBase) resource.baseTextureData = std::move(updatedBaseTextureData);
         return true;
     }
     bool resolve_texture(ResourceHandle destination, ResourceHandle source) override {
@@ -4046,6 +4456,18 @@ public:
         else if (usage == ResourceUsage::CopyDestination) target = D3D12_RESOURCE_STATE_COPY_DEST;
         else if (usage == ResourceUsage::IndirectArguments) target = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
         else if (usage == ResourceUsage::Present) target = D3D12_RESOURCE_STATE_PRESENT;
+        // Upload-heap resources are permanently required to stay in
+        // GENERIC_READ. That state already includes vertex, index, constant,
+        // shader-read and indirect-argument reads; issuing a transition for
+        // those usages is invalid on D3D12 and can remove the device on some
+        // drivers. Writes/copy-destination usages are rejected explicitly
+        // instead of recording an illegal barrier.
+        if (it->second.uploadHeap) {
+            const auto readOnlyState = D3D12_RESOURCE_STATE_GENERIC_READ;
+            if ((target & readOnlyState) == target) return true;
+            lastError_ = "D3D12 upload-heap buffer cannot transition to a write state";
+            return false;
+        }
         const auto stateIt = resourceStates_.find(it->second.resource);
         const auto currentState = stateIt == resourceStates_.end() ? it->second.state : stateIt->second;
         if (currentState == target || !it->second.resource) return true;
@@ -4066,14 +4488,18 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE handle{};
         if (target) {
             const auto it = resources_.find(target.id);
-            if (it != resources_.end() && it->second.rtvValid) handle = it->second.rtvCpu;
-        }
-        if (!handle.ptr) {
+            if (target.kind != ResourceKind::Texture2D || it == resources_.end() || !it->second.rtvValid) {
+                lastError_ = "D3D12 render target handle has no valid render-target view";
+                return;
+            }
+            handle = it->second.rtvCpu;
+        } else {
             handle = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
             handle.ptr += static_cast<SIZE_T>(frameIndex_) * rtvStride_;
         }
         commandList_->OMSetRenderTargets(1, &handle, FALSE, dsvHeap_ ? &dsvHandle_ : nullptr);
         currentRenderTarget_ = target.id;
+        currentDepthTarget_ = 0;
     }
     void set_render_targets(ResourceHandle color, ResourceHandle depth) override {
         if (!commandList_ || !frameActive_) return;
@@ -4082,13 +4508,24 @@ public:
         const auto colorIt = resources_.find(color.id);
         const auto depthIt = resources_.find(depth.id);
         if (color && colorIt != resources_.end() && colorIt->second.rtvValid) colorHandle = colorIt->second.rtvCpu;
-        if (color && !colorHandle.ptr) {
+        if (color && (color.kind != ResourceKind::Texture2D || colorIt == resources_.end() || !colorIt->second.rtvValid)) {
+            lastError_ = "D3D12 color target handle has no valid render-target view";
+            return;
+        }
+        if (!color) {
             colorHandle = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
             colorHandle.ptr += static_cast<SIZE_T>(frameIndex_) * rtvStride_;
         }
-        if (depth && depthIt != resources_.end() && depthIt->second.dsvValid) depthHandle = depthIt->second.dsvCpu;
+        if (depth) {
+            if (depth.kind != ResourceKind::DepthStencil || depthIt == resources_.end() || !depthIt->second.dsvValid) {
+                lastError_ = "D3D12 depth target handle has no valid depth-stencil view";
+                return;
+            }
+            depthHandle = depthIt->second.dsvCpu;
+        }
         commandList_->OMSetRenderTargets(color ? 1u : 0u, color ? &colorHandle : nullptr, FALSE, depthHandle.ptr ? &depthHandle : nullptr);
         currentRenderTarget_ = color ? color.id : depth.id;
+        currentDepthTarget_ = depth.id;
     }
     void set_render_targets(const std::vector<ResourceHandle>& colors, ResourceHandle depth, bool clearAttachments) override {
         if (!commandList_ || !frameActive_) return;
@@ -4104,7 +4541,10 @@ public:
                     const auto depthResource = resources_.find(depth.id);
                     if (depthResource != resources_.end() && depthResource->second.dsvValid) {
                         commandList_->ClearDepthStencilView(depthResource->second.dsvCpu,
-                            D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+                            depthResource->second.format == DXGI_FORMAT_D24_UNORM_S8_UINT
+                                ? D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL
+                                : D3D12_CLEAR_FLAG_DEPTH,
+                            1.0f, 0, 0, nullptr);
                     }
                 }
             }
@@ -4114,12 +4554,20 @@ public:
         UINT count = static_cast<UINT>(std::min<std::size_t>(colors.size(), colorHandles.size()));
         for (UINT index = 0; index < count; ++index) {
             const auto it = resources_.find(colors[index].id);
-            if (it != resources_.end() && it->second.rtvValid) colorHandles[index] = it->second.rtvCpu;
+            if (colors[index].kind != ResourceKind::Texture2D || it == resources_.end() || !it->second.rtvValid) {
+                lastError_ = "D3D12 color attachment has no valid render-target view";
+                return;
+            }
+            colorHandles[index] = it->second.rtvCpu;
         }
         D3D12_CPU_DESCRIPTOR_HANDLE depthHandle{};
         if (depth) {
             const auto it = resources_.find(depth.id);
-            if (it != resources_.end() && it->second.dsvValid) depthHandle = it->second.dsvCpu;
+            if (depth.kind != ResourceKind::DepthStencil || it == resources_.end() || !it->second.dsvValid) {
+                lastError_ = "D3D12 depth attachment has no valid depth-stencil view";
+                return;
+            }
+            depthHandle = it->second.dsvCpu;
         }
         commandList_->OMSetRenderTargets(count, count ? colorHandles.data() : nullptr, FALSE,
             depthHandle.ptr ? &depthHandle : nullptr);
@@ -4128,10 +4576,17 @@ public:
             for (UINT index = 0; index < count; ++index) {
                 if (colorHandles[index].ptr) commandList_->ClearRenderTargetView(colorHandles[index], clear, 0, nullptr);
             }
-            if (depth && depthHandle.ptr) commandList_->ClearDepthStencilView(depthHandle,
-                D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+            if (depth && depthHandle.ptr) {
+                const auto depthIt = resources_.find(depth.id);
+                commandList_->ClearDepthStencilView(depthHandle,
+                    depthIt != resources_.end() && depthIt->second.format == DXGI_FORMAT_D24_UNORM_S8_UINT
+                        ? D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL
+                        : D3D12_CLEAR_FLAG_DEPTH,
+                    1.0f, 0, 0, nullptr);
+            }
         }
         currentRenderTarget_ = colors.empty() ? depth.id : colors.front().id;
+        currentDepthTarget_ = depth.id;
     }
     void set_viewport(float x, float y, float width, float height, float minDepth, float maxDepth) override {
         if (!commandList_ || !frameActive_) return;
@@ -4224,7 +4679,7 @@ public:
             if (pipelineLibrary_) pipelineLibrary_->StorePipeline(cacheName.c_str(), record.pipelineState);
             return true;
         }
-        if (record.pipeline.sampleCount != 1 ||
+        if (!is_supported_sample_count(record.pipeline.sampleCount) ||
             (record.pipeline.fillMode != "solid" && record.pipeline.fillMode != "wireframe") ||
             (record.pipeline.cullMode != "back" && record.pipeline.cullMode != "front" && record.pipeline.cullMode != "none") ||
             (record.pipeline.topology != "triangle" && record.pipeline.topology != "line" && record.pipeline.topology != "point") ||
@@ -4310,16 +4765,33 @@ public:
         pipeline.pRootSignature = record.rootSignature;
         pipeline.VS = {vertex->second.shaderBytecode.data(), vertex->second.shaderBytecode.size()};
         pipeline.PS = {fragment->second.shaderBytecode.data(), fragment->second.shaderBytecode.size()};
-        D3D12_INPUT_ELEMENT_DESC inputElement{};
+        D3D12_INPUT_ELEMENT_DESC inputElements[3]{};
+        UINT inputElementCount = 0;
         if (record.pipeline.vertexInput) {
-            inputElement.SemanticName = "POSITION";
-            inputElement.SemanticIndex = 0;
-            inputElement.Format = DXGI_FORMAT_R32G32B32_FLOAT;
-            inputElement.InputSlot = 0;
-            inputElement.AlignedByteOffset = 0;
-            inputElement.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-            inputElement.InstanceDataStepRate = 0;
-            pipeline.InputLayout = {&inputElement, 1};
+            inputElements[inputElementCount].SemanticName = "POSITION";
+            inputElements[inputElementCount].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+            inputElements[inputElementCount].InputSlot = 0;
+            inputElements[inputElementCount].AlignedByteOffset = 0;
+            inputElements[inputElementCount].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+            ++inputElementCount;
+            if (record.pipeline.vertexTextureCoordinates) {
+                inputElements[inputElementCount].SemanticName = "TEXCOORD";
+                inputElements[inputElementCount].Format = DXGI_FORMAT_R32G32_FLOAT;
+                inputElements[inputElementCount].InputSlot = 0;
+                inputElements[inputElementCount].AlignedByteOffset = 12;
+                inputElements[inputElementCount].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+                ++inputElementCount;
+            }
+            if (record.pipeline.vertexNormals) {
+                inputElements[inputElementCount].SemanticName = "NORMAL";
+                inputElements[inputElementCount].Format = DXGI_FORMAT_R32G32B32_FLOAT;
+                inputElements[inputElementCount].InputSlot = 0;
+                inputElements[inputElementCount].AlignedByteOffset =
+                    record.pipeline.vertexTextureCoordinates ? 20 : 12;
+                inputElements[inputElementCount].InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+                ++inputElementCount;
+            }
+            pipeline.InputLayout = {inputElements, inputElementCount};
         }
         pipeline.RasterizerState.FillMode = fill_mode(record.pipeline.fillMode);
         pipeline.RasterizerState.CullMode = cull_mode(record.pipeline.cullMode);
@@ -4390,6 +4862,8 @@ public:
     void begin_frame() override {
         ++stats_.frames;
         recordedQueueBatches_.clear();
+        currentRenderTarget_ = 0;
+        currentDepthTarget_ = 0;
         if (!commandList_ || !commandAllocator_) return;
         const auto deviceReason = device_ ? device_->GetDeviceRemovedReason() : E_FAIL;
         if (deviceReason == DXGI_ERROR_DEVICE_REMOVED || deviceReason == DXGI_ERROR_DEVICE_RESET) {
@@ -4420,6 +4894,11 @@ public:
         if (!swapChain_) {
             timestampCursor_ = 0;
             frameActive_ = true;
+            return;
+        }
+        if (frameIndex_ >= backBuffers_.size() || !backBuffers_[frameIndex_] || !rtvHeap_) {
+            lastError_ = "D3D12 swapchain backbuffer is unavailable after resize";
+            capabilities_.deviceState = RenderDeviceState::NeedsResize;
             return;
         }
         auto* buffer = backBuffers_[frameIndex_];
@@ -4503,6 +4982,48 @@ public:
             lastError_ = "D3D12 pipeline handle is invalid";
             return;
         }
+        if (!boundPipeline_->pipeline.computeShader) {
+            const auto target = resources_.find(currentRenderTarget_);
+            const auto expectedColorFormat = format_of(boundPipeline_->pipeline.colorFormats.empty()
+                ? std::string_view(boundPipeline_->pipeline.colorFormat)
+                : std::string_view(boundPipeline_->pipeline.colorFormats.front()));
+            const auto expectedDepthFormat = format_of(boundPipeline_->pipeline.depthFormat);
+            const auto expectedSamples = boundPipeline_->pipeline.sampleCount;
+            if (target != resources_.end()) {
+                const auto actualSamples = target->second.nativeDescription.SampleDesc.Count;
+                if (actualSamples != expectedSamples) {
+                    lastError_ = "D3D12 pipeline sample count does not match the active render target";
+                    boundPipeline_ = nullptr;
+                    return;
+                }
+                if (target->second.kind == ResourceKind::DepthStencil) {
+                    if (expectedDepthFormat != target->second.format) {
+                        lastError_ = "D3D12 pipeline depth format does not match the active depth target";
+                        boundPipeline_ = nullptr;
+                        return;
+                    }
+                } else if (target->second.kind != ResourceKind::Texture2D ||
+                           target->second.format != expectedColorFormat) {
+                    lastError_ = "D3D12 pipeline color format does not match the active render target";
+                    boundPipeline_ = nullptr;
+                    return;
+                }
+            } else if (swapChain_ && (expectedSamples != 1 || swapchainFormat_ != expectedColorFormat)) {
+                lastError_ = "D3D12 pipeline color format does not match the swapchain";
+                boundPipeline_ = nullptr;
+                return;
+            }
+            if (currentDepthTarget_ != 0) {
+                const auto depthTarget = resources_.find(currentDepthTarget_);
+                if (depthTarget == resources_.end() || depthTarget->second.kind != ResourceKind::DepthStencil ||
+                    depthTarget->second.format != expectedDepthFormat ||
+                    depthTarget->second.nativeDescription.SampleDesc.Count != expectedSamples) {
+                    lastError_ = "D3D12 pipeline depth format or sample count does not match the active depth target";
+                    boundPipeline_ = nullptr;
+                    return;
+                }
+            }
+        }
         if (boundPipeline_ && ensure_pipeline(*boundPipeline_) && commandList_) {
             if (boundPipeline_->pipeline.computeShader) {
                 commandList_->SetComputeRootSignature(boundPipeline_->rootSignature);
@@ -4518,8 +5039,9 @@ public:
             if (table != bindlessTables_.end()) {
                 bind_bindless_table({boundBindlessTable_, table->second.baseIndex, table->second.capacity});
             }
-        } else if (boundPipeline_ && lastError_.empty()) {
-            lastError_ = "D3D12 pipeline binding failed";
+        } else if (boundPipeline_) {
+            if (lastError_.empty()) lastError_ = "D3D12 pipeline binding failed";
+            boundPipeline_ = nullptr;
         }
     }
     void bind_material(ResourceHandle handle) override {
@@ -4636,7 +5158,11 @@ public:
         }
         const auto vertex = resources_.find(draw.vertexBuffer.id);
         const auto index = resources_.find(draw.indexBuffer.id);
-        if (vertex == resources_.end() || index == resources_.end() || !vertex->second.resource || !index->second.resource) {
+        if (vertex == resources_.end() || index == resources_.end() ||
+            draw.vertexBuffer.kind != ResourceKind::Buffer || draw.indexBuffer.kind != ResourceKind::Buffer ||
+            vertex->second.kind != ResourceKind::Buffer || index->second.kind != ResourceKind::Buffer ||
+            !vertex->second.resource || !index->second.resource ||
+            !indexed_range_fits(index->second.size, draw.firstIndex, draw.indexCount)) {
             lastError_ = "D3D12 mesh draw buffers are invalid";
             return;
         }
@@ -4650,7 +5176,7 @@ public:
         indexView.Format = DXGI_FORMAT_R32_UINT;
         commandList_->IASetVertexBuffers(0, 1, &vertexView);
         commandList_->IASetIndexBuffer(&indexView);
-        commandList_->DrawIndexedInstanced(draw.indexCount, 1, 0, 0, 0);
+        commandList_->DrawIndexedInstanced(draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, 0);
     }
     bool dispatch(const DispatchDesc& dispatch) override {
         if (!commandList_ || !frameActive_ || dispatch.groupCountX == 0 || dispatch.groupCountY == 0 || dispatch.groupCountZ == 0) {
@@ -4674,7 +5200,10 @@ public:
         if (!commandList_ || !frameActive_ || !boundPipeline_ || !boundPipeline_->pipelineState ||
             !indexedDrawSignature_ || vertex == resources_.end() || index == resources_.end() ||
             arguments == resources_.end() || !vertex->second.resource || !index->second.resource ||
-            !arguments->second.resource || draw.maxDrawCount == 0 || draw.stride < sizeof(std::uint32_t) * 5) {
+            !arguments->second.resource || draw.vertexBuffer.kind != ResourceKind::Buffer ||
+            draw.indexBuffer.kind != ResourceKind::Buffer || draw.argumentBuffer.kind != ResourceKind::Buffer ||
+            vertex->second.kind != ResourceKind::Buffer || index->second.kind != ResourceKind::Buffer ||
+            arguments->second.kind != ResourceKind::Buffer || !indirect_arguments_fit(arguments->second.size, draw)) {
             if (lastError_.empty()) lastError_ = "D3D12 indirect draw has invalid command state or buffer";
             return;
         }
@@ -4715,6 +5244,12 @@ public:
             frameActive_ = false;
             return;
         }
+        if (frameIndex_ >= backBuffers_.size() || !backBuffers_[frameIndex_] || !rtvHeap_) {
+            lastError_ = "D3D12 swapchain backbuffer is unavailable during present";
+            capabilities_.deviceState = RenderDeviceState::NeedsResize;
+            frameActive_ = false;
+            return;
+        }
         auto* buffer = backBuffers_[frameIndex_];
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -4723,11 +5258,17 @@ public:
         barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         commandList_->ResourceBarrier(1, &barrier);
-        commandList_->Close();
+        const auto closeResult = commandList_->Close();
+        if (FAILED(closeResult)) {
+            lastError_ = "D3D12 command list close failed hr=" + std::to_string(static_cast<long long>(closeResult));
+            capabilities_.deviceState = RenderDeviceState::Lost;
+            frameActive_ = false;
+            return;
+        }
         ID3D12CommandList* lists[] = {commandList_};
         queue_->ExecuteCommandLists(1, lists);
         ++stats_.queueSubmissions;
-        const auto presentResult = swapChain_->Present(1, 0);
+        const auto presentResult = swapChain_->Present(vsync_ ? 1 : 0, 0);
         if (FAILED(presentResult)) {
             lastError_ = "D3D12 present failed hr=" + std::to_string(static_cast<long long>(presentResult));
             const auto reason = device_->GetDeviceRemovedReason();
@@ -5012,6 +5553,12 @@ class VulkanBackend final : public IRenderBackend {
     QueueFamilyMap queue_family_map() const noexcept {
         return {graphicsFamily_, computeFamily_, copyFamily_};
     }
+    static VkImageAspectFlags image_aspect_mask(const ResourceRecord& resource) noexcept {
+        if (!resource.depthStencil) return VK_IMAGE_ASPECT_COLOR_BIT;
+        return resource.format == VK_FORMAT_D24_UNORM_S8_UINT
+            ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+            : VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
     bool record_ownership_barrier(VkCommandBuffer command,
                                   const VulkanQueueFamilyOwnershipTransfer& transfer,
                                   const ResourceRecord& resource) {
@@ -5054,8 +5601,7 @@ class VulkanBackend final : public IRenderBackend {
         barrier.srcQueueFamilyIndex = transfer.srcQueueFamilyIndex;
         barrier.dstQueueFamilyIndex = transfer.dstQueueFamilyIndex;
         barrier.image = resource.image;
-        barrier.subresourceRange.aspectMask = resource.depthStencil
-            ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.aspectMask = image_aspect_mask(resource);
         barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
         barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
         vkCmdPipelineBarrier(command, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
@@ -5369,7 +5915,6 @@ public:
     }
     void render_imgui(ImDrawData* drawData) override {
         if (!drawData || !frameActive_ || activeCommandBuffer_ == VK_NULL_HANDLE) return;
-        ImGui_ImplVulkan_NewFrame();
         set_render_target({});
         if (renderPassActive_) ImGui_ImplVulkan_RenderDrawData(drawData, activeCommandBuffer_);
     }
@@ -6035,9 +6580,15 @@ public:
         if (format == "bc7") return VK_FORMAT_BC7_UNORM_BLOCK;
         return VK_FORMAT_R8G8B8A8_UNORM;
     }
+    static bool block_compressed_format(VkFormat format) noexcept {
+        return format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || format == VK_FORMAT_BC3_UNORM_BLOCK ||
+            format == VK_FORMAT_BC5_UNORM_BLOCK || format == VK_FORMAT_BC6H_UFLOAT_BLOCK ||
+            format == VK_FORMAT_BC7_UNORM_BLOCK;
+    }
     VkRenderPass get_or_create_color_render_pass(const std::vector<VkFormat>& colorFormats, VkFormat depthFormat,
-                                                 bool clearAttachments) {
+                                                 VkSampleCountFlagBits samples, bool clearAttachments) {
         std::uint64_t key = clearAttachments ? 1ull : 0ull;
+        key = key * 257ull + static_cast<std::uint64_t>(samples);
         for (const auto format : colorFormats) key = key * 257ull + static_cast<std::uint64_t>(format);
         key = key * 257ull + static_cast<std::uint64_t>(depthFormat);
         const auto existing = dynamicRenderPasses_.find(key);
@@ -6050,7 +6601,7 @@ public:
         for (std::size_t index = 0; index < colorFormats.size(); ++index) {
             VkAttachmentDescription attachment{};
             attachment.format = colorFormats[index];
-            attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+            attachment.samples = samples;
             attachment.loadOp = clearAttachments ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
             attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -6062,7 +6613,7 @@ public:
         if (depth) {
             VkAttachmentDescription attachment{};
             attachment.format = depthFormat;
-            attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+            attachment.samples = samples;
             attachment.loadOp = clearAttachments ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
             attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             attachment.stencilLoadOp = clearAttachments ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -6261,20 +6812,32 @@ public:
         }
         ++stats_.resourceCreates;
         if (const auto* buffer = std::get_if<BufferDesc>(&description); buffer && !buffer->initialData.empty()) {
-            if (!update_buffer({handle, 0, buffer->initialData})) lastError_ = "Vulkan initial buffer upload failed";
+            if (!update_buffer({handle, 0, buffer->initialData})) {
+                if (lastError_.empty()) lastError_ = "Vulkan initial buffer upload failed";
+                else lastError_ = "Vulkan initial buffer upload failed: " + lastError_;
+                retire_resource(handle);
+                return false;
+            }
         }
         if (const auto* texture = std::get_if<TextureDesc>(&description); texture && !texture->initialData.empty()) {
-            const auto bytesPerPixel = texture->format == "rgba16f" ? 8u : 4u;
+            const auto textureFormat = texture->formatKind == TextureFormat::Unknown
+                ? texture_format_from_name(texture->format) : texture->formatKind;
+            const auto bytesPerPixel = textureFormat == TextureFormat::RGBA16Float ? 8u : 4u;
             if (!update_texture({handle, 0, 0, texture->width, texture->height,
                 static_cast<std::size_t>(texture->width) * bytesPerPixel, texture->initialData})) {
-                lastError_ = "Vulkan initial texture upload failed";
+                if (lastError_.empty()) lastError_ = "Vulkan initial texture upload failed";
+                else lastError_ = "Vulkan initial texture upload failed: " + lastError_;
+                retire_resource(handle);
+                return false;
             }
         }
         if (const auto* texture = std::get_if<TextureDesc>(&description); texture) {
             for (const auto& subresource : texture->initialSubresources) {
                 if (!update_texture({handle, subresource.mipLevel, subresource.layer, subresource.width,
                     subresource.height, subresource.rowPitch, subresource.data})) {
-                    lastError_ = "Vulkan initial texture subresource upload failed";
+                    if (lastError_.empty()) lastError_ = "Vulkan initial texture subresource upload failed";
+                    else lastError_ = "Vulkan initial texture subresource upload failed: " + lastError_;
+                    retire_resource(handle);
                     return false;
                 }
             }
@@ -6282,24 +6845,29 @@ public:
                 [](const TextureDesc::SubresourceData& subresource) { return subresource.mipLevel > 0; });
             if (texture->generateMips && texture->mipLevels > 1 && !hasExplicitMip &&
                 (!texture->initialData.empty() || !texture->initialSubresources.empty()) && !generate_mips(handle)) {
-                lastError_ = "Vulkan initial texture mip generation failed";
+                if (lastError_.empty()) lastError_ = "Vulkan initial texture mip generation failed";
+                else lastError_ = "Vulkan initial texture mip generation failed: " + lastError_;
+                retire_resource(handle);
                 return false;
             }
         }
         const auto created = resources_.find(handle.id);
         if (created == resources_.end() ||
             ((handle.kind == ResourceKind::Texture2D || handle.kind == ResourceKind::DepthStencil) &&
-                (!created->second.image || !created->second.memory)) ||
+                (!created->second.image || !created->second.memory || !created->second.view)) ||
             (handle.kind == ResourceKind::Buffer && (!created->second.buffer || !created->second.memory))) {
             if (lastError_.empty()) lastError_ = "Vulkan resource creation failed";
+            if (created != resources_.end()) retire_resource(handle);
             return false;
         }
         if (handle.kind == ResourceKind::Sampler && !created->second.sampler) {
             if (lastError_.empty()) lastError_ = "Vulkan sampler creation failed";
+            retire_resource(handle);
             return false;
         }
         if (handle.kind == ResourceKind::Shader && !created->second.shader) {
             if (lastError_.empty()) lastError_ = "Vulkan shader module creation failed";
+            retire_resource(handle);
             return false;
         }
         return true;
@@ -6376,6 +6944,7 @@ public:
         alias.height = source->second.height;
         alias.mipLevels = source->second.mipLevels;
         alias.layers = source->second.layers;
+        alias.samples = source->second.samples;
         alias.usage = source->second.usage;
         alias.concurrentSharing = source->second.concurrentSharing;
         alias.ownerQueue = source->second.ownerQueue;
@@ -6387,7 +6956,8 @@ public:
     bool update_buffer(const BufferUpdate& update) override {
         const auto it = resources_.find(update.buffer.id);
         if (update.buffer.kind != ResourceKind::Buffer || it == resources_.end() || it->second.kind != ResourceKind::Buffer ||
-            !it->second.buffer || update.data.empty() || update.offset + update.data.size() > it->second.size ||
+            !it->second.buffer || update.data.empty() || update.offset > it->second.size ||
+            update.data.size() > it->second.size - update.offset ||
             frameActive_ || commandPool_ == VK_NULL_HANDLE) {
             lastError_ = "Vulkan buffer handle or update state is invalid";
             return false;
@@ -6395,7 +6965,10 @@ public:
         auto& resource = it->second;
         if (resource.hostVisible) {
             void* mapped = nullptr;
-            if (vkMapMemory(device_, resource.memory, update.offset, update.data.size(), 0, &mapped) != VK_SUCCESS) return false;
+            if (vkMapMemory(device_, resource.memory, update.offset, update.data.size(), 0, &mapped) != VK_SUCCESS) {
+                lastError_ = "Vulkan host-visible buffer map failed";
+                return false;
+            }
             std::memcpy(mapped, update.data.data(), update.data.size());
             vkUnmapMemory(device_, resource.memory);
             return true;
@@ -6423,11 +6996,17 @@ public:
             vkDestroyBuffer(device_, staging, nullptr);
             return false;
         }
-        vkBindBufferMemory(device_, staging, stagingMemory, 0);
+        if (vkBindBufferMemory(device_, staging, stagingMemory, 0) != VK_SUCCESS) {
+            vkFreeMemory(device_, stagingMemory, nullptr);
+            vkDestroyBuffer(device_, staging, nullptr);
+            lastError_ = "Vulkan staging buffer memory binding failed";
+            return false;
+        }
         void* mapped = nullptr;
         if (vkMapMemory(device_, stagingMemory, 0, update.data.size(), 0, &mapped) != VK_SUCCESS) {
             vkFreeMemory(device_, stagingMemory, nullptr);
             vkDestroyBuffer(device_, staging, nullptr);
+            lastError_ = "Vulkan staging buffer map failed";
             return false;
         }
         std::memcpy(mapped, update.data.data(), update.data.size());
@@ -6513,11 +7092,16 @@ public:
             bufferUsages_[resource.buffer] = previous;
             return true;
         }
-        vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX);
+        const auto waitResult = vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX);
         vkDestroyFence(device_, uploadFence, nullptr);
         vkFreeCommandBuffers(device_, commandPool_, 1, &command);
         vkFreeMemory(device_, stagingMemory, nullptr);
         vkDestroyBuffer(device_, staging, nullptr);
+        if (waitResult != VK_SUCCESS) {
+            lastError_ = "Vulkan buffer upload fence wait failed result=" +
+                std::to_string(static_cast<int>(waitResult));
+            return false;
+        }
         bufferUsages_[resource.buffer] = previous;
         return true;
     }
@@ -6530,14 +7114,26 @@ public:
             return false;
         }
         auto& resource = it->second;
-        if (resource.depthStencil || update.mipLevel >= resource.mipLevels || update.layer >= resource.layers) return false;
+        if (resource.depthStencil || update.mipLevel >= resource.mipLevels || update.layer >= resource.layers) {
+            lastError_ = "Vulkan texture update targets an invalid subresource";
+            return false;
+        }
+        if (block_compressed_format(resource.format)) {
+            lastError_ = "Vulkan compressed texture updates require block-compressed upload metadata";
+            return false;
+        }
         const auto mipWidth = std::max(1u, (resource.width >> update.mipLevel));
         const auto mipHeight = std::max(1u, (resource.height >> update.mipLevel));
         const auto bytesPerPixel = resource.format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8u : 4u;
         const auto sourcePitch = update.rowPitch == 0 ? static_cast<std::size_t>(update.width) * bytesPerPixel : update.rowPitch;
         if (update.x > mipWidth || update.y > mipHeight || update.width > mipWidth - update.x ||
             update.height > mipHeight - update.y || sourcePitch < static_cast<std::size_t>(update.width) * bytesPerPixel ||
-            sourcePitch * update.height > update.data.size()) return false;
+            sourcePitch > std::numeric_limits<std::size_t>::max() / update.height ||
+            sourcePitch * update.height > update.data.size() || sourcePitch % bytesPerPixel != 0 ||
+            sourcePitch / bytesPerPixel > std::numeric_limits<std::uint32_t>::max()) {
+            lastError_ = "Vulkan texture update exceeds resource limits";
+            return false;
+        }
         VkBuffer staging = VK_NULL_HANDLE;
         VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
         VkBufferCreateInfo bufferInfo{};
@@ -6554,10 +7150,17 @@ public:
         allocation.allocationSize = requirements.size;
         allocation.memoryTypeIndex = memoryType;
         if (vkAllocateMemory(device_, &allocation, nullptr, &stagingMemory) != VK_SUCCESS) { vkDestroyBuffer(device_, staging, nullptr); return false; }
-        vkBindBufferMemory(device_, staging, stagingMemory, 0);
+        if (vkBindBufferMemory(device_, staging, stagingMemory, 0) != VK_SUCCESS) {
+            vkFreeMemory(device_, stagingMemory, nullptr);
+            vkDestroyBuffer(device_, staging, nullptr);
+            lastError_ = "Vulkan texture staging buffer memory binding failed";
+            return false;
+        }
         void* mapped = nullptr;
         if (vkMapMemory(device_, stagingMemory, 0, update.data.size(), 0, &mapped) != VK_SUCCESS) {
-            vkFreeMemory(device_, stagingMemory, nullptr); vkDestroyBuffer(device_, staging, nullptr); return false;
+            vkFreeMemory(device_, stagingMemory, nullptr); vkDestroyBuffer(device_, staging, nullptr);
+            lastError_ = "Vulkan texture staging buffer map failed";
+            return false;
         }
         std::memcpy(mapped, update.data.data(), update.data.size());
         vkUnmapMemory(device_, stagingMemory);
@@ -6572,7 +7175,13 @@ public:
         }
         VkCommandBufferBeginInfo begin{};
         begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        vkBeginCommandBuffer(command, &begin);
+        if (vkBeginCommandBuffer(command, &begin) != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, commandPool_, 1, &command);
+            vkFreeMemory(device_, stagingMemory, nullptr);
+            vkDestroyBuffer(device_, staging, nullptr);
+            lastError_ = "Vulkan texture upload command buffer begin failed";
+            return false;
+        }
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         const auto usageIt = imageUsages_.find(resource.image);
@@ -6584,11 +7193,15 @@ public:
         toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toTransfer.image = resource.image;
+        // The backend tracks one layout for the complete image. Transition
+        // the complete image here as well; a single-mip barrier combined with
+        // a whole-image state map makes later mip/layer uploads use an invalid
+        // old layout.
         toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        toTransfer.subresourceRange.baseMipLevel = update.mipLevel;
-        toTransfer.subresourceRange.levelCount = 1;
-        toTransfer.subresourceRange.baseArrayLayer = update.layer;
-        toTransfer.subresourceRange.layerCount = 1;
+        toTransfer.subresourceRange.baseMipLevel = 0;
+        toTransfer.subresourceRange.levelCount = resource.mipLevels;
+        toTransfer.subresourceRange.baseArrayLayer = 0;
+        toTransfer.subresourceRange.layerCount = resource.layers;
         vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toTransfer);
         VkBufferImageCopy copy{};
         copy.bufferOffset = 0;
@@ -6607,7 +7220,13 @@ public:
         toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toShader);
-        vkEndCommandBuffer(command);
+        if (vkEndCommandBuffer(command) != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, commandPool_, 1, &command);
+            vkFreeMemory(device_, stagingMemory, nullptr);
+            vkDestroyBuffer(device_, staging, nullptr);
+            lastError_ = "Vulkan texture upload command buffer end failed";
+            return false;
+        }
         VkFence uploadFence = VK_NULL_HANDLE;
         VkFenceCreateInfo fenceInfo{};
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -6646,11 +7265,16 @@ public:
             resource.usage = ResourceUsage::ShaderRead;
             return true;
         }
-        vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX);
+        const auto waitResult = vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX);
         vkDestroyFence(device_, uploadFence, nullptr);
         vkFreeCommandBuffers(device_, commandPool_, 1, &command);
         vkFreeMemory(device_, stagingMemory, nullptr);
         vkDestroyBuffer(device_, staging, nullptr);
+        if (waitResult != VK_SUCCESS) {
+            lastError_ = "Vulkan texture upload fence wait failed result=" +
+                std::to_string(static_cast<int>(waitResult));
+            return false;
+        }
         imageUsages_[resource.image] = ResourceUsage::ShaderRead;
         resource.usage = ResourceUsage::ShaderRead;
         return true;
@@ -7105,7 +7729,7 @@ public:
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.image = resource.image;
-            barrier.subresourceRange.aspectMask = resource.depthStencil ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.aspectMask = image_aspect_mask(resource);
             barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
             barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
             vkCmdPipelineBarrier(activeCommandBuffer_, queue_stage_mask(previous), queue_stage_mask(usage),
@@ -7167,13 +7791,23 @@ public:
         const auto colorIt = resources_.find(color.id);
         const auto depthIt = resources_.find(depth.id);
         if (!color && depth && depthIt != resources_.end() && depthIt->second.view != VK_NULL_HANDLE) {
-            const auto key = (static_cast<std::uint64_t>(depth.id) << 32u) | 1u;
+            const auto renderPass = get_or_create_color_render_pass({}, depthIt->second.format,
+                depthIt->second.samples, clearAttachments);
+            const auto loadRenderPass = get_or_create_color_render_pass({}, depthIt->second.format,
+                depthIt->second.samples, false);
+            if (renderPass == VK_NULL_HANDLE || loadRenderPass == VK_NULL_HANDLE) {
+                lastError_ = "Vulkan depth-only render pass creation failed";
+                return;
+            }
+            const auto renderPassKey = reinterpret_cast<std::uintptr_t>(renderPass);
+            const auto key = static_cast<std::uint64_t>(renderPassKey) * 257ull +
+                reinterpret_cast<std::uint64_t>(depthIt->second.view);
             auto framebufferIt = dynamicFramebuffers_.find(key);
             if (framebufferIt == dynamicFramebuffers_.end()) {
                 const VkImageView attachments[] = {depthIt->second.view};
                 VkFramebufferCreateInfo info{};
                 info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-                info.renderPass = depthOnlyRenderPass_ != VK_NULL_HANDLE ? depthOnlyRenderPass_ : renderPass_;
+                info.renderPass = renderPass;
                 info.attachmentCount = 1;
                 info.pAttachments = attachments;
                 info.width = depthIt->second.width;
@@ -7190,8 +7824,7 @@ public:
                 clear.depthStencil = {1.0f, 0};
                 VkRenderPassBeginInfo begin{};
                 begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-                begin.renderPass = !clearAttachments && depthOnlyLoadRenderPass_ != VK_NULL_HANDLE ? depthOnlyLoadRenderPass_ :
-                    (depthOnlyRenderPass_ != VK_NULL_HANDLE ? depthOnlyRenderPass_ : renderPass_);
+                begin.renderPass = clearAttachments ? renderPass : loadRenderPass;
                 begin.framebuffer = framebufferIt->second;
                 begin.renderArea.extent = {depthIt->second.width, depthIt->second.height};
                 begin.clearValueCount = clearAttachments ? 1u : 0u;
@@ -7208,13 +7841,31 @@ public:
             return;
         }
         if (color && depth && colorIt != resources_.end() && depthIt != resources_.end()) {
-            const auto key = (static_cast<std::uint64_t>(color.id) << 32u) | depth.id;
+            if (colorIt->second.view == VK_NULL_HANDLE || depthIt->second.view == VK_NULL_HANDLE) {
+                lastError_ = "Vulkan color/depth target has no image view";
+                return;
+            }
+            if (colorIt->second.samples != depthIt->second.samples ||
+                colorIt->second.width != depthIt->second.width || colorIt->second.height != depthIt->second.height) {
+                lastError_ = "Vulkan color/depth targets must have matching extent and sample count";
+                return;
+            }
+            const auto renderPass = get_or_create_color_render_pass({colorIt->second.format}, depthIt->second.format,
+                colorIt->second.samples, clearAttachments);
+            if (renderPass == VK_NULL_HANDLE) {
+                lastError_ = "Vulkan color/depth render pass creation failed";
+                return;
+            }
+            const auto renderPassKey = reinterpret_cast<std::uintptr_t>(renderPass);
+            const auto key = static_cast<std::uint64_t>(renderPassKey) * 257ull +
+                reinterpret_cast<std::uint64_t>(colorIt->second.view) * 257ull +
+                reinterpret_cast<std::uint64_t>(depthIt->second.view);
             auto framebufferIt = dynamicFramebuffers_.find(key);
             if (framebufferIt == dynamicFramebuffers_.end()) {
                 const VkImageView attachments[] = {colorIt->second.view, depthIt->second.view};
                 VkFramebufferCreateInfo info{};
                 info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-                info.renderPass = renderPass_;
+                info.renderPass = renderPass;
                 info.attachmentCount = 2;
                 info.pAttachments = attachments;
                 info.width = colorIt->second.width;
@@ -7232,11 +7883,11 @@ public:
                 clear[1].depthStencil = {1.0f, 0};
                 VkRenderPassBeginInfo begin{};
                 begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-                begin.renderPass = renderPass_;
+                begin.renderPass = renderPass;
                 begin.framebuffer = framebufferIt->second;
                 begin.renderArea.extent = {colorIt->second.width, colorIt->second.height};
-                begin.clearValueCount = 2;
-                begin.pClearValues = clear;
+                begin.clearValueCount = clearAttachments ? 2u : 0u;
+                begin.pClearValues = clearAttachments ? clear : nullptr;
                 vkCmdBeginRenderPass(activeCommandBuffer_, &begin, VK_SUBPASS_CONTENTS_INLINE);
                 VkViewport viewport{0.0f, 0.0f, static_cast<float>(colorIt->second.width), static_cast<float>(colorIt->second.height), 0.0f, 1.0f};
                 VkRect2D scissor{{0, 0}, {colorIt->second.width, colorIt->second.height}};
@@ -7264,7 +7915,10 @@ public:
         std::vector<VkFormat> formats;
         for (const auto handle : colors) {
             const auto it = resources_.find(handle.id);
-            if (it == resources_.end() || it->second.view == VK_NULL_HANDLE) continue;
+            if (it == resources_.end() || it->second.view == VK_NULL_HANDLE) {
+                lastError_ = "Vulkan color attachment handle or image view is invalid";
+                return;
+            }
             colorResources.push_back(&it->second);
             attachments.push_back(it->second.view);
             formats.push_back(it->second.format);
@@ -7272,24 +7926,37 @@ public:
         ResourceRecord* depthResource = nullptr;
         if (depth) {
             const auto it = resources_.find(depth.id);
-            if (it != resources_.end() && it->second.view != VK_NULL_HANDLE) {
-                depthResource = &it->second;
-                attachments.push_back(it->second.view);
+            if (it == resources_.end() || it->second.view == VK_NULL_HANDLE) {
+                lastError_ = "Vulkan depth attachment handle or image view is invalid";
+                return;
             }
+            depthResource = &it->second;
+            attachments.push_back(it->second.view);
         }
         if (formats.empty() && !depthResource) {
             set_render_target({});
             return;
         }
+        const auto samples = colorResources.empty() ? depthResource->samples : colorResources.front()->samples;
+        const auto width = colorResources.empty() ? depthResource->width : colorResources.front()->width;
+        const auto height = colorResources.empty() ? depthResource->height : colorResources.front()->height;
+        for (const auto* resource : colorResources) {
+            if (resource->samples != samples || resource->width != width || resource->height != height) {
+                lastError_ = "Vulkan color attachments must have matching extent and sample count";
+                return;
+            }
+        }
+        if (depthResource && (depthResource->samples != samples || depthResource->width != width || depthResource->height != height)) {
+            lastError_ = "Vulkan depth attachment must match color extent and sample count";
+            return;
+        }
         const auto renderPass = get_or_create_color_render_pass(formats,
-            depthResource ? depthResource->format : VK_FORMAT_UNDEFINED, clearAttachments);
+            depthResource ? depthResource->format : VK_FORMAT_UNDEFINED, samples, clearAttachments);
         if (renderPass == VK_NULL_HANDLE) return;
         const auto renderPassKey = reinterpret_cast<std::uintptr_t>(renderPass);
         std::uint64_t key = static_cast<std::uint64_t>(renderPassKey);
         for (const auto view : attachments) key = key * 257ull + reinterpret_cast<std::uint64_t>(view);
         auto framebufferIt = dynamicFramebuffers_.find(key);
-        const auto width = colorResources.empty() ? depthResource->width : colorResources.front()->width;
-        const auto height = colorResources.empty() ? depthResource->height : colorResources.front()->height;
         if (framebufferIt == dynamicFramebuffers_.end()) {
             VkFramebufferCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -7313,8 +7980,8 @@ public:
         begin.renderPass = renderPass;
         begin.framebuffer = framebufferIt->second;
         begin.renderArea.extent = {width, height};
-        begin.clearValueCount = static_cast<std::uint32_t>(clears.size());
-        begin.pClearValues = clears.data();
+        begin.clearValueCount = clearAttachments ? static_cast<std::uint32_t>(clears.size()) : 0u;
+        begin.pClearValues = clearAttachments ? clears.data() : nullptr;
         vkCmdBeginRenderPass(activeCommandBuffer_, &begin, VK_SUBPASS_CONTENTS_INLINE);
         VkViewport viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
         VkRect2D scissor{{0, 0}, {width, height}};
@@ -7686,7 +8353,11 @@ public:
     bool ensure_pipeline(ResourceRecord& record) {
         if (record.computePipeline != VK_NULL_HANDLE) return true;
         const auto activePass = activeRenderPass_ != VK_NULL_HANDLE ? activeRenderPass_ : renderPass_;
-        const bool depthOnlyPass = activePass == depthOnlyRenderPass_ || activePass == depthOnlyLoadRenderPass_;
+        const auto target = resources_.find(currentRenderTarget_);
+        const bool dynamicDepthOnlyPass = activeRenderPass_ != VK_NULL_HANDLE &&
+            activeRenderPass_ != renderPass_ && target != resources_.end() && target->second.depthStencil;
+        const bool depthOnlyPass = activePass == depthOnlyRenderPass_ || activePass == depthOnlyLoadRenderPass_ ||
+            dynamicDepthOnlyPass;
         if (record.graphicsPipeline != VK_NULL_HANDLE && record.pipelineRenderPass == activePass) return true;
         if (depthOnlyPass && record.depthOnlyPipeline != VK_NULL_HANDLE && record.pipelineRenderPass == activePass) return true;
         if (activeRenderPass_ == VK_NULL_HANDLE && renderPass_ == VK_NULL_HANDLE) return false;
@@ -7796,7 +8467,7 @@ public:
             }
             return true;
         }
-        if (record.pipeline.sampleCount != 1 ||
+        if (!is_supported_sample_count(record.pipeline.sampleCount) ||
             (record.pipeline.fillMode != "solid" && record.pipeline.fillMode != "wireframe") ||
             (record.pipeline.cullMode != "back" && record.pipeline.cullMode != "front" && record.pipeline.cullMode != "none") ||
             (record.pipeline.topology != "triangle" && record.pipeline.topology != "line" && record.pipeline.topology != "point") ||
@@ -7810,6 +8481,37 @@ public:
              !is_supported_color_format(record.pipeline.colorFormat)) ||
             !is_supported_pipeline_depth_format(record.pipeline.depthFormat)) {
             lastError_ = "Vulkan pipeline fixed-function state or attachment format is unsupported";
+            return false;
+        }
+        VkSampleCountFlagBits pipelineSamples = VK_SAMPLE_COUNT_1_BIT;
+        switch (record.pipeline.sampleCount) {
+        case 1: pipelineSamples = VK_SAMPLE_COUNT_1_BIT; break;
+        case 2: pipelineSamples = VK_SAMPLE_COUNT_2_BIT; break;
+        case 4: pipelineSamples = VK_SAMPLE_COUNT_4_BIT; break;
+        case 8: pipelineSamples = VK_SAMPLE_COUNT_8_BIT; break;
+        default: return false;
+        }
+        const auto activeTargetSamples = target != resources_.end() && target->second.image != VK_NULL_HANDLE
+            ? target->second.samples : VK_SAMPLE_COUNT_1_BIT;
+        if (pipelineSamples != activeTargetSamples) {
+            lastError_ = "Vulkan pipeline sample count does not match the active render target";
+            return false;
+        }
+        const auto expectedColorFormat = format_of(record.pipeline.colorFormats.empty()
+            ? std::string_view(record.pipeline.colorFormat) : std::string_view(record.pipeline.colorFormats.front()));
+        if (depthOnlyPass) {
+            if (target == resources_.end() || !target->second.depthStencil ||
+                format_of(record.pipeline.depthFormat) != target->second.format) {
+                lastError_ = "Vulkan pipeline depth format does not match the active depth target";
+                return false;
+            }
+        } else if (target != resources_.end() && target->second.image != VK_NULL_HANDLE) {
+            if (target->second.depthStencil || target->second.format != expectedColorFormat) {
+                lastError_ = "Vulkan pipeline color format does not match the active render target";
+                return false;
+            }
+        } else if (swapchainFormat_ != VK_FORMAT_UNDEFINED && swapchainFormat_ != expectedColorFormat) {
+            lastError_ = "Vulkan pipeline color format does not match the swapchain";
             return false;
         }
         const auto vertex = resources_.find(record.pipeline.vertexShader);
@@ -7892,19 +8594,38 @@ public:
         VkPipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         VkVertexInputBindingDescription vertexBinding{};
-        VkVertexInputAttributeDescription vertexAttribute{};
+        VkVertexInputAttributeDescription vertexAttributes[3]{};
+        std::uint32_t vertexAttributeCount = 0;
         if (record.pipeline.vertexInput) {
             vertexBinding.binding = 0;
-            vertexBinding.stride = sizeof(float) * 3;
+            vertexBinding.stride = sizeof(float) * 3 +
+                (record.pipeline.vertexTextureCoordinates ? sizeof(float) * 2 : 0) +
+                (record.pipeline.vertexNormals ? sizeof(float) * 3 : 0);
             vertexBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            vertexAttribute.location = 0;
-            vertexAttribute.binding = 0;
-            vertexAttribute.format = VK_FORMAT_R32G32B32_SFLOAT;
-            vertexAttribute.offset = 0;
+            vertexAttributes[vertexAttributeCount].location = 0;
+            vertexAttributes[vertexAttributeCount].binding = 0;
+            vertexAttributes[vertexAttributeCount].format = VK_FORMAT_R32G32B32_SFLOAT;
+            vertexAttributes[vertexAttributeCount].offset = 0;
+            ++vertexAttributeCount;
+            if (record.pipeline.vertexTextureCoordinates) {
+                vertexAttributes[vertexAttributeCount].location = 1;
+                vertexAttributes[vertexAttributeCount].binding = 0;
+                vertexAttributes[vertexAttributeCount].format = VK_FORMAT_R32G32_SFLOAT;
+                vertexAttributes[vertexAttributeCount].offset = sizeof(float) * 3;
+                ++vertexAttributeCount;
+            }
+            if (record.pipeline.vertexNormals) {
+                vertexAttributes[vertexAttributeCount].location = record.pipeline.vertexTextureCoordinates ? 2 : 1;
+                vertexAttributes[vertexAttributeCount].binding = 0;
+                vertexAttributes[vertexAttributeCount].format = VK_FORMAT_R32G32B32_SFLOAT;
+                vertexAttributes[vertexAttributeCount].offset = sizeof(float) *
+                    (record.pipeline.vertexTextureCoordinates ? 5 : 3);
+                ++vertexAttributeCount;
+            }
             vertexInput.vertexBindingDescriptionCount = 1;
             vertexInput.pVertexBindingDescriptions = &vertexBinding;
-            vertexInput.vertexAttributeDescriptionCount = 1;
-            vertexInput.pVertexAttributeDescriptions = &vertexAttribute;
+            vertexInput.vertexAttributeDescriptionCount = vertexAttributeCount;
+            vertexInput.pVertexAttributeDescriptions = vertexAttributes;
         }
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -7928,7 +8649,7 @@ public:
         raster.lineWidth = 1.0f;
         VkPipelineMultisampleStateCreateInfo multisample{};
         multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        multisample.rasterizationSamples = pipelineSamples;
         VkPipelineDepthStencilStateCreateInfo depthState{};
         depthState.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         depthState.depthTestEnable = record.pipeline.depthFormat == "none" || !record.pipeline.depthTest
@@ -7945,8 +8666,8 @@ public:
         blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
         blend.alphaBlendOp = VK_BLEND_OP_ADD;
-        const auto colorFormats = record.pipeline.colorFormats.empty()
-            ? std::vector<std::string>{record.pipeline.colorFormat} : record.pipeline.colorFormats;
+        const auto colorFormats = depthOnlyPass ? std::vector<std::string>{} : (record.pipeline.colorFormats.empty()
+            ? std::vector<std::string>{record.pipeline.colorFormat} : record.pipeline.colorFormats);
         std::vector<VkPipelineColorBlendAttachmentState> blendAttachments(colorFormats.size(), blend);
         VkPipelineColorBlendStateCreateInfo blendState{};
         blendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -7987,7 +8708,7 @@ public:
             return false;
         }
         record.pipelineRenderPass = pipelineInfo.renderPass;
-        if (depthOnlyRenderPass_ != VK_NULL_HANDLE) {
+        if (pipelineSamples == VK_SAMPLE_COUNT_1_BIT && depthOnlyRenderPass_ != VK_NULL_HANDLE) {
             pipelineInfo.stageCount = 1;
             pipelineInfo.pColorBlendState = nullptr;
             pipelineInfo.subpass = 0;
@@ -8029,6 +8750,7 @@ public:
             }
         } else if (boundPipeline_) {
             if (lastError_.empty()) lastError_ = "Vulkan pipeline binding failed";
+            boundPipeline_ = nullptr;
         }
     }
     void bind_material(ResourceHandle handle) override {
@@ -8239,17 +8961,24 @@ public:
     void draw_sprite(const SpriteDraw&) override { ++stats_.drawCalls; ++stats_.spriteCalls; if (frameActive_ && boundPipeline_ && boundPipeline_->graphicsPipeline) vkCmdDraw(recording_command(), 6, 1, 0, 0); }
     void draw_mesh(const MeshDraw& draw) override {
         ++stats_.drawCalls; ++stats_.meshCalls;
-        if (!frameActive_ || !boundPipeline_ || !boundPipeline_->graphicsPipeline) return;
+        if (!frameActive_ || !boundPipeline_ || !boundPipeline_->graphicsPipeline || !draw.indexCount) {
+            if (lastError_.empty()) lastError_ = "Vulkan mesh draw has invalid command state";
+            return;
+        }
         const auto vertex = resources_.find(draw.vertexBuffer.id);
         const auto index = resources_.find(draw.indexBuffer.id);
-        if (vertex != resources_.end() && vertex->second.buffer != VK_NULL_HANDLE) {
-            VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(recording_command(), 0, 1, &vertex->second.buffer, &offset);
+        if (vertex == resources_.end() || index == resources_.end() ||
+            draw.vertexBuffer.kind != ResourceKind::Buffer || draw.indexBuffer.kind != ResourceKind::Buffer ||
+            vertex->second.kind != ResourceKind::Buffer || index->second.kind != ResourceKind::Buffer ||
+            vertex->second.buffer == VK_NULL_HANDLE || index->second.buffer == VK_NULL_HANDLE ||
+            !indexed_range_fits(index->second.size, draw.firstIndex, draw.indexCount)) {
+            lastError_ = "Vulkan mesh draw buffers are invalid";
+            return;
         }
-        if (index != resources_.end() && index->second.buffer != VK_NULL_HANDLE) {
-            vkCmdBindIndexBuffer(recording_command(), index->second.buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(recording_command(), draw.indexCount, 1, 0, 0, 0);
-        }
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(recording_command(), 0, 1, &vertex->second.buffer, &offset);
+        vkCmdBindIndexBuffer(recording_command(), index->second.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(recording_command(), draw.indexCount, 1, draw.firstIndex, draw.vertexOffset, 0);
     }
     bool dispatch(const DispatchDesc& dispatch) override {
         if (!frameActive_ || !boundPipeline_ || dispatch.groupCountX == 0 || dispatch.groupCountY == 0 || dispatch.groupCountZ == 0) {
@@ -8281,7 +9010,10 @@ public:
             vertex == resources_.end() || index == resources_.end() || arguments == resources_.end() ||
             vertex->second.buffer == VK_NULL_HANDLE || index->second.buffer == VK_NULL_HANDLE ||
             arguments->second.buffer == VK_NULL_HANDLE || draw.maxDrawCount == 0 ||
-            draw.stride < sizeof(std::uint32_t) * 5) {
+            draw.vertexBuffer.kind != ResourceKind::Buffer || draw.indexBuffer.kind != ResourceKind::Buffer ||
+            draw.argumentBuffer.kind != ResourceKind::Buffer || vertex->second.kind != ResourceKind::Buffer ||
+            index->second.kind != ResourceKind::Buffer || arguments->second.kind != ResourceKind::Buffer ||
+            !indirect_arguments_fit(arguments->second.size, draw)) {
             lastError_ = "Vulkan indirect draw has invalid command state or buffer";
             return;
         }

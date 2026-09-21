@@ -51,7 +51,8 @@ bool finite_non_negative(float value) {
 
 bool valid_texture_description(const TextureDesc& description) {
     return description.width != 0 && description.height != 0 &&
-        description.layers != 0 && description.mipLevels != 0;
+        description.layers != 0 && (description.mipLevels == 0 ||
+            description.mipLevels <= texture_full_mip_count(description));
 }
 
 void append_error(LightingValidationResult& result, const std::string& message) {

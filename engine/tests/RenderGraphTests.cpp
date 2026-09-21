@@ -50,6 +50,12 @@ int main() {
 
     shinkou::render::RenderGraph graph;
     const auto texture = graph.create_texture({64, 64, 1, 1, "rgba8", true});
+    shinkou::render::RenderGraph implicitMipGraph;
+    const auto implicitMipTexture = implicitMipGraph.create_texture({32, 16, 1, 0, "rgba8", true});
+    if (!implicitMipTexture || std::get<shinkou::render::TextureDesc>(implicitMipGraph.resources().back().description).mipLevels != 6) {
+        std::cerr << "zero mip count was not normalized by the render graph\n";
+        return 108;
+    }
     graph.add_pass("producer", {}, {texture}, [](auto&, const auto&) {});
     graph.add_pass("consumer", {texture}, {}, [](auto&, const auto&) {});
     std::string error;
@@ -197,6 +203,18 @@ int main() {
     if (!indirectGraph.compile(&error) || indirectGraph.diagnostics().plannedTransitionCount != 3) {
         std::cerr << "indirect draw resource plan was not compiled\n";
         return 34;
+    }
+
+    shinkou::render::RenderGraph uniformAliasGraph;
+    const auto uniformBuffer = uniformAliasGraph.create_buffer({256, 16, false, false, {}, false, false, false, true, true});
+    const auto ordinaryBuffer = uniformAliasGraph.create_buffer({256, 16, false, false, {}, false, false, false, true, false});
+    uniformAliasGraph.add_pass("uniform_write", {{uniformBuffer, shinkou::render::ResourceUsage::UniformBuffer}},
+        [](auto&, const auto&) {});
+    uniformAliasGraph.add_pass("ordinary_write", {{ordinaryBuffer, shinkou::render::ResourceUsage::CopyDestination}},
+        [](auto&, const auto&) {});
+    if (!uniformAliasGraph.compile(&error) || uniformAliasGraph.alias_plan().aliasCount != 0) {
+        std::cerr << "uniform and ordinary transient buffers were incorrectly aliased\n";
+        return 109;
     }
 
     auto backend = shinkou::render::create_backend(shinkou::render::BackendApi::Null);
@@ -414,6 +432,24 @@ int main() {
         std::cerr << "identical shader variants were not cached\n";
         return 30;
     }
+    auto dependentPipelineDescription = cachedPipeline;
+    dependentPipelineDescription.name = "dependent_pipeline";
+    dependentPipelineDescription.vertexShader = variantShaderA.id;
+    auto dependentFragmentDescription = variantShader;
+    dependentFragmentDescription.stage = shinkou::render::ShaderStage::Fragment;
+    dependentFragmentDescription.name = "dependent_fragment";
+    const auto dependentFragment = renderer.create_shader(dependentFragmentDescription);
+    dependentPipelineDescription.fragmentShader = dependentFragment.id;
+    const auto dependentPipeline = renderer.create_pipeline(dependentPipelineDescription);
+    const auto dependentMaterial = renderer.create_material({"dependent_material", dependentPipeline, {}, false});
+    renderer.destroy_resource(dependentPipeline);
+    if (renderer.resource_description(dependentPipeline) == nullptr ||
+        renderer.last_error().find("referenced") == std::string::npos) {
+        std::cerr << "renderer allowed destruction of a referenced pipeline\n";
+        return 102;
+    }
+    renderer.destroy_resource(dependentMaterial);
+    renderer.destroy_resource(dependentPipeline);
     auto changedVariant = variantShader;
     changedVariant.revision = 2;
     const auto variantShaderC = renderer.create_shader(changedVariant);
@@ -572,7 +608,10 @@ int main() {
         std::cerr << "material binding graph compilation failed: " << error << "\n";
         return 81;
     }
-    materialGraph.execute(*renderer.backend(), &error);
+    if (!renderer.execute_graph(materialGraph, &error)) {
+        std::cerr << "material graph execution failed: " << error << "\n";
+        return 81;
+    }
     if (renderer.stats().materialBinds == 0 || renderer.stats().descriptorBinds == 0 || renderer.stats().drawCalls == 0) {
         std::cerr << "material binding draw regression failed: " << error << "\n";
         return 81;
@@ -585,7 +624,7 @@ int main() {
         std::cerr << "failure graph compilation failed: " << error << "\n";
         return 83;
     }
-    failingGraph.execute(*renderer.backend(), &error);
+    renderer.execute_graph(failingGraph, &error);
     if (error.find("intentional_backend_failure") == std::string::npos ||
         !failingGraph.diagnostics().executionFailed || failingGraph.diagnostics().executedPassCount != 0 ||
         failingGraph.diagnostics().failedPassIndex != 0 || renderer.stats().discardedFrames == 0) {
@@ -803,14 +842,30 @@ int main() {
         shinkou::render::TransformComponent objectTransform;
         objectTransform.local.position = {static_cast<float>(index), 0.0f, 0.0f};
         sceneWorld.ecs().emplace<shinkou::render::TransformComponent>(entity, objectTransform);
-        sceneWorld.ecs().emplace<shinkou::render::MeshRendererComponent>(entity,
-            shinkou::render::MeshRendererComponent{sceneVertex, sceneIndex, sceneMaterial, 3, true, true, {}, 1.0f});
+        auto mesh = shinkou::render::MeshRendererComponent{
+            sceneVertex, sceneIndex, sceneMaterial, 3, true, true, {}, 1.0f};
+        if (index == 1) {
+            mesh.firstIndex = 3;
+            mesh.vertexOffset = 1;
+        }
+        sceneWorld.ecs().emplace<shinkou::render::MeshRendererComponent>(entity, mesh);
     }
     shinkou::render::RenderScene extracted;
     extracted.extract(sceneWorld, sceneRenderer, 1.0f);
     if (extracted.stats().visibleMeshes != 2 || extracted.meshes().size() != 2 || !extracted.meshes()[0].gpuDriven) {
         std::cerr << "GPU driven scene extraction failed\n";
         return 42;
+    }
+    bool foundSharedMeshRange = false;
+    for (const auto& mesh : extracted.meshes()) {
+        if (mesh.firstIndex == 3 && mesh.vertexOffset == 1) {
+            foundSharedMeshRange = true;
+            break;
+        }
+    }
+    if (!foundSharedMeshRange) {
+        std::cerr << "shared mesh index range was not preserved\n";
+        return 68;
     }
     if (extracted.lights().size() != 1) {
         std::cerr << "light extraction failed\n";
@@ -984,6 +1039,21 @@ int main() {
         aliasContractGraph.physical_resource(linearTexture).id == aliasContractGraph.physical_resource(storageTexture).id) {
         std::cerr << "transient texture alias compatibility contract failed\n";
         return 51;
+    }
+    shinkou::render::RenderGraph sampleAliasGraph;
+    auto singleSampleTexture = shinkou::render::TextureDesc{64, 64, 1, 1, "rgba8", true, false, {}};
+    auto multisampleTexture = singleSampleTexture;
+    multisampleTexture.sampleCount = 4;
+    const auto singleSample = sampleAliasGraph.create_texture(singleSampleTexture);
+    const auto multisample = sampleAliasGraph.create_texture(multisampleTexture);
+    sampleAliasGraph.add_pass("single_sample", {{singleSample, shinkou::render::ResourceUsage::ColorAttachment}},
+        [](auto&, const auto&) {});
+    sampleAliasGraph.add_pass("multi_sample", {{multisample, shinkou::render::ResourceUsage::ColorAttachment}},
+        [](auto&, const auto&) {});
+    if (!sampleAliasGraph.compile(&error) ||
+        sampleAliasGraph.physical_resource(singleSample).id == sampleAliasGraph.physical_resource(multisample).id) {
+        std::cerr << "transient MSAA texture alias compatibility contract failed\n";
+        return 103;
     }
     shinkou::render::RenderGraph crossQueueAliasGraph;
     const auto graphicsTransient = crossQueueAliasGraph.create_texture({32, 32, 1, 1, "rgba8", false, false, {}, false, "linear", true});

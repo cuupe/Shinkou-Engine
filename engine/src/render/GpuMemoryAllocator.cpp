@@ -100,9 +100,9 @@ GpuAllocation GpuMemoryAllocator::allocate(std::size_t size, std::size_t alignme
     std::size_t aligned = 0;
     for (auto& block : pool.blocks) {
         for (const auto& range : block.freeRanges) {
-            std::size_t candidate = 0, end = 0;
+            std::size_t candidate = 0, end = 0, rangeEnd = 0;
             if (align_up(range.first, alignment, candidate) ||
-                add_overflow(candidate, size, end) || end > range.first + range.second) continue;
+                add_overflow(candidate, size, end) || add_overflow(range.first, range.second, rangeEnd) || end > rangeEnd) continue;
             selected = &block;
             rangeStart = range.first;
             aligned = candidate;
@@ -125,8 +125,12 @@ GpuAllocation GpuMemoryAllocator::allocate(std::size_t size, std::size_t alignme
     }
     const auto rangeIt = selected->freeRanges.find(rangeStart);
     if (rangeIt == selected->freeRanges.end()) { ++pool.failures; return {}; }
-    const auto rangeEnd = rangeIt->first + rangeIt->second;
-    const auto allocationEnd = aligned + size;
+    std::size_t rangeEnd = 0;
+    std::size_t allocationEnd = 0;
+    if (add_overflow(rangeIt->first, rangeIt->second, rangeEnd) || add_overflow(aligned, size, allocationEnd)) {
+        ++pool.failures;
+        return {};
+    }
     selected->freeRanges.erase(rangeIt);
     if (aligned > rangeStart) selected->freeRanges.emplace(rangeStart, aligned - rangeStart);
     if (allocationEnd < rangeEnd) selected->freeRanges.emplace(allocationEnd, rangeEnd - allocationEnd);
@@ -193,6 +197,7 @@ std::size_t GpuMemoryAllocator::block_capacity(std::uint64_t blockId) const noex
 }
 
 std::size_t GpuMemoryAllocator::reset(GpuMemoryLifetime lifetime) noexcept {
+    if (!impl_) return 0;
     std::vector<GpuAllocation> allocations;
     for (const auto& entry : impl_->records) if (entry.second.lifetime == lifetime) {
         const auto& r = entry.second;
@@ -202,11 +207,14 @@ std::size_t GpuMemoryAllocator::reset(GpuMemoryLifetime lifetime) noexcept {
     return allocations.size();
 }
 
-void GpuMemoryAllocator::set_default_budget(std::size_t bytes) noexcept { impl_->config.budgetBytes = bytes; }
-std::size_t GpuMemoryAllocator::default_budget() const noexcept { return impl_->config.budgetBytes; }
-void GpuMemoryAllocator::set_budget(GpuMemoryType type, std::size_t bytes) noexcept { impl_->budgets[type] = bytes; }
-void GpuMemoryAllocator::clear_budget(GpuMemoryType type) noexcept { impl_->budgets.erase(type); }
+void GpuMemoryAllocator::set_default_budget(std::size_t bytes) noexcept { if (impl_) impl_->config.budgetBytes = bytes; }
+std::size_t GpuMemoryAllocator::default_budget() const noexcept {
+    return impl_ ? impl_->config.budgetBytes : std::numeric_limits<std::size_t>::max();
+}
+void GpuMemoryAllocator::set_budget(GpuMemoryType type, std::size_t bytes) noexcept { if (impl_) impl_->budgets[type] = bytes; }
+void GpuMemoryAllocator::clear_budget(GpuMemoryType type) noexcept { if (impl_) impl_->budgets.erase(type); }
 std::size_t GpuMemoryAllocator::budget(GpuMemoryType type) const noexcept {
+    if (!impl_) return std::numeric_limits<std::size_t>::max();
     const auto it = impl_->budgets.find(type);
     return it == impl_->budgets.end() ? impl_->config.budgetBytes : it->second;
 }
@@ -214,6 +222,7 @@ std::size_t GpuMemoryAllocator::budget(GpuMemoryType type) const noexcept {
 GpuMemoryStats GpuMemoryAllocator::stats(GpuMemoryType type) const noexcept {
     GpuMemoryStats result;
     result.budgetBytes = budget(type);
+    if (!impl_) return result;
     const auto it = impl_->pools.find(type);
     if (it == impl_->pools.end()) return result;
     const auto& pool = it->second;
@@ -232,6 +241,7 @@ GpuMemoryStats GpuMemoryAllocator::stats(GpuMemoryType type) const noexcept {
 }
 GpuMemoryStats GpuMemoryAllocator::stats() const noexcept {
     GpuMemoryStats result;
+    if (!impl_) return result;
     result.budgetBytes = impl_->config.budgetBytes;
     for (const auto& pair : impl_->pools) {
         const auto value = stats(pair.first);
@@ -252,6 +262,7 @@ GpuMemoryStats GpuMemoryAllocator::stats() const noexcept {
 
 std::size_t GpuMemoryAllocator::trim() noexcept {
     std::size_t released = 0;
+    if (!impl_) return released;
     for (auto& pair : impl_->pools) {
         auto& pool = pair.second;
         auto it = pool.blocks.begin();

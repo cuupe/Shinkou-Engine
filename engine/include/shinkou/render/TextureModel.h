@@ -89,7 +89,9 @@ struct TextureValidationResult {
 };
 
 TextureFormat texture_format_from_name(std::string_view name) noexcept;
+TextureFormat texture_format_of(const TextureDesc& description) noexcept;
 std::string_view texture_format_name(TextureFormat format) noexcept;
+std::size_t texture_format_bytes_per_pixel(TextureFormat format) noexcept;
 bool texture_format_is_depth(TextureFormat format) noexcept;
 bool texture_format_is_hdr(TextureFormat format) noexcept;
 bool texture_format_is_compressed(TextureFormat format) noexcept;

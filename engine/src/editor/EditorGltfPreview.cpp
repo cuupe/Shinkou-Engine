@@ -28,6 +28,8 @@ constexpr std::size_t kMaxTriangles = 1000000;
 constexpr std::size_t kMaxWireSegments = 8192;
 constexpr std::size_t kMaxBufferBytes = 128u * 1024u * 1024u;
 constexpr std::size_t kMaxModelMetadataEntries = 4096;
+constexpr std::size_t kMaxAnimationKeys = 65536;
+constexpr float kMaxAnimationDuration = 3600.0f;
 constexpr std::size_t kMaxImageArtifactBytes = 32u * 1024u * 1024u;
 constexpr std::size_t kMaxImageArtifactTotalBytes = 64u * 1024u * 1024u;
 
@@ -241,6 +243,7 @@ struct Geometry {
     std::vector<math::Vec2> textureCoordinates;
     std::vector<math::Vec3> normals;
     std::vector<std::uint32_t> indices;
+    std::vector<animation::BoneIndex> vertexBones;
     bool hasTextureCoordinates{false};
     bool hasNormals{false};
 };
@@ -836,6 +839,75 @@ bool read_index_accessor(const AccessorDesc& accessor, const BufferViewDesc& vie
     return true;
 }
 
+bool read_float_accessor(const AccessorDesc& accessor, const BufferViewDesc& view,
+                         const std::vector<std::vector<std::uint8_t>>& buffers,
+                         const std::atomic_bool* cancel, std::size_t components,
+                         std::vector<float>& output, std::string& error) {
+    if (accessor.componentType != 5126u || accessor.count == 0 ||
+        accessor.count > kMaxAnimationKeys || view.buffer >= buffers.size() ||
+        (accessor.type == "SCALAR" && components != 1u) ||
+        (accessor.type == "VEC3" && components != 3u) ||
+        (accessor.type == "VEC4" && components != 4u) ||
+        (accessor.type != "SCALAR" && accessor.type != "VEC3" && accessor.type != "VEC4")) {
+        error = "glTF animation accessor is not a supported float vector";
+        return false;
+    }
+    const std::size_t elementBytes = components * sizeof(float);
+    const auto stride = view.byteStride == 0 ? elementBytes : view.byteStride;
+    if (stride < elementBytes) { error = "glTF animation byteStride is too small"; return false; }
+    const auto& buffer = buffers[view.buffer];
+    std::size_t base = 0, span = 0;
+    if (!safe_add(view.byteOffset, accessor.byteOffset, base) ||
+        !safe_mul(accessor.count - 1u, stride, span) || !safe_add(span, elementBytes, span) ||
+        !in_range(base, span, buffer.size()) || !in_range(view.byteOffset, view.byteLength, buffer.size()) ||
+        base < view.byteOffset || !in_range(base - view.byteOffset, span, view.byteLength)) {
+        error = "glTF animation accessor exceeds its bufferView";
+        return false;
+    }
+    std::size_t outputCount = 0;
+    if (!safe_mul(accessor.count, components, outputCount) ||
+        outputCount > kMaxAnimationKeys * 4u) {
+        error = "glTF animation accessor exceeds the preview key limit";
+        return false;
+    }
+    output.reserve(output.size() + outputCount);
+    for (std::size_t index = 0; index < accessor.count; ++index) {
+        if (cancel && cancel->load(std::memory_order_relaxed)) {
+            error = "model preview cancelled";
+            return false;
+        }
+        std::size_t offset = 0;
+        if (!safe_mul(index, stride, offset) || !safe_add(base, offset, offset)) {
+            error = "glTF animation accessor offset overflows";
+            return false;
+        }
+        for (std::size_t component = 0; component < components; ++component) {
+            const auto value = read_f32_le(buffer.data() + offset + component * sizeof(float));
+            if (!std::isfinite(value)) {
+                error = "glTF animation accessor contains a non-finite value";
+                return false;
+            }
+            output.push_back(value);
+        }
+    }
+    return true;
+}
+
+bool parse_float_array(const JsonValue* value, std::size_t count, float minimum, float maximum,
+                       float* output, std::string& error, std::string_view label) {
+    if (!value || value->kind != JsonValue::Kind::Array || value->array.size() != count) {
+        error = "glTF " + std::string(label) + " must contain " + std::to_string(count) + " values";
+        return false;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+        if (!number_to_float(&value->array[index], minimum, maximum, output[index])) {
+            error = "glTF " + std::string(label) + " contains an invalid value";
+            return false;
+        }
+    }
+    return true;
+}
+
 std::uint64_t revision(std::string_view path, std::uint64_t stamp,
                        std::size_t vertices, std::size_t triangles, std::string_view format) noexcept {
     std::uint64_t hash = 1469598103934665603ull;
@@ -975,6 +1047,121 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
         accessors.push_back(std::move(accessor));
     }
 
+    std::vector<EditorModelNodePreview> nodeMetadata;
+    std::vector<math::Transform> nodeBindPose;
+    std::vector<animation::BoneIndex> meshBones(meshesValue->array.size(), animation::InvalidBone);
+    std::shared_ptr<animation::Skeleton> animationSkeleton;
+    if (const auto* nodesValue = member(root, "nodes")) {
+        if (nodesValue->kind != JsonValue::Kind::Array ||
+            nodesValue->array.size() > kMaxModelMetadataEntries)
+            return failed(path, generation, sourceStamp, "glTF node table exceeds the preview limit");
+        nodeMetadata.resize(nodesValue->array.size());
+        nodeBindPose.resize(nodesValue->array.size());
+        for (std::size_t index = 0; index < nodesValue->array.size(); ++index) {
+            const auto& value = nodesValue->array[index];
+            if (value.kind != JsonValue::Kind::Object)
+                return failed(path, generation, sourceStamp, "glTF node is not an object");
+            auto& node = nodeMetadata[index];
+            if (!optional_string(value, "name", node.name, error) ||
+                !optional_index(value, "mesh", meshesValue->array.empty() ? 0 : meshesValue->array.size() - 1u,
+                                node.mesh, error))
+                return failed(path, generation, sourceStamp, error);
+            if (node.name.empty()) node.name = "Node #" + std::to_string(index + 1u);
+            const bool hasMatrix = member(value, "matrix") != nullptr;
+            const bool hasTranslation = member(value, "translation") != nullptr;
+            const bool hasRotation = member(value, "rotation") != nullptr;
+            const bool hasScale = member(value, "scale") != nullptr;
+            if (hasMatrix && (hasTranslation || hasRotation || hasScale))
+                return failed(path, generation, sourceStamp, "glTF node cannot combine matrix and TRS transforms");
+            auto& bind = nodeBindPose[index];
+            if (hasMatrix) {
+                const auto* matrix = member(value, "matrix");
+                if (!matrix || matrix->kind != JsonValue::Kind::Array || matrix->array.size() != 16u)
+                    return failed(path, generation, sourceStamp, "glTF node matrix is invalid");
+                math::Mat4 matrixValue = math::Mat4::Identity();
+                for (std::size_t component = 0; component < 16u; ++component) {
+                    if (!number_to_float(&matrix->array[component], -1.0e6f, 1.0e6f,
+                                         matrixValue.m[component]))
+                        return failed(path, generation, sourceStamp, "glTF node matrix contains an invalid value");
+                }
+                if (!math::Decompose(matrixValue, bind))
+                    return failed(path, generation, sourceStamp, "glTF node matrix cannot be decomposed for preview");
+            } else {
+                float values[4]{};
+                if (hasTranslation) {
+                    if (!parse_float_array(member(value, "translation"), 3u, -1.0e6f, 1.0e6f,
+                                           values, error, "node translation"))
+                        return failed(path, generation, sourceStamp, error);
+                    bind.position = {values[0], values[1], values[2]};
+                }
+                if (hasRotation) {
+                    if (!parse_float_array(member(value, "rotation"), 4u, -1.0f, 1.0f,
+                                           values, error, "node rotation"))
+                        return failed(path, generation, sourceStamp, error);
+                    bind.rotation = math::Normalize(math::Quat{values[0], values[1], values[2], values[3]});
+                }
+                if (hasScale) {
+                    if (!parse_float_array(member(value, "scale"), 3u, -1.0e4f, 1.0e4f,
+                                           values, error, "node scale"))
+                        return failed(path, generation, sourceStamp, error);
+                    bind.scale = {values[0], values[1], values[2]};
+                }
+            }
+        }
+        for (std::size_t index = 0; index < nodesValue->array.size(); ++index) {
+            const auto* children = member(nodesValue->array[index], "children");
+            if (!children) continue;
+            if (children->kind != JsonValue::Kind::Array || children->array.size() > kMaxModelMetadataEntries)
+                return failed(path, generation, sourceStamp, "glTF node children list is invalid");
+            for (const auto& child : children->array) {
+                std::size_t childIndex = 0;
+                if (!number_to_size(&child, nodeMetadata.size() == 0 ? 0 : nodeMetadata.size() - 1u, childIndex) ||
+                    childIndex == index)
+                    return failed(path, generation, sourceStamp, "glTF node child index is invalid");
+                auto& childNode = nodeMetadata[childIndex];
+                if (childNode.parent >= 0 && childNode.parent != static_cast<std::int32_t>(index))
+                    return failed(path, generation, sourceStamp, "glTF node has multiple parents");
+                childNode.parent = static_cast<std::int32_t>(index);
+            }
+        }
+        std::vector<std::uint8_t> visitState(nodeMetadata.size(), 0);
+        std::vector<std::size_t> order;
+        order.reserve(nodeMetadata.size());
+        const auto visit = [&](auto&& self, std::size_t nodeIndex) -> bool {
+            if (visitState[nodeIndex] == 1u) return false;
+            if (visitState[nodeIndex] == 2u) return true;
+            visitState[nodeIndex] = 1u;
+            const auto parent = nodeMetadata[nodeIndex].parent;
+            if (parent >= 0 && !self(self, static_cast<std::size_t>(parent))) return false;
+            visitState[nodeIndex] = 2u;
+            order.push_back(nodeIndex);
+            return true;
+        };
+        for (std::size_t index = 0; index < nodeMetadata.size(); ++index) {
+            if (!visit(visit, index))
+                return failed(path, generation, sourceStamp, "glTF node hierarchy contains a cycle");
+        }
+        animationSkeleton = std::make_shared<animation::Skeleton>();
+        std::vector<animation::BoneIndex> nodeBones(nodeMetadata.size(), animation::InvalidBone);
+        for (const auto nodeIndex : order) {
+            const auto boneIndex = static_cast<animation::BoneIndex>(animationSkeleton->parents.size());
+            nodeBones[nodeIndex] = boneIndex;
+            nodeMetadata[nodeIndex].bone = boneIndex;
+            const auto parent = nodeMetadata[nodeIndex].parent;
+            animationSkeleton->parents.push_back(parent < 0 ? animation::InvalidBone : nodeBones[static_cast<std::size_t>(parent)]);
+            animationSkeleton->bindPose.push_back(nodeBindPose[nodeIndex]);
+            animationSkeleton->inverseBindMatrices.push_back(math::Mat4::Identity());
+            animationSkeleton->names.push_back(nodeMetadata[nodeIndex].name);
+        }
+        if (!animationSkeleton->valid())
+            return failed(path, generation, sourceStamp, "glTF node hierarchy is not a valid preview skeleton");
+        for (const auto& node : nodeMetadata) {
+            if (node.mesh >= 0 && static_cast<std::size_t>(node.mesh) < meshBones.size() &&
+                meshBones[static_cast<std::size_t>(node.mesh)] == animation::InvalidBone)
+                meshBones[static_cast<std::size_t>(node.mesh)] = node.bone;
+        }
+    }
+
     std::vector<EditorModelImagePreview> imageMetadata;
     std::vector<EditorModelTextureArtifact> imageArtifacts;
     std::size_t totalImageArtifactBytes = 0;
@@ -1054,6 +1241,10 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
             if (animation.name.empty()) animation.name = "Animation #" + std::to_string(index + 1u);
             animation.samplerCount = samplers->array.size();
             animation.channelCount = channels->array.size();
+            bool fullySupported = !channels->array.empty() && animationSkeleton != nullptr;
+            std::shared_ptr<animation::AnimationClip> clip;
+            if (animationSkeleton) clip = std::make_shared<animation::AnimationClip>(animationSkeleton->bone_count());
+            if (clip) clip->set_name(animation.name);
             for (const auto& channel : channels->array) {
                 if (channel.kind != JsonValue::Kind::Object)
                     return failed(path, generation, sourceStamp, "glTF animation channel is not an object");
@@ -1062,6 +1253,85 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
                                     animation.samplerCount == 0 ? 0 : animation.samplerCount - 1u,
                                     samplerIndex))
                     return failed(path, generation, sourceStamp, "glTF animation channel sampler index is invalid");
+                const auto& sampler = samplers->array[samplerIndex];
+                if (sampler.kind != JsonValue::Kind::Object) {
+                    fullySupported = false;
+                    continue;
+                }
+                std::size_t inputIndex = 0;
+                std::size_t outputIndex = 0;
+                if (!number_to_size(member(sampler, "input"), accessors.size() ? accessors.size() - 1u : 0, inputIndex) ||
+                    !number_to_size(member(sampler, "output"), accessors.size() ? accessors.size() - 1u : 0, outputIndex)) {
+                    // Keep metadata-only animation records readable for older
+                    // fixtures and partially authored assets. They are not
+                    // exposed as CPU-playable clips without real accessors.
+                    fullySupported = false;
+                    continue;
+                }
+                std::string interpolation = "LINEAR";
+                if (!optional_string(sampler, "interpolation", interpolation, error))
+                    return failed(path, generation, sourceStamp, error);
+                if (interpolation != "LINEAR") fullySupported = false;
+                const auto* target = member(channel, "target");
+                std::size_t nodeIndex = 0;
+                std::string targetPath;
+                if (!target || target->kind != JsonValue::Kind::Object ||
+                    !number_to_size(member(*target, "node"), nodeMetadata.size() ? nodeMetadata.size() - 1u : 0, nodeIndex) ||
+                    !string_value(member(*target, "path"), targetPath)) {
+                    fullySupported = false;
+                    continue;
+                }
+                if (targetPath != "translation" && targetPath != "rotation" && targetPath != "scale") {
+                    fullySupported = false;
+                    continue;
+                }
+                std::vector<float> times;
+                if (!read_float_accessor(accessors[inputIndex], views[accessors[inputIndex].bufferView],
+                                         buffers, cancel, 1u, times, error))
+                    return failed(path, generation, sourceStamp, error);
+                if (times.empty() || times.size() > kMaxAnimationKeys) {
+                    fullySupported = false;
+                    continue;
+                }
+                for (std::size_t timeIndex = 0; timeIndex < times.size(); ++timeIndex) {
+                    if (times[timeIndex] < 0.0f || times[timeIndex] > kMaxAnimationDuration ||
+                        (timeIndex != 0 && times[timeIndex] < times[timeIndex - 1u])) {
+                        return failed(path, generation, sourceStamp, "glTF animation input times are invalid");
+                    }
+                }
+                animation.duration = std::max(animation.duration, times.back());
+                if (!clip || nodeMetadata[nodeIndex].bone == animation::InvalidBone || interpolation != "LINEAR")
+                    continue;
+                const std::size_t components = targetPath == "rotation" ? 4u : 3u;
+                std::vector<float> values;
+                if (!read_float_accessor(accessors[outputIndex], views[accessors[outputIndex].bufferView],
+                                         buffers, cancel, components, values, error))
+                    return failed(path, generation, sourceStamp, error);
+                if (values.size() != times.size() * components) {
+                    fullySupported = false;
+                    continue;
+                }
+                auto& track = clip->track(nodeMetadata[nodeIndex].bone);
+                for (std::size_t key = 0; key < times.size(); ++key) {
+                    const auto offset = key * components;
+                    if (targetPath == "translation") {
+                        track.positions.push_back({times[key], {values[offset], values[offset + 1u], values[offset + 2u]}});
+                    } else if (targetPath == "scale") {
+                        track.scales.push_back({times[key], {values[offset], values[offset + 1u], values[offset + 2u]}});
+                    } else {
+                        track.rotations.push_back(animation::QuatKey{
+                            times[key], math::Normalize(math::Quat{values[offset], values[offset + 1u],
+                                                                  values[offset + 2u], values[offset + 3u]})});
+                    }
+                }
+                ++animation.playableChannelCount;
+            }
+            animation.cpuPlayable = fullySupported && animation.playableChannelCount > 0 &&
+                animation.duration >= 0.0f;
+            if (animation.cpuPlayable && clip) {
+                clip->set_duration(animation.duration);
+                if (clip->valid_for(*animationSkeleton)) animation.cpuClip = std::move(clip);
+                else animation.cpuPlayable = false;
             }
             animationMetadata.push_back(std::move(animation));
         }
@@ -1069,7 +1339,8 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
 
     Geometry geometry;
     std::size_t primitiveCount = 0;
-    for (const auto& mesh : meshesValue->array) {
+    for (std::size_t meshIndex = 0; meshIndex < meshesValue->array.size(); ++meshIndex) {
+        const auto& mesh = meshesValue->array[meshIndex];
         const auto* primitives = member(mesh, "primitives");
         if (!primitives || primitives->kind != JsonValue::Kind::Array || primitives->array.empty())
             return failed(path, generation, sourceStamp, "glTF mesh has no primitives");
@@ -1095,6 +1366,8 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
                 return failed(path, generation, sourceStamp, "glTF vertex count exceeds the preview limit");
             if (!read_position_accessor(positionAccessor, positionView, buffers, cancel, geometry.vertices, error))
                 return failed(path, generation, sourceStamp, error);
+            geometry.vertexBones.insert(geometry.vertexBones.end(), positionAccessor.count,
+                                        meshIndex < meshBones.size() ? meshBones[meshIndex] : animation::InvalidBone);
             std::vector<math::Vec2> localTextureCoordinates;
             const auto* textureCoordinateIndex = attributes ? member(*attributes, "TEXCOORD_0") : nullptr;
             if (textureCoordinateIndex) {
@@ -1186,6 +1459,12 @@ static EditorModelPreviewResult load_editor_gltf_preview_source(
     snapshot->textures = std::make_shared<const std::vector<EditorModelTexturePreview>>(std::move(textureMetadata));
     snapshot->images = std::make_shared<const std::vector<EditorModelImagePreview>>(std::move(imageMetadata));
     snapshot->imageArtifacts = std::make_shared<const std::vector<EditorModelTextureArtifact>>(std::move(imageArtifacts));
+    if (!nodeMetadata.empty()) {
+        snapshot->nodes = std::make_shared<const std::vector<EditorModelNodePreview>>(std::move(nodeMetadata));
+        snapshot->animationSkeleton = std::move(animationSkeleton);
+    }
+    snapshot->vertexBones = std::make_shared<const std::vector<animation::BoneIndex>>(
+        std::move(geometry.vertexBones));
     snapshot->animations = std::make_shared<const std::vector<EditorModelAnimationPreview>>(std::move(animationMetadata));
     EditorModelPreviewResult result;
     result.generation = generation; result.sourceStamp = sourceStamp;

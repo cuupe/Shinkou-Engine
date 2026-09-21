@@ -207,6 +207,11 @@ struct MeshDraw {
     ResourceHandle indexBuffer{};
     std::uint32_t indexCount{0};
     math::Mat4 transform{math::Mat4::Identity()};
+    // The index range is relative to the shared index/vertex buffers. Keep
+    // these fields appended so existing aggregate initialization remains
+    // source-compatible.
+    std::uint32_t firstIndex{0};
+    std::int32_t vertexOffset{0};
 };
 
 struct IndirectMeshDraw {

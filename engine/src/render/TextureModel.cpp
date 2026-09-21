@@ -196,6 +196,10 @@ TextureFormat texture_format_from_name(std::string_view name) noexcept {
     return TextureFormat::Unknown;
 }
 
+TextureFormat texture_format_of(const TextureDesc& description) noexcept {
+    return description_format(description);
+}
+
 std::string_view texture_format_name(TextureFormat format) noexcept {
     switch (format) {
     case TextureFormat::RGBA8Unorm: return "rgba8";
@@ -212,6 +216,25 @@ std::string_view texture_format_name(TextureFormat format) noexcept {
     case TextureFormat::Unknown: break;
     }
     return "unknown";
+}
+
+std::size_t texture_format_bytes_per_pixel(TextureFormat format) noexcept {
+    switch (format) {
+    case TextureFormat::RGBA16Float: return 8u;
+    case TextureFormat::RGBA8Unorm:
+    case TextureFormat::BGRA8Unorm:
+    case TextureFormat::R32Float: return 4u;
+    case TextureFormat::Unknown:
+    case TextureFormat::D24UnormS8Uint:
+    case TextureFormat::D32Float:
+    case TextureFormat::BC1RGBAUnorm:
+    case TextureFormat::BC3RGBAUnorm:
+    case TextureFormat::BC5RGUnorm:
+    case TextureFormat::BC6HUFloat:
+    case TextureFormat::BC7RGBAUnorm:
+        return 0u;
+    }
+    return 0u;
 }
 
 bool texture_format_is_depth(TextureFormat format) noexcept {

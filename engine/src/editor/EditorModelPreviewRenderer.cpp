@@ -387,7 +387,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         state.status = "GPU model preview unavailable: " + backend_label(capabilities.api) + " device is not ready";
         return state;
     }
-    if (capabilities.api != render::BackendApi::DirectX11) {
+    if (!capabilities.supportsEditorModelRendering) {
         state.status = "GPU model preview fallback: " + backend_label(capabilities.api) +
             " shader path is pending; retained/WIC preview remains active";
         return state;

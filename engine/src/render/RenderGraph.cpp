@@ -1,6 +1,7 @@
 #include "shinkou/render/RenderGraph.h"
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <queue>
 #include <unordered_set>
 
@@ -83,6 +84,76 @@ bool has_present_access(const RenderGraph::Pass& pass) {
         return access.usage == ResourceUsage::Present;
     });
 }
+
+bool checked_mul(std::size_t left, std::size_t right, std::size_t& result) noexcept {
+    if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left) return false;
+    result = left * right;
+    return true;
+}
+
+bool checked_add(std::size_t left, std::size_t right, std::size_t& result) noexcept {
+    if (right > std::numeric_limits<std::size_t>::max() - left) return false;
+    result = left + right;
+    return true;
+}
+
+std::size_t texture_format_bytes_per_pixel(const TextureDesc& texture) noexcept {
+    switch (texture.formatKind) {
+    case TextureFormat::RGBA16Float:
+        return 8;
+    case TextureFormat::BC1RGBAUnorm:
+        return 8;
+    case TextureFormat::BC3RGBAUnorm:
+    case TextureFormat::BC5RGUnorm:
+    case TextureFormat::BC6HUFloat:
+    case TextureFormat::BC7RGBAUnorm:
+        return 16;
+    default:
+        break;
+    }
+    if (texture.format == "rgba16f") return 8;
+    if (texture.format == "bc1") return 8;
+    if (texture.format == "bc3" || texture.format == "bc5" || texture.format == "bc6h" || texture.format == "bc7") return 16;
+    return 4;
+}
+
+bool texture_is_block_compressed(const TextureDesc& texture) noexcept {
+    switch (texture.formatKind) {
+    case TextureFormat::BC1RGBAUnorm:
+    case TextureFormat::BC3RGBAUnorm:
+    case TextureFormat::BC5RGUnorm:
+    case TextureFormat::BC6HUFloat:
+    case TextureFormat::BC7RGBAUnorm:
+        return true;
+    default:
+        return texture.format == "bc1" || texture.format == "bc3" || texture.format == "bc5" ||
+            texture.format == "bc6h" || texture.format == "bc7";
+    }
+}
+
+bool texture_storage_bytes(const TextureDesc& texture, std::size_t& result) noexcept {
+    result = 0;
+    const auto bytesPerPixelOrBlock = texture_format_bytes_per_pixel(texture);
+    const bool compressed = texture_is_block_compressed(texture);
+    const auto layers = std::max<std::uint32_t>(texture.layers, 1u);
+    const auto samples = std::max<std::uint32_t>(texture.sampleCount, 1u);
+    for (std::uint32_t mip = 0; mip < texture.mipLevels; ++mip) {
+        const auto width = std::max(1u, texture.width >> std::min<std::uint32_t>(mip, 31u));
+        const auto height = std::max(1u, texture.height >> std::min<std::uint32_t>(mip, 31u));
+        const auto depth = texture.dimension == TextureDimension::Texture3D
+            ? std::max(1u, texture.depth >> std::min<std::uint32_t>(mip, 31u)) : 1u;
+        const auto blocksX = compressed ? (width / 4u + (width % 4u != 0u)) : width;
+        const auto blocksY = compressed ? (height / 4u + (height % 4u != 0u)) : height;
+        std::size_t levelSize = blocksX;
+        if (!checked_mul(levelSize, blocksY, levelSize) ||
+            !checked_mul(levelSize, depth, levelSize) ||
+            !checked_mul(levelSize, layers, levelSize) ||
+            !checked_mul(levelSize, bytesPerPixelOrBlock, levelSize) ||
+            !checked_mul(levelSize, samples, levelSize) ||
+            !checked_add(result, levelSize, result)) return false;
+    }
+    return result != 0;
+}
 }
 
 ResourceHandle RenderGraph::allocate_resource(ResourceKind kind) noexcept {
@@ -95,10 +166,13 @@ ResourceHandle RenderGraph::allocate_resource(ResourceKind kind) noexcept {
 }
 
 ResourceHandle RenderGraph::create_texture(const TextureDesc& description) {
-    if (description.width == 0 || description.height == 0 || description.layers == 0 || description.mipLevels == 0) return {};
+    if (description.width == 0 || description.height == 0 || description.layers == 0) return {};
+    auto normalized = description;
+    if (normalized.mipLevels == 0) normalized.mipLevels = texture_full_mip_count(normalized);
+    if (normalized.mipLevels == 0) return {};
     const auto handle = allocate_resource(ResourceKind::Texture2D);
     if (!handle) return {};
-    resources_.push_back({handle, handle, description, false});
+    resources_.push_back({handle, handle, std::move(normalized), false});
     return handle;
 }
 
@@ -133,10 +207,13 @@ void RenderGraph::import_texture(ResourceHandle handle, const TextureDesc& descr
 }
 
 ResourceHandle RenderGraph::create_depth_stencil(const TextureDesc& description) {
-    if (description.width == 0 || description.height == 0 || description.layers == 0 || description.mipLevels == 0) return {};
+    if (description.width == 0 || description.height == 0 || description.layers == 0) return {};
+    auto normalized = description;
+    if (normalized.mipLevels == 0) normalized.mipLevels = texture_full_mip_count(normalized);
+    if (normalized.mipLevels == 0) return {};
     const auto handle = allocate_resource(ResourceKind::DepthStencil);
     if (!handle) return {};
-    resources_.push_back({handle, handle, description, false});
+    resources_.push_back({handle, handle, std::move(normalized), false});
     return handle;
 }
 
@@ -514,6 +591,13 @@ bool RenderGraph::compile(std::string* error) {
             key = hash_combine(key, texture->hdr);
             key = hash_combine(key, std::hash<std::string>{}(texture->colorSpace));
             key = hash_combine(key, texture->storage);
+            key = hash_combine(key, static_cast<std::uint64_t>(texture->dimension));
+            key = hash_combine(key, texture->depth);
+            key = hash_combine(key, static_cast<std::uint64_t>(texture->formatKind));
+            key = hash_combine(key, texture->sampleCount);
+            key = hash_combine(key, texture->resolve);
+            key = hash_combine(key, static_cast<std::uint64_t>(texture->resolveMode));
+            key = hash_combine(key, texture->depthStencil);
         } else if (const auto* buffer = std::get_if<BufferDesc>(&description)) {
             key = hash_combine(key, buffer->size);
             key = hash_combine(key, buffer->stride);
@@ -522,6 +606,7 @@ bool RenderGraph::compile(std::string* error) {
             key = hash_combine(key, buffer->indirectBuffer);
             key = hash_combine(key, buffer->structuredBuffer);
             key = hash_combine(key, buffer->storageBuffer);
+            key = hash_combine(key, buffer->uniformBuffer);
         }
         return key;
     };
@@ -546,13 +631,16 @@ bool RenderGraph::compile(std::string* error) {
                 TransientResourceRequest request;
                 request.resourceId = node->handle.id;
                 if (const auto* texture = std::get_if<TextureDesc>(&node->description)) {
-                    request.size = static_cast<std::size_t>(texture->width) * texture->height *
-                        std::max<std::uint32_t>(texture->layers, 1u) * 4u;
+                    if (!texture_storage_bytes(*texture, request.size)) {
+                        return fail_compile("transient texture storage size overflow for resource " +
+                            std::to_string(node->handle.id));
+                    }
                 } else if (const auto* buffer = std::get_if<BufferDesc>(&node->description)) {
                     request.size = buffer->size;
                 }
                 request.alignment = 256;
                 request.memoryType = resource_memory_type(*node);
+                request.compatibilityKey = compatibility_key(node->description);
                 request.firstUse = order;
                 request.lastUse = order;
                 request.firstPass = executionOrder_[order];
@@ -569,10 +657,15 @@ bool RenderGraph::compile(std::string* error) {
     TransientAliasPlanOptions aliasOptions;
     aliasOptions.canAlias = [&ordered_before](const TransientResourceRequest& previous,
                                                const TransientResourceRequest& next) {
-        return ordered_before(previous.lastPass, next.firstPass);
+        return previous.compatibilityKey == next.compatibilityKey &&
+            ordered_before(previous.lastPass, next.firstPass);
     };
     GpuMemoryAllocator aliasPlanner;
     aliasPlan_ = aliasPlanner.plan_transient_aliases(aliasRequests, aliasOptions);
+    if (!aliasPlan_.valid) {
+        return fail_compile(aliasPlan_.error.empty() ?
+            "transient resource alias planning failed" : aliasPlan_.error);
+    }
     for (auto& resource : resources_) {
         if (resource.external) continue;
         const auto physicalId = aliasPlan_.physical_resource(resource.handle.id);

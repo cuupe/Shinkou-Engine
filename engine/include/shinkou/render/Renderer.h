@@ -95,8 +95,13 @@ public:
     const std::string& last_error() const noexcept { return lastError_; }
     const RenderCapabilities capabilities() const noexcept;
     const RenderStats stats() const noexcept;
-    IRenderBackend* backend() noexcept { return backend_.get(); }
-    const IRenderBackend* backend() const noexcept { return backend_.get(); }
+    // Executes an explicitly supplied graph through the active renderer. This
+    // is the public graph seam for tools and tests; callers do not need (and
+    // must not obtain) the concrete backend object.
+    bool execute_graph(RenderGraph& graph, std::string* error = nullptr);
+    // High-level UI capture seam. Upper layers must not reach through the
+    // renderer to call backend-specific services directly.
+    void request_ui_capture() noexcept;
     void submit();
 };
 }

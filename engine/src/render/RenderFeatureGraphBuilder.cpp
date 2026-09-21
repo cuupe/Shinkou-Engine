@@ -62,7 +62,8 @@ void append_unique(std::vector<std::string>& values, std::string_view value) {
 
 bool valid_texture(const TextureDesc& description) {
     return description.width != 0 && description.height != 0 &&
-        description.layers != 0 && description.mipLevels != 0;
+        description.layers != 0 && (description.mipLevels == 0 ||
+            description.mipLevels <= texture_full_mip_count(description));
 }
 
 bool valid_shadow_settings(const ShadowSettings& settings, std::string& error) {

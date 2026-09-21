@@ -3,6 +3,8 @@ include(FetchContent)
 set(SHINKOU_WITH_SDL3 OFF)
 set(SHINKOU_WITH_VULKAN OFF)
 set(SHINKOU_WITH_PHYSX OFF)
+set(SHINKOU_WITH_PHYSX_COOKING OFF)
+set(SHINKOU_WITH_PHYSX_EXTENSIONS OFF)
 set(SHINKOU_WITH_IMGUI OFF)
 set(SHINKOU_WITH_MINIAUDIO OFF)
 set(SHINKOU_WITH_LUA OFF)
@@ -38,12 +40,92 @@ if(TARGET Vulkan::Vulkan)
 endif()
 
 if(SHINKOU_ENABLE_PHYSX)
-    find_path(PHYSX_INCLUDE_DIR PxPhysicsAPI.h)
-    find_library(PHYSX_CORE_LIBRARY NAMES PhysX PhysX_64)
-    find_library(PHYSX_COMMON_LIBRARY NAMES PhysXCommon PhysXCommon_64)
-    if(PHYSX_INCLUDE_DIR AND PHYSX_CORE_LIBRARY)
-        set(PHYSX_LIBRARIES ${PHYSX_CORE_LIBRARY} ${PHYSX_COMMON_LIBRARY})
+    # PhysX does not ship a stable CMake package across SDK generations. Keep
+    # discovery explicit and cacheable so projects can point at either a
+    # source SDK or a prebuilt binary package without hard-coding a machine
+    # path into the engine.
+    set(SHINKOU_PHYSX_HINTS)
+    if(SHINKOU_PHYSX_ROOT)
+        list(APPEND SHINKOU_PHYSX_HINTS
+            "${SHINKOU_PHYSX_ROOT}"
+            "${SHINKOU_PHYSX_ROOT}/include"
+            "${SHINKOU_PHYSX_ROOT}/Include")
+    endif()
+    if(DEFINED ENV{PHYSX_ROOT})
+        list(APPEND SHINKOU_PHYSX_HINTS "$ENV{PHYSX_ROOT}" "$ENV{PHYSX_ROOT}/include" "$ENV{PHYSX_ROOT}/Include")
+    endif()
+
+    find_path(PHYSX_INCLUDE_DIR PxPhysicsAPI.h PATHS ${SHINKOU_PHYSX_HINTS}
+        PATH_SUFFIXES include Include physx physx/include physx/Include)
+
+    set(SHINKOU_PHYSX_LIBRARY_HINTS)
+    if(SHINKOU_PHYSX_LIBRARY_DIR)
+        list(APPEND SHINKOU_PHYSX_LIBRARY_HINTS "${SHINKOU_PHYSX_LIBRARY_DIR}")
+    endif()
+    if(SHINKOU_PHYSX_ROOT)
+        list(APPEND SHINKOU_PHYSX_LIBRARY_HINTS
+            "${SHINKOU_PHYSX_ROOT}/lib"
+            "${SHINKOU_PHYSX_ROOT}/Lib"
+            "${SHINKOU_PHYSX_ROOT}/bin")
+    endif()
+    if(PHYSX_INCLUDE_DIR)
+        get_filename_component(SHINKOU_PHYSX_INCLUDE_PARENT "${PHYSX_INCLUDE_DIR}" DIRECTORY)
+        list(APPEND SHINKOU_PHYSX_LIBRARY_HINTS
+            "${SHINKOU_PHYSX_INCLUDE_PARENT}/lib"
+            "${SHINKOU_PHYSX_INCLUDE_PARENT}/Lib"
+            "${PHYSX_INCLUDE_DIR}/../lib"
+            "${PHYSX_INCLUDE_DIR}/../Lib")
+    endif()
+
+    # The official GitHub SDK is generated into configuration-specific
+    # directories such as bin/win.x86_64.vc143.mt/checked or a Linux
+    # equivalent. Discover those directories without assuming a compiler,
+    # runtime, or debug/release spelling so the same integration works on
+    # Windows, Linux, and other supported PhysX targets.
+    if(SHINKOU_PHYSX_ROOT)
+        file(GLOB_RECURSE SHINKOU_PHYSX_LIBRARY_FILES LIST_DIRECTORIES false
+            "${SHINKOU_PHYSX_ROOT}/bin/*.lib"
+            "${SHINKOU_PHYSX_ROOT}/bin/*.a"
+            "${SHINKOU_PHYSX_ROOT}/bin/*.so"
+            "${SHINKOU_PHYSX_ROOT}/lib/*.lib"
+            "${SHINKOU_PHYSX_ROOT}/lib/*.a"
+            "${SHINKOU_PHYSX_ROOT}/lib/*.so")
+        foreach(SHINKOU_PHYSX_LIBRARY_FILE IN LISTS SHINKOU_PHYSX_LIBRARY_FILES)
+            get_filename_component(SHINKOU_PHYSX_LIBRARY_PARENT
+                "${SHINKOU_PHYSX_LIBRARY_FILE}" DIRECTORY)
+            list(APPEND SHINKOU_PHYSX_LIBRARY_HINTS "${SHINKOU_PHYSX_LIBRARY_PARENT}")
+        endforeach()
+        list(REMOVE_DUPLICATES SHINKOU_PHYSX_LIBRARY_HINTS)
+    endif()
+
+    find_library(PHYSX_CORE_LIBRARY NAMES PhysX PhysX_64 PhysX_static_64 PhysX_64_DEBUG
+        PATHS ${SHINKOU_PHYSX_LIBRARY_HINTS})
+    find_library(PHYSX_COMMON_LIBRARY NAMES PhysXCommon PhysXCommon_64 PhysXCommon_static_64 PhysXCommon_64_DEBUG
+        PATHS ${SHINKOU_PHYSX_LIBRARY_HINTS})
+    find_library(PHYSX_FOUNDATION_LIBRARY NAMES PhysXFoundation PhysXFoundation_64 PhysXFoundation_static_64 PhysXFoundation_64_DEBUG
+        PATHS ${SHINKOU_PHYSX_LIBRARY_HINTS})
+
+    if(PHYSX_INCLUDE_DIR AND PHYSX_CORE_LIBRARY AND PHYSX_COMMON_LIBRARY AND PHYSX_FOUNDATION_LIBRARY)
+        set(PHYSX_LIBRARIES ${PHYSX_CORE_LIBRARY} ${PHYSX_COMMON_LIBRARY} ${PHYSX_FOUNDATION_LIBRARY})
         set(SHINKOU_WITH_PHYSX ON)
+
+        find_library(PHYSX_EXTENSIONS_LIBRARY NAMES PhysXExtensions PhysXExtensions_64 PhysXExtensions_static_64 PhysXExtensions_64_DEBUG
+            PATHS ${SHINKOU_PHYSX_LIBRARY_HINTS})
+        if(PHYSX_EXTENSIONS_LIBRARY)
+            list(APPEND PHYSX_LIBRARIES ${PHYSX_EXTENSIONS_LIBRARY})
+            set(SHINKOU_WITH_PHYSX_EXTENSIONS ON)
+        endif()
+
+        if(EXISTS "${PHYSX_INCLUDE_DIR}/cooking/PxCooking.h")
+            find_library(PHYSX_COOKING_LIBRARY NAMES PhysXCooking PhysXCooking_64 PhysXCooking_static_64 PhysXCooking_64_DEBUG
+                PATHS ${SHINKOU_PHYSX_LIBRARY_HINTS})
+            if(PHYSX_COOKING_LIBRARY)
+                list(APPEND PHYSX_LIBRARIES ${PHYSX_COOKING_LIBRARY})
+                set(SHINKOU_WITH_PHYSX_COOKING ON)
+            endif()
+        endif()
+    elseif(SHINKOU_ENABLE_PHYSX)
+        message(STATUS "PhysX SDK not found; the engine will use its deterministic fallback")
     endif()
 endif()
 
@@ -68,6 +150,7 @@ if(SHINKOU_ENABLE_IMGUI)
             "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
             "${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
             "${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp"
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp"
             "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
         )
         target_include_directories(shinkou_imgui PUBLIC "${imgui_SOURCE_DIR}")

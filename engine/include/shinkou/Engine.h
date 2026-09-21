@@ -25,11 +25,16 @@ struct EngineConfig {
     network::NetworkConfig network{};
     log::LogConfig logging{};
     bool editor{false};
+    // Physics is an opt-in runtime component. Rendering, audio, input and
+    // editor startup must not load a physics backend or allocate a physics
+    // world unless the application explicitly requests it.
+    bool enablePhysics{false};
     // Set this for editor applications so resource browsing is independent
     // of the executable's launch directory.
     std::string editorProjectRoot{};
     double targetFrameRate{60.0};
     Seconds maxDeltaSeconds{0.1f};
+    physics::PhysicsWorldConfig physics{};
 };
 
 class Engine {
@@ -81,6 +86,8 @@ public:
     const audio::AudioSceneSystem& audio_scene() const noexcept { return audioScene_; }
     network::NetworkSystem& network() noexcept { return network_; }
     const network::NetworkSystem& network() const noexcept { return network_; }
-    physics::IPhysicsWorld& physics() noexcept { return *physics_; }
+    physics::IPhysicsWorld* physics() noexcept { return physics_.get(); }
+    const physics::IPhysicsWorld* physics() const noexcept { return physics_.get(); }
+    bool physics_enabled() const noexcept { return physics_ != nullptr; }
 };
 }

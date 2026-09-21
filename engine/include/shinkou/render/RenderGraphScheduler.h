@@ -38,8 +38,8 @@ struct CommandRecordingTask {
     std::vector<ResourceAccess> accesses;
     std::vector<CommandResourceLock> resourceLocks;
 
-    // The returned context owns no backend state. The name view refers to
-    // this task; the access vectors are copied into the context value.
+    // The returned context owns no backend state. The name and access views
+    // refer to this task and are valid while the task remains alive.
     RenderPassContext pass_context() const {
         return {passName, reads, writes, accesses, queue};
     }

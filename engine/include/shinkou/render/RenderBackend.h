@@ -52,9 +52,11 @@ enum class RenderDeviceState { Uninitialized, Ready, NeedsResize, Lost };
 
 struct RenderPassContext {
     std::string_view name;
-    std::vector<ResourceHandle> reads;
-    std::vector<ResourceHandle> writes;
-    std::vector<ResourceAccess> accesses;
+    // Borrowed immutable pass data. The graph owns these vectors for the
+    // duration of execution; keeping references here avoids per-pass copies.
+    const std::vector<ResourceHandle>& reads;
+    const std::vector<ResourceHandle>& writes;
+    const std::vector<ResourceAccess>& accesses;
     RenderQueue queue{RenderQueue::Graphics};
 };
 
@@ -117,6 +119,10 @@ struct RenderCapabilities {
     // Pass-local editor target binding used by independent preview passes.
     // This is separate from the ordinary viewport/scissor seam.
     bool supportsEditorOffscreenTarget{false};
+    // High-level editor model rendering is exposed as a capability rather
+    // than a backend/API check. Callers must branch on this feature contract,
+    // never on BackendApi when selecting a rendering path.
+    bool supportsEditorModelRendering{false};
     // This is separate from ordinary set_viewport support. It means the
     // backend can enforce an editor scene viewport/scissor without allowing
     // the scene pass to bleed into the shell or UI regions.
@@ -242,6 +248,9 @@ public:
     virtual void begin_debug_label(std::string_view name) { (void)name; }
     virtual void end_debug_label() {}
     virtual void begin_frame() = 0;
+    // The application owns the platform ImGui frame lifecycle: it must call
+    // the backend's *_NewFrame() adapter before ImGui::NewFrame(). The render
+    // backend only consumes the completed draw data during submit().
     virtual bool initialize_imgui() { return false; }
     virtual void shutdown_imgui() {}
     virtual void render_imgui(ImDrawData*) {}

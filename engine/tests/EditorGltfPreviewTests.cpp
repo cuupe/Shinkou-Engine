@@ -45,6 +45,15 @@ std::vector<std::uint8_t> triangle_binary() {
     return output;
 }
 
+std::vector<std::uint8_t> animated_triangle_binary() {
+    auto output = triangle_binary();
+    append_f32(output, 0.0f); append_f32(output, 1.0f);
+    append_f32(output, 0.0f); append_f32(output, 0.0f); append_f32(output, 0.0f); append_f32(output, 1.0f);
+    constexpr float halfTurn = 0.70710678118f;
+    append_f32(output, 0.0f); append_f32(output, 0.0f); append_f32(output, halfTurn); append_f32(output, halfTurn);
+    return output;
+}
+
 std::vector<std::uint8_t> tiny_png() {
     return {
         0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52,
@@ -78,6 +87,26 @@ std::string triangle_json() {
       "animations":[{"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]}],
       "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":2,"NORMAL":3},"indices":1}]}]
     })json";
+}
+
+std::string animated_triangle_json() {
+    auto json = triangle_json();
+    const auto byteLength = json.find("\"byteLength\":102");
+    assert(byteLength != std::string::npos);
+    json.replace(byteLength, std::string("\"byteLength\":102").size(), "\"byteLength\":134");
+    const auto viewTail = json.find(R"({"buffer":0,"byteOffset":66,"byteLength":36})");
+    assert(viewTail != std::string::npos);
+    json.insert(viewTail + std::string(R"({"buffer":0,"byteOffset":66,"byteLength":36})").size(),
+                R",({"buffer":0,"byteOffset":102,"byteLength":8},{"buffer":0,"byteOffset":110,"byteLength":24})");
+    const auto accessorTail = json.find(R"({"bufferView":3,"componentType":5126,"count":3,"type":"VEC3"})");
+    assert(accessorTail != std::string::npos);
+    json.insert(accessorTail + std::string(R"({"bufferView":3,"componentType":5126,"count":3,"type":"VEC3"})").size(),
+                R",({"bufferView":4,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":5,"componentType":5126,"count":2,"type":"VEC4"})");
+    const auto animation = json.find(R"({"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]})");
+    assert(animation != std::string::npos);
+    json.replace(animation, std::string(R"({"name":"Idle","samplers":[{}],"channels":[{"sampler":0}]})").size(),
+                 R"("nodes":[{"name":"TriangleRoot","mesh":0}],"animations":[{"name":"Spin","samplers":[{"input":4,"output":5,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":0,"path":"rotation"}}]})");
+    return json;
 }
 
 std::vector<std::uint8_t> triangle_glb() {
@@ -123,6 +152,13 @@ int main() {
         binary.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     }
     {
+        const auto bytes = animated_triangle_binary();
+        std::ofstream binary(root / "assets/animated.bin", std::ios::binary);
+        binary.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        std::ofstream json(root / "assets/animated.gltf");
+        json << animated_triangle_json();
+    }
+    {
         const auto bytes = tiny_png();
         std::ofstream image(root / "assets/textures/albedo.png", std::ios::binary);
         image.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -160,6 +196,19 @@ int main() {
            gltf.snapshot->imageArtifacts && gltf.snapshot->imageArtifacts->size() == 1 &&
            gltf.snapshot->imageArtifacts->front().valid() &&
            gltf.snapshot->imageArtifacts->front().encodedBytes->size() == tiny_png().size());
+
+    const auto animated = shinkou::editor::load_editor_model_preview(
+        files, "assets/animated.gltf", 40, 100);
+    assert(animated.snapshot && animated.snapshot->valid() && animated.snapshot->nodes &&
+           animated.snapshot->nodes->size() == 1 && animated.snapshot->animationSkeleton &&
+           animated.snapshot->animationSkeleton->valid() && animated.snapshot->vertexBones &&
+           animated.snapshot->vertexBones->size() == 3 &&
+           (*animated.snapshot->vertexBones)[0] != shinkou::animation::InvalidBone &&
+           animated.snapshot->animations && animated.snapshot->animations->size() == 1 &&
+           (*animated.snapshot->animations)[0].cpuPlayable &&
+           (*animated.snapshot->animations)[0].playableChannelCount == 1 &&
+           (*animated.snapshot->animations)[0].duration == 1.0f &&
+           (*animated.snapshot->animations)[0].cpuClip);
 
     const auto glb = shinkou::editor::load_editor_model_preview(files, "assets/triangle.glb", 5, 11);
     assert(glb.snapshot && glb.snapshot->valid());
