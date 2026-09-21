@@ -1428,6 +1428,24 @@
 
 下一入口：补充媒体/Build/Recovery 文案和 CJK 字体 fallback 诊断；随后进入窄窗口布局、UI 分配/frame-time 基线和内容 diff/hash 审计。
 
+### 第 4.57 子阶段：视频预览传输控制与异步连续取帧
+
+目标：让视频资源预览从“首帧/单次跳帧”升级为可操作的编辑器媒体面板，复用统一 `MediaPanel` 时钟和现有视频 provider；不引入底层 API 旁路或同步解码。
+
+实现范围：
+
+- `EditorLayer` 为视频补齐 Play/Pause/Stop/Loop 命令；Stop 会回到 0 秒并请求首帧，Play/Pause 只修改 retained 播放状态，真正的取帧仍由异步 provider 完成。
+- `MediaPanel::update()` 继续负责 bounded 时间推进；编辑器生命周期只在没有活动取帧任务时提交当前时间帧请求，避免 paint/input 线程等待解码或每帧取消正在运行的任务。
+- `EditorUi` 为 Audio/Video 共用传输按钮，显示视频时间轴进度、当前帧时间和中文按钮；修复 retained UI 对 `playing` 状态大小写不一致导致 Pause 按钮不可用的问题。
+- 非目标：本轮不宣称完成连续解码器 session、视频音轨混音、音视频时钟同步、硬件解码或跨平台 codec 覆盖；这些继续由视频 provider/音频时钟专门立项。
+
+审计与验证安排：
+
+- 单元：视频媒体模型覆盖有限时长结束、循环播放和从结束位置重新 Play 的状态契约。
+- 集成：无效视频 fixture 仍必须诚实报告 decoder unavailable，同时 retained Media Preview 必须注册四个传输区域，证明 UI 能力不依赖伪造可用帧。
+- 安全/性能：只消费 immutable preview snapshot；取帧请求有 generation/source stamp/cancel 边界，不读盘、不启动进程、不阻塞渲染提交。
+- 下一入口：接入有真实时长/帧的跨平台视频 fixture，验证连续帧推进与停止/循环视觉差异，再评估 A/V clock 和 decoder session；并继续 CJK fallback、窄窗口、UI 分配/frame-time、内容 diff/hash 审计。
+
 ### 第 4.54 子阶段：原生输入兜底与完整交互性能证据
 
 目标：消除冷启动窗口在 SDL 文本输入不可用时的编辑阻塞，并让完整原生交互脚本与性能审计都能给出可复核结果。

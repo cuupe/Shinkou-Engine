@@ -1105,6 +1105,14 @@ int main() {
         require(!editor.media_preview().videoPreview &&
                 editor.media_preview().previewStatus.find("unavailable") != std::string::npos,
                 "video provider failure was not exposed honestly");
+        editor.set_panel_visible("media", false);
+        editor.execute_command(EditorCommand::TogglePage, "media", world);
+        tick();
+        require(region("command:media-play").width > 0.0f &&
+                region("command:media-pause").width > 0.0f &&
+                region("command:media-stop").width > 0.0f &&
+                region("command:media-loop").width > 0.0f,
+                "video media transport controls were not retained");
         editor.execute_command(EditorCommand::OpenAsset, "assets/preview.obj", world);
         for (int i = 0; i < 120 && editor.asset_preview().loading; ++i) {
             tick();

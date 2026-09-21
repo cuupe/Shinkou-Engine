@@ -26,6 +26,17 @@ constexpr float kStatusHeight = 26.0f;
 constexpr float kPanelHeaderHeight = 30.0f;
 constexpr float kRowHeight = 27.0f;
 
+std::string format_media_time(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) seconds = 0.0;
+    const auto total = static_cast<std::int64_t>(std::floor(seconds));
+    const auto minutes = total / 60;
+    const auto remainder = total % 60;
+    std::ostringstream output;
+    output << std::setfill('0') << std::setw(2) << minutes << ':'
+           << std::setw(2) << remainder;
+    return output.str();
+}
+
 DockRect inset(DockRect value, float amount) noexcept {
     value.x += amount;
     value.y += amount;
@@ -1343,7 +1354,8 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     if (layout.showStatusBar) {
         renderList_.rect(statusRect, color(layout.theme == "light" ? "#EEF2F6" : "#171B21"));
         renderList_.border(statusRect, color(layout.theme == "light" ? "#D5DDE7" : "#303A47"), 1.0f);
-        renderList_.text({14.0f, statusRect.y + 4.0f, std::max(0.0f, width - 232.0f), 18.0f}, status.empty() ? tr("Ready") : status,
+        renderList_.text({14.0f, statusRect.y + 4.0f, std::max(0.0f, width - 232.0f), 18.0f},
+                          status.empty() ? tr("Ready") : tr(status),
                           color(layout.theme == "light" ? "#5B6878" : "#AAB6C5"), 12.0f,
                           {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         std::ostringstream stats;
@@ -2767,7 +2779,8 @@ void EditorUi::draw_media_panel(const DockRect& value, const EditorUiModel& mode
     const auto& description = mediaPanel.description();
     renderList_.text({bounds.x, bounds.y, bounds.width, 20.0f}, description.title, text, 13.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
-    const auto status = media.path.empty() ? media.status : media.path + "  ·  " + media.status;
+    const auto localizedStatus = std::string(tr(media.status));
+    const auto status = media.path.empty() ? localizedStatus : media.path + "  ·  " + localizedStatus;
     renderList_.text({bounds.x, bounds.y + 22.0f, bounds.width, 18.0f}, status,
                      media.available ? accent : muted, 10.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
@@ -2778,7 +2791,7 @@ void EditorUi::draw_media_panel(const DockRect& value, const EditorUiModel& mode
         renderList_.border(surfaceRect, border, 1.0f, 4.0f);
         renderList_.text({surfaceRect.x + 10.0f, surfaceRect.y + 12.0f,
                           std::max(0.0f, surfaceRect.width - 20.0f), 18.0f},
-                         media.kind.empty() ? "Media Preview" : media.kind + " Preview", text, 12.0f,
+                          media.kind.empty() ? std::string(tr("Media Preview")) : std::string(tr(media.kind)) + " " + std::string(tr("Preview")), text, 12.0f,
                          {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
         if (media.kind == "Audio" && media.audioPreview && media.audioPreview->valid()) {
             const auto waveform = ui::Rect{surfaceRect.x + 10.0f, surfaceRect.y + 38.0f,
@@ -2810,6 +2823,16 @@ void EditorUi::draw_media_panel(const DockRect& value, const EditorUiModel& mode
             renderList_.rect(frameBounds, color(layout.theme == "light" ? "#E2E4E8" : "#17191D"), 2.0f);
             renderList_.image(imageBounds, media.videoPreview->firstFrame);
             set_region("media-timeline", frameBounds, true);
+            const float progress = media.duration > 0.0
+                ? static_cast<float>(std::clamp(media.currentTime / media.duration, 0.0, 1.0)) : 0.0f;
+            const auto timeline = ui::Rect{frameBounds.x + 7.0f, frameBounds.bottom() - 8.0f,
+                                           std::max(0.0f, frameBounds.width - 14.0f), 3.0f};
+            renderList_.rect(timeline, color(layout.theme == "light" ? "#B9C0CA" : "#4B5563"), 2.0f);
+            renderList_.rect({timeline.x, timeline.y, timeline.width * progress, timeline.height}, accent, 2.0f);
+            renderList_.text({frameBounds.x + 7.0f, frameBounds.y + 5.0f,
+                              std::max(0.0f, frameBounds.width - 14.0f), 14.0f},
+                             format_media_time(media.currentTime) + " / " + format_media_time(media.duration),
+                             color("#F3F5F7"), 9.0f, {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
         } else {
             set_region("media-timeline", {surfaceRect.x + 10.0f, surfaceRect.y + 38.0f,
                                             std::max(0.0f, surfaceRect.width - 20.0f), 42.0f}, true);
@@ -2819,11 +2842,11 @@ void EditorUi::draw_media_panel(const DockRect& value, const EditorUiModel& mode
                 : "Select a supported media asset";
             renderList_.text({surfaceRect.x + 10.0f, surfaceRect.y + 38.0f,
                               std::max(0.0f, surfaceRect.width - 20.0f), 18.0f},
-                             surfaceStatus, muted, 10.0f, {}, ui::TextAlign::Center,
+                             tr(surfaceStatus), muted, 10.0f, {}, ui::TextAlign::Center,
                              ui::TextOverflow::Ellipsis);
         }
     }
-    if (media.kind != "Audio") return;
+    if (media.kind != "Audio" && media.kind != "Video") return;
     const float controlsY = bounds.y + 152.0f;
     const float buttonWidth = std::clamp((bounds.width - 16.0f) / 3.0f, 54.0f, 92.0f);
     const auto play = command_key("media-play");
@@ -2832,19 +2855,27 @@ void EditorUi::draw_media_panel(const DockRect& value, const EditorUiModel& mode
     commandActions_[play] = {EditorCommand::MediaPlay, {}};
     commandActions_[pause] = {EditorCommand::MediaPause, {}};
     commandActions_[stop] = {EditorCommand::MediaStop, {}};
-    draw_button({bounds.x, controlsY, buttonWidth, 25.0f}, play, "Play", layout, media.available);
-    draw_button({bounds.x + buttonWidth + 8.0f, controlsY, buttonWidth, 25.0f}, pause, "Pause", layout,
-                media.available && media.playbackState == "Playing");
-    draw_button({bounds.x + (buttonWidth + 8.0f) * 2.0f, controlsY, buttonWidth, 25.0f}, stop, "Stop", layout,
+    draw_button({bounds.x, controlsY, buttonWidth, 25.0f}, play, tr("Play"), layout, media.available);
+    draw_button({bounds.x + buttonWidth + 8.0f, controlsY, buttonWidth, 25.0f}, pause, tr("Pause"), layout,
+                media.available && media.playbackState == "playing");
+    draw_button({bounds.x + (buttonWidth + 8.0f) * 2.0f, controlsY, buttonWidth, 25.0f}, stop, tr("Stop"), layout,
                 media.available);
     const auto loop = command_key("media-loop");
     commandActions_[loop] = {EditorCommand::MediaToggleLoop, {}};
     draw_button({bounds.x, controlsY + 32.0f, buttonWidth * 1.5f, 25.0f}, loop,
-                media.loop ? "Loop: On" : "Loop: Off", layout, media.loop);
-    const auto volume = std::to_string(static_cast<int>(std::round(std::clamp(media.volume, 0.0, 1.0) * 100.0))) + "%";
-    renderList_.text({bounds.x + buttonWidth * 1.5f + 16.0f, controlsY + 35.0f,
-                      std::max(0.0f, bounds.width - buttonWidth * 1.5f - 16.0f), 18.0f},
-                     "Volume " + volume, muted, 10.0f, {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
+                media.loop ? tr("Loop: On") : tr("Loop: Off"), layout, media.loop);
+    if (media.kind == "Audio") {
+        const auto volume = std::to_string(static_cast<int>(std::round(std::clamp(media.volume, 0.0, 1.0) * 100.0))) + "%";
+        renderList_.text({bounds.x + buttonWidth * 1.5f + 16.0f, controlsY + 35.0f,
+                          std::max(0.0f, bounds.width - buttonWidth * 1.5f - 16.0f), 18.0f},
+                         std::string(tr("Volume")) + " " + volume, muted, 10.0f,
+                         {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
+    } else {
+        renderList_.text({bounds.x + buttonWidth * 1.5f + 16.0f, controlsY + 35.0f,
+                          std::max(0.0f, bounds.width - buttonWidth * 1.5f - 16.0f), 18.0f},
+                         format_media_time(media.currentTime) + " / " + format_media_time(media.duration),
+                         muted, 10.0f, {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
+    }
 }
 
 void EditorUi::draw_recovery_panel(const DockRect& value, const EditorUiModel& model,

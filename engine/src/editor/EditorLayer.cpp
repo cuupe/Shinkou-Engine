@@ -1967,10 +1967,27 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         break;
     case EditorCommand::MediaPlay:
         if (dispatch_audio_source_transport(command, target, world)) break;
+        if (mediaPanel_.description().kind == ui::MediaKind::Video) {
+            if (!videoPreviewSnapshot_ || !videoPreviewSnapshot_->valid()) {
+                lastStatus_ = "Video preview unavailable";
+                sync_media_preview_state();
+                break;
+            }
+            mediaPanel_.apply(ui::MediaCommand::play());
+            lastStatus_ = "Video preview playing";
+            sync_media_preview_state();
+            break;
+        }
         start_audio_preview();
         break;
     case EditorCommand::MediaPause:
         if (dispatch_audio_source_transport(command, target, world)) break;
+        if (mediaPanel_.description().kind == ui::MediaKind::Video) {
+            mediaPanel_.apply(ui::MediaCommand::pause());
+            lastStatus_ = "Video preview paused";
+            sync_media_preview_state();
+            break;
+        }
         if (audioSystem_ && audioPreviewVoice_ != 0 &&
             audioSystem_->state(audioPreviewVoice_) == audio::AudioVoiceState::Playing) {
             audioSystem_->pause(audioPreviewVoice_);
@@ -1981,17 +1998,28 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         break;
     case EditorCommand::MediaStop:
         if (dispatch_audio_source_transport(command, target, world)) break;
+        if (mediaPanel_.description().kind == ui::MediaKind::Video) {
+            mediaPanel_.apply(ui::MediaCommand::stop());
+            if (videoPreviewSnapshot_ && videoPreviewSnapshot_->valid()) request_video_frame(0.0);
+            lastStatus_ = "Video preview stopped";
+            sync_media_preview_state();
+            break;
+        }
         stop_audio_preview();
         lastStatus_ = "Audio preview stopped";
         sync_media_preview_state();
         break;
-    case EditorCommand::MediaToggleLoop:
+    case EditorCommand::MediaToggleLoop: {
         mediaPanel_.playback().loop = !mediaPanel_.playback().loop;
         if (audioSystem_ && audioPreviewVoice_ != 0)
             audioSystem_->set_loop(audioPreviewVoice_, mediaPanel_.playback().loop);
-        lastStatus_ = mediaPanel_.playback().loop ? "Audio preview loop enabled" : "Audio preview loop disabled";
+        const bool video = mediaPanel_.description().kind == ui::MediaKind::Video;
+        lastStatus_ = video
+            ? (mediaPanel_.playback().loop ? "Video preview loop enabled" : "Video preview loop disabled")
+            : (mediaPanel_.playback().loop ? "Audio preview loop enabled" : "Audio preview loop disabled");
         sync_media_preview_state();
         break;
+    }
     case EditorCommand::MediaSeek: {
         if (dispatch_audio_source_transport(command, target, world)) break;
         try {
@@ -5129,6 +5157,15 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     poll_audio_preview();
     poll_video_preview();
     poll_video_frame();
+    // MediaPanel owns bounded clock advancement. The editor layer only turns
+    // that retained time into a decoded frame request, so decoding remains
+    // asynchronous and never blocks paint or the input bridge.
+    if (mediaPanel_.description().kind == ui::MediaKind::Video &&
+        mediaPanel_.playback().state == ui::MediaPlaybackState::Playing &&
+        videoPreviewSnapshot_ && videoPreviewSnapshot_->valid() &&
+        !videoFrameFuture_.valid()) {
+        request_video_frame(mediaPanel_.playback().currentTime);
+    }
     poll_model_preview();
     poll_model_scene_assets();
     sync_model_scene_assets(world);

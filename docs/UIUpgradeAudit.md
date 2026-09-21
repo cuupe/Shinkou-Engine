@@ -2481,3 +2481,29 @@
 
 - Windows 原生菜单已由 `install_native_menu()` 通过 `EditorLocalization` 构建；语言切换会卸载并重建菜单。本轮像素证据主要覆盖 retained UI，原生菜单本身未纳入 client-area BMP。
 - 当前主机 DPI=150%，100%/125% 像素矩阵、CJK 字体 fallback 诊断、UI frame-time/分配、模型 skin/playback 和内容 hash/diff 仍未完成。
+
+## 第 4.57 子阶段：视频预览传输控制与异步连续取帧
+
+### 实现与范围
+
+- `EditorLayer::dispatch_command` 现在为视频处理 Play/Pause/Stop/Loop；无有效 snapshot 时保持 `Video preview unavailable`，不伪造播放成功；Stop 复位到 0 秒并异步请求首帧。
+- `MediaPanel::update()` 统一推进有限时长媒体时钟；draw 生命周期在视频处于 Playing 且没有活动 `videoFrameFuture_` 时提交当前时间帧请求。generation、source stamp、cancel 和 pending seek 继续由既有 provider seam 管理。
+- retained Media Preview 对 Audio/Video 共用播放、暂停、停止、循环按钮；视频帧区域增加进度条与 `MM:SS / MM:SS` 时间标记。按钮标签使用 `EditorLocalization`，并修复 `playing`/`Playing` 大小写不一致导致 Pause 控件不可用的问题。
+- 非目标明确保留：连续 decoder session、视频音轨混音、A/V clock、硬件解码和跨平台 codec 兼容性尚未完成。
+
+### 契约与证据
+
+- `MediaTests` 增加有限时长视频到达末尾后停止、重新 Play 回到 0 秒的契约断言；循环和 JSON 回归保持覆盖。
+- `EditorInteractionTests` 使用无效 `preview.avi` fixture，确认 decoder 失败仍被诚实发布，同时 Video Media Preview retained 注册 `media-play`、`media-pause`、`media-stop`、`media-loop` 四个区域。
+- 尚未宣称真实视频的连续帧视觉通过：当前 fixture 只用于失败路径和 UI 能力证据；真实有时长帧的 fixture 与 native readback 差异 oracle 是下一入口。
+
+### 安全、性能与视觉审计
+
+- UI 不直接接触 DX11、Media Foundation 或其他底层 API；只操作 `MediaPanel` 状态并通过现有 `EditorVideoPreview` provider 异步取帧。
+- 每帧最多在无活动任务时发起一次有界帧请求，不在 paint/input 线程等待 future；过期任务仍由 generation/source stamp 丢弃，取消路径可回收。
+- 语言表新增媒体类型、状态、循环和音量文案；用户路径保留原文。视频进度条只消费 retained snapshot 和时间状态，不读盘。
+
+### 未解决风险与下一轮
+
+- 需要准备可解码的真实视频 fixture，验证播放期间帧时间单调推进、循环回绕、Stop 回到首帧以及暂停不继续提交帧请求。
+- CJK 字体 fallback 诊断、窄窗口布局、UI frame-time/分配预算、内容 diff/hash、模型 skin/playback 和非 D3D11 模型 backend 仍在后续队列。

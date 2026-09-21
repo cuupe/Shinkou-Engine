@@ -74,6 +74,15 @@ int main() {
     stream.update(2.5);
     assert(std::abs(stream.playback().currentTime - 2.5) < 0.0001);
 
+    MediaPanel finite = video_panel();
+    assert(finite.apply(MediaCommand::set_duration(3.0)) == MediaCommandResult::Applied);
+    assert(finite.apply(MediaCommand::play()) == MediaCommandResult::Applied);
+    finite.update(4.0);
+    assert(finite.playback().state == MediaPlaybackState::Stopped);
+    assert(std::abs(finite.playback().currentTime - 3.0) < 0.0001);
+    assert(finite.apply(MediaCommand::play()) == MediaCommandResult::Applied);
+    assert(std::abs(finite.playback().currentTime) < 0.0001);
+
     std::cout << "Media panel model, commands, playback, and JSON passed\n";
     return 0;
 }
