@@ -1,5 +1,11 @@
 # Shinkou Engine UI 专用工作流
 
+2026-10 更新：原生编辑器主界面已迁移到 Dear ImGui Docking，见
+[当前界面接入](EditorImGuiMigration.md)。下文 retained 链路用于保留的 fallback/headless 路径；
+原生交互由官方 Win32 backend 处理，EditorLayer 继续负责命令、资源和文档。
+资源类型能力与验证入口见 [资源预览与配置](EditorAssetInspection.md)。
+类型化属性、Transform 编辑和独立原生窗口见 [属性面板架构](EditorInspectorArchitecture.md)。
+
 这份文档是编辑器 UI 相关任务的项目级入口。它服务于 Windows 桌面引擎编辑器：窗体、标题栏、原生菜单和系统快捷键保持 Windows 语义；引擎内部 UI 采用扁平、克制、类似 Apple 的视觉语言，不把界面做成 macOS 仿制品，也不把编辑器做成网页卡片墙。
 
 ## 先分清 UI 边界

@@ -144,7 +144,7 @@ bool same_file_recovery_state(const EditorFileRecoveryUiState& left,
 bool same_asset_preview(const EditorAssetPreviewUiState& left, const EditorAssetPreviewUiState& right) {
     return left.path == right.path && left.kind == right.kind && left.title == right.title &&
         left.status == right.status && left.loading == right.loading && left.truncated == right.truncated &&
-        left.textLines == right.textLines && left.imageWidth == right.imageWidth &&
+        left.textLines == right.textLines && left.textPreview == right.textPreview && left.imageWidth == right.imageWidth &&
         left.imageHeight == right.imageHeight && left.imageSnapshot == right.imageSnapshot &&
         left.modelPreview == right.modelPreview && left.modelPreviewScene == right.modelPreviewScene &&
         left.modelTextureWidth == right.modelTextureWidth &&
@@ -327,8 +327,12 @@ void EditorUiModel::sync(World& world) {
     if (auto* object = world.find_object(selectedObject_)) {
         fields.push_back({"name", "Name", std::string(object->name()), true, false});
         fields.push_back({"active", "Active", object->active_self() ? "true" : "false", true, true});
+        fields[0].data=std::string(object->name());
+        fields[1].type=PropertyType::Bool;fields[1].data=object->active_self();
         object->each_component([&](Component& component) {
             fields.push_back({"enabled:" + std::to_string(component.id()), std::string(component.registered_type_name()) + " enabled", component.enabled() ? "true" : "false", true, true});
+            fields.back().type=PropertyType::Bool;fields.back().data=component.enabled();
+            const auto first=fields.size()-1;
             auto* audioSource = dynamic_cast<components::AudioSourceComponent*>(&component);
             if (audioSource) fields.push_back({
                 std::to_string(component.id()) + ":audioStatus", "Resource", audio_source_status(
@@ -342,6 +346,8 @@ void EditorUiModel::sync(World& world) {
                 EditorInspectorField field{
                     std::to_string(component.id()) + ":" + p.name, p.displayName, property_text(p.get()),
                     p.editable(), p.type == PropertyType::Bool};
+                field.type=p.type;field.data=p.editorGet ? p.editorGet() : p.get();
+                field.presentation=p.presentation;field.minimum=p.minimum;field.maximum=p.maximum;field.step=p.step;
                 if (audioSource && p.name == "clipPath") field.choices = audioAssetChoices_;
                 if (audioSource && p.name == "bus") field.choices = audio_bus_choices();
                 fields.push_back(std::move(field));
@@ -358,10 +364,13 @@ void EditorUiModel::sync(World& world) {
                 }
                 fields.push_back({std::to_string(component.id()) + ":audioTimeline", "Timeline", std::move(cursor), false, false});
             }
+            for (auto i=first;i<fields.size();++i) {
+                fields[i].componentId=component.id();fields[i].componentName=component.registered_type_name();
+            }
         });
     }
     std::string signature;
-    for (const auto& f : fields) signature += f.id + "\n" + f.label + "\n" + f.value + "\n";
+    for (const auto& f : fields) signature += f.id + "\n" + f.label + "\n" + f.value + "\n" + property_text(f.data) + "\n";
     if (signature != inspectorSignature_) {
         inspectorSignature_ = std::move(signature);
         inspectorFields_ = std::move(fields);

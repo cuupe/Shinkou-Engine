@@ -217,7 +217,7 @@ class AudioSystem final {
     AudioDiagnostics diagnostics_{};
 
     std::filesystem::path resolve_path(const std::filesystem::path& path) const;
-    AudioAssetId find_asset(const std::filesystem::path& path) const;
+    AudioAssetId find_asset(const std::filesystem::path& path, bool streaming) const;
     void forget_finished_voices();
 
 public:

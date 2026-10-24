@@ -166,6 +166,7 @@ struct RenderStats {
     std::uint64_t presentCount{0};
     std::uint64_t editorViewportPasses{0};
     std::uint64_t editorViewportRejectedPasses{0};
+    std::uint64_t transientTextureReuses{0};
 };
 
 class IRenderBackend {
@@ -191,6 +192,8 @@ public:
     virtual bool initialize(const RenderBackendConfig& config) = 0;
     virtual bool resize(std::uint32_t, std::uint32_t) { return true; }
     virtual bool create_resource(ResourceHandle handle, const ResourceDesc& desc) = 0;
+    virtual bool create_transient_resource(ResourceHandle handle,const ResourceDesc& description) { return create_resource(handle,description); }
+    virtual void retire_transient_resource(ResourceHandle handle,bool reusable=true) { (void)reusable; retire_resource(handle); }
     virtual bool alias_resource(ResourceHandle logical, ResourceHandle physical) {
         (void)logical;
         (void)physical;
@@ -231,6 +234,7 @@ public:
         (void)clearAttachments;
         set_render_targets(color, depth);
     }
+    virtual bool clear_render_attachments(const std::vector<ResourceHandle>&,ResourceHandle,bool,bool) { return false; }
     // An empty color target means the swapchain/backbuffer. Native editor
     // preview passes use this to switch between an offscreen target and the
     // protected editor presentation target without changing scene policy.
@@ -252,6 +256,10 @@ public:
     // the backend's *_NewFrame() adapter before ImGui::NewFrame(). The render
     // backend only consumes the completed draw data during submit().
     virtual bool initialize_imgui() { return false; }
+    virtual void new_imgui_frame() {}
+    virtual void invalidate_imgui_fonts() {}
+    // Opaque ID consumed only by Dear ImGui's renderer adapter.
+    virtual std::uint64_t imgui_texture(ResourceHandle) { return 0; }
     virtual void shutdown_imgui() {}
     virtual void render_imgui(ImDrawData*) {}
     // Retained editor UI seam. The widget tree and layout are backend-neutral;

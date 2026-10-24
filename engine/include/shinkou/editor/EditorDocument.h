@@ -6,8 +6,9 @@
 
 namespace shinkou::editor {
 
-// Text is also the inspector edit contract. Parsing must consume the complete
-// value and reject non-finite numbers before calling a component setter.
+// Scene JSON and the retained compatibility adapter use a text projection.
+// Native inspector edits use PropertyValue directly. Parsing must consume the
+// complete value and reject non-finite numbers before calling a setter.
 std::string property_text(const PropertyValue& value);
 bool parse_property_text(PropertyType type, std::string_view text, PropertyValue& value);
 

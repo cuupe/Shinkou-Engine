@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(ShinkouEngine VERSION 0.1.0 LANGUAGES CXX)
+project(ShinkouEngine VERSION 0.1.0 LANGUAGES C CXX)
 
 set(SHINKOU_ENGINE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/engine")
 set(SHINKOU_SAMPLE_ROOT "${SHINKOU_ENGINE_ROOT}/samples")
@@ -78,13 +78,14 @@ list(FILTER SHINKOU_ENGINE_SOURCES EXCLUDE REGEX "/engine/src/physics/")
 list(FILTER SHINKOU_ENGINE_SOURCES EXCLUDE REGEX "FileHistory\\.cpp$")
 
 add_library(shinkou_engine STATIC ${SHINKOU_ENGINE_SOURCES})
+include(ShinkouBuiltinShaders)
 # The parallel physics worktree temporarily filters this editor data unit from
 # the source glob; keep the engine target link-complete in that configuration.
 target_sources(shinkou_engine PRIVATE
     "${SHINKOU_ENGINE_ROOT}/src/editor/FileHistory.cpp")
 set_target_properties(shinkou_engine PROPERTIES OUTPUT_NAME shinkou_engine EXPORT_NAME Engine)
 add_library(ShinkouEngine::Engine ALIAS shinkou_engine)
-target_link_libraries(shinkou_engine PUBLIC shinkou_assets shinkou_physics)
+target_link_libraries(shinkou_engine PUBLIC shinkou_assets shinkou_physics PRIVATE shinkou_asset_readers)
 if(WIN32)
     target_link_libraries(shinkou_engine PRIVATE comdlg32 shell32)
 endif()
@@ -97,6 +98,7 @@ target_include_directories(shinkou_engine PUBLIC
 target_compile_features(shinkou_engine PUBLIC cxx_std_17)
 target_compile_definitions(shinkou_engine PRIVATE
     SHINKOU_EDITOR_ICON_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/engine/resources/editor/icons"
+    SHINKOU_EDITOR_ICON_FONT_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/third_party/codicons/codicon.ttf"
     SHINKOU_EDITOR_ICON_INSTALL_DIR="${CMAKE_INSTALL_PREFIX}/share/shinkou/editor/icons")
 
 if(SHINKOU_ENABLE_AVX2)
@@ -141,6 +143,9 @@ if(SHINKOU_WITH_IMGUI)
     target_include_directories(shinkou_engine PRIVATE "${IMGUI_INCLUDE_DIR}")
     if(IMGUI_LIBRARY)
         target_link_libraries(shinkou_engine PRIVATE "${IMGUI_LIBRARY}")
+    endif()
+    if(TARGET shinkou_editor_widgets)
+        target_link_libraries(shinkou_engine PRIVATE shinkou_editor_widgets)
     endif()
     target_compile_definitions(shinkou_engine PRIVATE SHINKOU_WITH_IMGUI=1)
 endif()
@@ -583,6 +588,38 @@ if(SHINKOU_BUILD_TESTS)
         target_link_libraries(shinkou_render_feature_graph_builder_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_render_feature_graph_builder_tests COMMAND shinkou_render_feature_graph_builder_tests)
 
+        add_executable(shinkou_render_pipeline_customization_tests "${SHINKOU_TEST_ROOT}/RenderPipelineCustomizationTests.cpp")
+        target_link_libraries(shinkou_render_pipeline_customization_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_render_pipeline_customization_tests COMMAND shinkou_render_pipeline_customization_tests)
+
+        add_executable(shinkou_render_pipeline_execution_tests "${SHINKOU_TEST_ROOT}/RenderPipelineExecutionTests.cpp")
+        target_link_libraries(shinkou_render_pipeline_execution_tests PRIVATE shinkou_engine)
+        target_compile_definitions(shinkou_render_pipeline_execution_tests PRIVATE
+            SHINKOU_PIPELINE_TEST_SHADER="${SHINKOU_TEST_ROOT}/shaders/PipelineTransform.hlsl"
+            SHINKOU_PIPELINE_TEST_SPIRV="${CMAKE_CURRENT_BINARY_DIR}/pipeline_transform.spv")
+        if(SHINKOU_WITH_VULKAN AND SHINKOU_BUILTIN_GLSLC)
+            add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pipeline_transform.spv"
+                COMMAND "${SHINKOU_BUILTIN_GLSLC}" -x hlsl -fshader-stage=frag
+                    -fentry-point=main -DSHINKOU_SPIRV=1
+                    -o "${CMAKE_CURRENT_BINARY_DIR}/pipeline_transform.spv"
+                    "${SHINKOU_TEST_ROOT}/shaders/PipelineTransform.hlsl"
+                DEPENDS "${SHINKOU_TEST_ROOT}/shaders/PipelineTransform.hlsl" VERBATIM)
+            add_custom_target(shinkou_pipeline_test_shaders DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/pipeline_transform.spv")
+            add_dependencies(shinkou_render_pipeline_execution_tests shinkou_pipeline_test_shaders)
+        endif()
+        add_test(NAME shinkou_render_pipeline_execution_tests COMMAND shinkou_render_pipeline_execution_tests)
+        set_tests_properties(shinkou_render_pipeline_execution_tests PROPERTIES SKIP_RETURN_CODE 77)
+        add_test(NAME shinkou_render_pipeline_dx12_tests COMMAND shinkou_render_pipeline_execution_tests dx12)
+        add_test(NAME shinkou_render_pipeline_vulkan_tests COMMAND shinkou_render_pipeline_execution_tests vulkan)
+        set_tests_properties(shinkou_render_pipeline_dx12_tests shinkou_render_pipeline_vulkan_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+        add_executable(shinkou_environment_exposure_tests "${SHINKOU_TEST_ROOT}/EnvironmentExposureTests.cpp")
+        target_link_libraries(shinkou_environment_exposure_tests PRIVATE shinkou_engine)
+        foreach(render_api IN ITEMS dx11 dx12 vulkan)
+            add_test(NAME shinkou_environment_exposure_${render_api}_tests COMMAND shinkou_environment_exposure_tests ${render_api})
+            set_tests_properties(shinkou_environment_exposure_${render_api}_tests PROPERTIES SKIP_RETURN_CODE 77)
+        endforeach()
+
         add_executable(shinkou_renderer_diagnostics_service_tests "${SHINKOU_TEST_ROOT}/RendererDiagnosticsServiceTests.cpp")
         target_link_libraries(shinkou_renderer_diagnostics_service_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_renderer_diagnostics_service_tests COMMAND shinkou_renderer_diagnostics_service_tests)
@@ -634,6 +671,9 @@ if(SHINKOU_BUILD_TESTS)
         add_executable(shinkou_editor_ui_model_tests "${SHINKOU_TEST_ROOT}/EditorUiModelTests.cpp")
         target_link_libraries(shinkou_editor_ui_model_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_ui_model_tests COMMAND shinkou_editor_ui_model_tests)
+        add_executable(shinkou_transform_inspector_tests "${SHINKOU_TEST_ROOT}/TransformInspectorTests.cpp")
+        target_link_libraries(shinkou_transform_inspector_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_transform_inspector_tests COMMAND shinkou_transform_inspector_tests)
 
         add_executable(shinkou_editor_localization_tests "${SHINKOU_TEST_ROOT}/EditorLocalizationTests.cpp")
         target_link_libraries(shinkou_editor_localization_tests PRIVATE shinkou_engine)
@@ -656,6 +696,11 @@ if(SHINKOU_BUILD_TESTS)
         add_test(NAME shinkou_editor_asset_index_tests COMMAND shinkou_editor_asset_index_tests)
 
         add_executable(shinkou_editor_audio_preview_tests "${SHINKOU_TEST_ROOT}/EditorAudioPreviewTests.cpp")
+        add_executable(shinkou_editor_asset_inspection_tests "${SHINKOU_TEST_ROOT}/EditorAssetInspectionTests.cpp")
+        target_compile_definitions(shinkou_editor_asset_inspection_tests PRIVATE
+            SHINKOU_EDITOR_TEST_FIXTURE_DIR="${SHINKOU_TEST_ROOT}/fixtures")
+        target_link_libraries(shinkou_editor_asset_inspection_tests PRIVATE shinkou_engine shinkou_asset_readers)
+        add_test(NAME shinkou_editor_asset_inspection_tests COMMAND shinkou_editor_asset_inspection_tests)
         target_link_libraries(shinkou_editor_audio_preview_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_audio_preview_tests COMMAND shinkou_editor_audio_preview_tests)
 
@@ -664,6 +709,8 @@ if(SHINKOU_BUILD_TESTS)
         add_test(NAME shinkou_editor_image_preview_tests COMMAND shinkou_editor_image_preview_tests)
 
         add_executable(shinkou_editor_video_preview_tests "${SHINKOU_TEST_ROOT}/EditorVideoPreviewTests.cpp")
+        target_compile_definitions(shinkou_editor_video_preview_tests PRIVATE
+            SHINKOU_EDITOR_TEST_FIXTURE_DIR="${SHINKOU_TEST_ROOT}/fixtures")
         target_link_libraries(shinkou_editor_video_preview_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_video_preview_tests COMMAND shinkou_editor_video_preview_tests)
 
@@ -678,6 +725,9 @@ if(SHINKOU_BUILD_TESTS)
         add_executable(shinkou_editor_model_preview_renderer_tests "${SHINKOU_TEST_ROOT}/EditorModelPreviewRendererTests.cpp")
         target_link_libraries(shinkou_editor_model_preview_renderer_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_editor_model_preview_renderer_tests COMMAND shinkou_editor_model_preview_renderer_tests)
+        add_executable(shinkou_editor_world_viewport_tests "${SHINKOU_TEST_ROOT}/EditorWorldViewportTests.cpp")
+        target_link_libraries(shinkou_editor_world_viewport_tests PRIVATE shinkou_engine)
+        add_test(NAME shinkou_editor_world_viewport_tests COMMAND shinkou_editor_world_viewport_tests)
 
         add_executable(shinkou_editor_gltf_preview_tests "${SHINKOU_TEST_ROOT}/EditorGltfPreviewTests.cpp")
         target_link_libraries(shinkou_editor_gltf_preview_tests PRIVATE shinkou_engine)
@@ -747,11 +797,37 @@ if(SHINKOU_BUILD_TESTS)
 
         add_executable(shinkou_imgui_adapter_tests "${SHINKOU_TEST_ROOT}/ImGuiAdapterTests.cpp")
         target_link_libraries(shinkou_imgui_adapter_tests PRIVATE shinkou_engine)
+        if(SHINKOU_WITH_IMGUI)
+            target_compile_definitions(shinkou_imgui_adapter_tests PRIVATE SHINKOU_WITH_IMGUI=1)
+            target_include_directories(shinkou_imgui_adapter_tests PRIVATE "${IMGUI_INCLUDE_DIR}")
+        endif()
         add_test(NAME shinkou_imgui_adapter_tests COMMAND shinkou_imgui_adapter_tests)
 
         add_executable(shinkou_components_tests "${SHINKOU_TEST_ROOT}/ComponentsTests.cpp")
         target_link_libraries(shinkou_components_tests PRIVATE shinkou_engine)
         add_test(NAME shinkou_components_tests COMMAND shinkou_components_tests)
+
+        # The job system is a leaf: it includes nothing from the engine, so this
+        # target compiles its translation unit directly instead of linking the
+        # multi-hundred-megabyte engine archive. That keeps the dependency honest
+        # (a stray engine include breaks the build immediately) and turns a
+        # several-minute link into a couple of seconds.
+        find_package(Threads REQUIRED)
+        add_executable(shinkou_jobs_tests
+            "${SHINKOU_TEST_ROOT}/JobsTests.cpp"
+            "${SHINKOU_ENGINE_ROOT}/src/jobs/JobSystem.cpp")
+        target_include_directories(shinkou_jobs_tests PRIVATE "${SHINKOU_ENGINE_ROOT}/include")
+        target_link_libraries(shinkou_jobs_tests PRIVATE Threads::Threads)
+        add_test(NAME shinkou_jobs_tests COMMAND shinkou_jobs_tests)
+
+        # The profiler is a leaf too: same reasoning as the job system above. Its
+        # test target deliberately links nothing from the engine.
+        add_executable(shinkou_profile_tests
+            "${SHINKOU_TEST_ROOT}/ProfileTests.cpp"
+            "${SHINKOU_ENGINE_ROOT}/src/profile/Profiler.cpp")
+        target_include_directories(shinkou_profile_tests PRIVATE "${SHINKOU_ENGINE_ROOT}/include")
+        target_link_libraries(shinkou_profile_tests PRIVATE Threads::Threads)
+        add_test(NAME shinkou_profile_tests COMMAND shinkou_profile_tests)
 
         add_executable(shinkou_math_parallel_tests "${SHINKOU_TEST_ROOT}/MathParallelTests.cpp")
         target_link_libraries(shinkou_math_parallel_tests PRIVATE shinkou_engine)
@@ -775,11 +851,14 @@ if(SHINKOU_BUILD_TESTS)
         add_test(NAME shinkou_network_tests COMMAND shinkou_network_tests)
 
         set(SHINKOU_TEST_TARGETS
+            shinkou_render_pipeline_customization_tests
+            shinkou_render_pipeline_execution_tests
+            shinkou_environment_exposure_tests
             shinkou_render_graph_tests shinkou_gpu_memory_allocator_tests shinkou_texture_model_tests shinkou_texture_backend_mapping_tests shinkou_pbr_render_pipeline_tests shinkou_lighting_pipeline_tests shinkou_shader_pipeline_library_tests shinkou_render_capture_budget_tests shinkou_advanced_render_features_tests shinkou_render_feature_graph_builder_tests shinkou_renderer_diagnostics_service_tests shinkou_render_graph_scheduler_tests shinkou_queue_sync_tests
             shinkou_render_feature_graph_builder_tests shinkou_descriptor_allocator_tests
             shinkou_audio_tests shinkou_assets_tests shinkou_input_tests
             shinkou_game_object_tests shinkou_reflection_tests shinkou_animation_tests shinkou_math_tests shinkou_physics_world_tests
-            shinkou_editor_ui_model_tests shinkou_file_system_tests shinkou_editor_command_bus_tests shinkou_editor_selection_tests shinkou_render_view_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_asset_icon_library_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests shinkou_editor_compile_commands_tests shinkou_editor_asset_index_tests shinkou_editor_audio_preview_tests shinkou_editor_image_preview_tests shinkou_editor_video_preview_tests
+            shinkou_editor_ui_model_tests shinkou_file_system_tests shinkou_editor_command_bus_tests shinkou_editor_selection_tests shinkou_render_view_tests shinkou_ui_runtime_tests shinkou_input_bridge_tests shinkou_theme_tests shinkou_dock_layout_tests shinkou_ui_render_tests shinkou_asset_icon_library_tests shinkou_style_tests shinkou_media_tests shinkou_imgui_adapter_tests shinkou_components_tests shinkou_jobs_tests shinkou_profile_tests shinkou_editor_compile_commands_tests shinkou_editor_asset_index_tests shinkou_editor_audio_preview_tests shinkou_editor_image_preview_tests shinkou_editor_video_preview_tests
             shinkou_editor_model_preview_tests shinkou_editor_model_preview_scene_tests shinkou_editor_model_preview_renderer_tests shinkou_editor_gltf_preview_tests shinkou_math_parallel_tests shinkou_math_advanced_tests shinkou_network_tests)
         if(SHINKOU_WITH_SPDLOG)
             list(APPEND SHINKOU_TEST_TARGETS shinkou_logging_tests)
@@ -841,7 +920,7 @@ if(SHINKOU_BUILD_BENCHMARKS)
     endif()
 endif()
 
-install(TARGETS shinkou_physics shinkou_engine shinkou_assets
+install(TARGETS shinkou_physics shinkou_engine shinkou_assets shinkou_asset_readers
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
@@ -849,6 +928,8 @@ install(DIRECTORY "${SHINKOU_ENGINE_ROOT}/include/" DESTINATION include)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/include/" DESTINATION include)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/engine/resources/editor/icons/"
     DESTINATION share/shinkou/editor/icons)
+install(FILES third_party/codicons/codicon.ttf third_party/codicons/LICENSE third_party/codicons/LICENSE-CODE
+    DESTINATION share/shinkou/editor/fonts)
 
 message(STATUS "ShinkouEngine optional capabilities:")
 message(STATUS "  SDL3 input DLL: ${SHINKOU_ENABLE_SDL3_INPUT}")

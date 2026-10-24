@@ -1,0 +1,10 @@
+#pragma once
+#include <string_view>
+namespace shinkou::render::detail {
+inline constexpr std::string_view pbrSource = R"shinkou(@SHINKOU_PBR_SOURCE@)shinkou";
+inline constexpr std::string_view postSource = R"shinkou(@SHINKOU_POST_SOURCE@)shinkou";
+inline constexpr std::string_view forwardSource = R"shinkou(@SHINKOU_FORWARD_SOURCE@)shinkou";
+inline constexpr std::string_view motionSource = R"shinkou(@SHINKOU_MOTION_SOURCE@)shinkou";
+inline constexpr std::string_view skySource = R"shinkou(@SHINKOU_SKY_SOURCE@)shinkou";
+inline constexpr std::string_view histogramSource = R"shinkou(@SHINKOU_HISTOGRAM_SOURCE@)shinkou";
+}

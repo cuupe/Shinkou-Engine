@@ -2507,3 +2507,141 @@
 
 - 需要准备可解码的真实视频 fixture，验证播放期间帧时间单调推进、循环回绕、Stop 回到首帧以及暂停不继续提交帧请求。
 - CJK 字体 fallback 诊断、窄窗口布局、UI frame-time/分配预算、内容 diff/hash、模型 skin/playback 和非 D3D11 模型 backend 仍在后续队列。
+
+## 第 4.58 子阶段：编辑器壳层专业化重做与交互视觉收敛
+
+### 实现与范围
+
+- `engine/src/editor/EditorUi.cpp` 增加统一 `VisualTokens`、几何 glyph 和状态化按钮/开关绘制；工具栏、Hierarchy、Viewport、Inspector、Asset Browser 的绘制层整体重做，保留现有命令 ID、输入路由、停靠和布局持久化。
+- 工具栏改为紧凑图标命令带；Hierarchy 增加场景/对象 glyph、过滤搜索、选中条和失活状态；Viewport 增加场景视图标识、聚焦选中对象命令和克制的网格/提示层；Inspector 增加选中对象卡片、语义开关、选择器 glyph、响应式字段密度；Asset Browser 增加搜索/刷新/视图模式图标、树导线和选中态。
+- `EditorUiInput.cpp` 的输入框使用同一组视觉 token；`EditorLocalization.cpp` 增加场景标题、对象字段、组件类型、音频字段和 shell 状态的中文翻译。用户对象名称、路径、资源文件名和外部工具输出不翻译。
+- 本轮只改编辑器 UI 与交互表现，未新增媒体、构建、模型或底层后端能力，也未绕过统一接口直接操作 DX11/API。
+
+### 契约与证据
+
+- 增量构建目标：`shinkou_engine_sample`、`shinkou_ui_capture`、`shinkou_editor_localization_tests`、`shinkou_editor_interaction_tests` 通过。
+- 定向 CTest：localization、theme、dock_layout、ui_render、editor_interaction、style 共 `6/6 passed`；interaction `1/1 passed`，约 43.53 秒。此前因新 Inspector 头部使 `field:20:bus` 出现于可视区外而失败，已通过“字段较多时自动压缩行高”修复并回归通过。
+- 真实窗口证据：`out/qa/ui-redesign-final/interactive.bmp.steps.jsonl` 完成 `116/116` 步；child log 报告 `editor-ui-commands=382`、`editor-ui-text=53`、`editor-ui-assets=155`、`editor-ui-visible-assets=155`、`editor-ui-theme=dark`、`editor-ui-dpi=1.5`，viewport 为 `260,73,771.4,385.24`；`final.bmp` 已转为可审阅的 `final.png`。
+- 人工视觉复核：1920x1080、150% DPI 的 dark shell 已检查；面板层级、低对比表面、蓝色强调、选中条、图标命令、Inspector toggle、资源树导线、Viewport 网格和中文字段均可见，未发现明显裁切。
+
+### 安全、性能与视觉审计
+
+- 绘制路径仍只消费 `EditorUiModel`、布局快照和 retained render list；glyph 仅使用统一 `UiRenderList` 几何命令，不创建 renderer backend、D2D/DXGI、DX11 资源，也不触发文件 IO、解码或进程。
+- 所有新区域继续复用旧稳定 ID（如 `command:play`、`assets.filter`、`field:*`、`component-add:*`），因此按钮重绘没有破坏已有自动化输入和业务回调；Inspector 的 compact 策略只调整可视布局和滚动高度。
+- capture wrapper 仍会把 child 的诊断 stderr 记录为 PowerShell `NativeCommandError`，但 BMP、state 和 steps 文件完整生成；本轮不把 wrapper exit code 包装成通过，结论以 child log、116/116 steps 和真实截图为准。
+
+### 未解决风险与下一轮
+
+- 当前真实像素证据仍以 dark、1920x1080、150% DPI 为主；light/high-contrast、100%/125% DPI 和 1024x768 窄窗口需要单独复跑。
+- 专业化重做仍需要用户针对图标形状、面板比例、信息密度和强调色给出第一轮视觉反馈；下一轮只按反馈继续 UI，不扩展非 UI 功能。
+- UI frame-time/分配、CJK 字体 fallback、内容 diff/hash、模型 skin/playback 和非 D3D11 backend 继续保持冻结/后续队列状态。
+
+## 第 4.59 子阶段：主题矩阵与图标控件可发现性
+
+### 实现与范围
+
+- `EditorUi::draw_button` 为 panel-local icon-only 控件增加统一 tooltip fallback，覆盖新建对象、聚焦选中对象、资源刷新/Small/Large/Tree 视图和 media transport；工具栏既有 tooltip 不重复绘制。
+- 没有改变任何稳定命令键、交互区域、停靠 API 或业务回调；没有引入底层图形 API、文件 IO、媒体解码、编译器进程或新资源系统。
+
+### 契约与证据
+
+- 增量构建目标：`shinkou_engine`、`shinkou_editor_interaction_tests`、`shinkou_ui_render_tests`、`shinkou_ui_capture` 通过。
+- UI 定向 CTest：theme、ui_render、editor_interaction、style `4/4 passed`；interaction `40.78 sec`。
+- 真实窗口矩阵：`out/qa/ui-matrix-redesign/matrix.manifest.json` 生成 6 个场景，dark 1280x720、dark 1600x900、dark 1024x768、light 1280x720、high-contrast 1280x720 和 GDI fallback 均 `captureStatus=captured`；GPU 场景为 `EngineGpuReadback`，fallback 为 `WindowDC`，UI command 约 260–274、text 29，viewport rect 均存在。
+- 人工视觉复核：`dark-1024x768-100.png`、`dark-1600x900-125.png`、`light-1280x720-100.png`、`high-contrast-1280x720-100.png` 已检查；未发现面板重叠、空白呈现、资源树裁切或输入控件越界。实际主机仍为 150% DPI，矩阵 manifest 按规则将 DPI 项标记为 `inconclusive`。
+
+### 安全、性能与视觉审计
+
+- tooltip 只在已有 hover 状态绘制有限文本和矩形，不访问磁盘、不启动进程、不改变 hit-test，也不改变 retained command 的业务数据流。
+- 窄窗口目前通过 DockWorkspace 的最小尺寸约束保持三个主要区域可见；这证明了不重叠，但右侧 Inspector 在无选中对象时会保留空白工作区，尚未实现自动折叠，不能宣称窄窗口布局最终完成。
+- 高对比度截图满足可见性证据，但仍需 CJK 字体 fallback、焦点环和低视力色彩语义的专门检查；100%/125% DPI 需要真实对应 Windows 缩放环境。
+
+### 未解决风险与下一轮
+
+- 实现并测试窄窗口下 Inspector/Hierarchy/Asset Browser 的可逆折叠和恢复，不能破坏用户自定义布局持久化。
+- 补充 Inspector 分组、搜索和更精细的控件禁用/校验状态；随后记录 UI frame-time、分配和 dirty-region 上传基线。
+- 媒体连续解码、模型 skin、构建工具扩展和非 D3D11 backend 仍保持冻结，不因本轮矩阵通过而扩大范围。
+
+## 第 4.60 子阶段：窄窗口的可逆 Inspector 折叠
+
+### 实现与范围
+
+- `EditorUi` 新增临时 `compactInspectorAutoCollapsed_` / `compactInspectorExpanded_` 状态。逻辑宽度低于 760 时，若 Inspector 是普通停靠面板且用户偏好仍为可见，则只通过 `DockWorkspace::set_panel_visibility("inspector", false)` 收起；`EditorLayoutState::showInspector` 和布局持久化内容保持不变。
+- 收起态在工作区右上保留 settings glyph 入口；点击后恢复 Inspector，Inspector header 同一位置显示 chevron 收起入口，第二次点击可再次收起。浮动 Inspector 不参与自动折叠，恢复到宽窗口时自动显示。
+- `Tools/UiCapture/EditorInteraction.txt` 增加 1024x768 的 `compact-inspector-collapsed` / `compact-inspector-expanded` capture 和真实点击路径，未改变既有命令键或业务回调。
+
+### 契约与证据
+
+- 全量增量构建：`cmake --build out/build/mingw-debug -j 4` 通过，`shinkou_engine`、`shinkou_ui_capture` 和交互测试重新链接完成。
+- UI 定向 CTest：theme、ui_render、editor_interaction、style `4/4 passed`，总计 `48.12 sec`；其中 EditorInteraction `46.36 sec`。
+- 原生交互证据：`out/qa/ui-interaction-responsive/interactive.bmp.steps.jsonl` 的 `123/123` 步为 `ok=true`；`compact-inspector-collapsed.state.txt` 含 `compact-inspector-toggle` 和 `viewport.surface=225,73,457.667,208`，`compact-inspector-expanded.state.txt` 含 `compact-inspector-toggle=614.667,94,24,28`、`inspector.background=469.178,88,203.489,388` 及 `field:name`，证明收起入口、恢复后的 Inspector 和再次收起入口均经过真实窗口路由。
+- 矩阵证据：`out/qa/ui-matrix-responsive/matrix.manifest.json` 的 6 个场景均 `captureStatus=captured`，GPU 场景使用 `EngineGpuReadback`，GDI 场景使用 `WindowDC`；dark 1024x768 的 UI command/text 为 `265/27`，viewport 为 `225,73,457.667,208`，截图 `out/qa/ui-matrix-responsive/dark-1024x768-100.png` 已人工检查，右侧空 Inspector 区域消失且未出现重叠/裁切。实际主机 DPI 仍为 150%，所以请求的 100%/125% 场景按规则为 `inconclusive`，没有冒充 DPI 通过。
+- 视觉复核：`compact-inspector-collapsed.png` 显示视口与资源浏览器延展到右侧、只保留克制的恢复 glyph；`compact-inspector-expanded.png` 显示窄屏下 Inspector 仍可读、字段和中文组件名未裁切。1280 场景保持三栏，未误触发折叠。
+
+### 安全、性能与视觉审计
+
+- 折叠状态不进入 `EditorLayoutState`，不会覆盖用户保存的停靠比例/可见偏好；退出窄窗口时只恢复原 Inspector 可见性。浮动 Inspector 被识别为显式用户布局，不会被自动隐藏。
+- 临时入口复用 retained `draw_button`、tooltip fallback 和 `UiRuntime` region 分发；没有新增 DX11/D3D12/Vulkan 路径，没有读盘、启动进程、解码媒体或直接访问 renderer backend。
+- `paintKey` 纳入两项临时状态，展开/收起会使旧 retained paint cache 失效；本轮没有引入每帧 IO 或无界分配。
+
+### 未解决风险与下一轮
+
+- 当前主机只能给出 150% DPI 的真实像素，100%/125% 需在对应 Windows 缩放环境复跑；CJK 字体 fallback 仍未有专门诊断。
+- Inspector 分组、搜索、禁用/校验状态，以及 UI frame-time/分配/dirty-region 基线尚未开始；媒体连续解码、模型 skin、构建工具扩展和非统一接口旁路继续冻结。
+
+## 第 4.61 子阶段：Inspector 分组、搜索与紧凑信息密度
+
+### 实现与范围
+
+- `EditorUi::draw_inspector` 现在把扁平 `EditorInspectorField` 流按对象和连续组件字段组织为组；组头使用 `inspector-group:<index>` retained region，点击切换当前会话的折叠集合，未写入 `EditorLayoutState` 或场景文件。
+- Inspector 增加 `inspector.filter` 搜索框，搜索字段 ID 对应的标签、值、组名及中英文本地化文本；命中组自动展开，组件添加按钮也按查询过滤，空结果显示“没有匹配的属性”。
+- `EditorUiInput` 为 Inspector 搜索复用已有 focus/TextInput/KeyDown fallback/Backspace/Ctrl+A/Escape/Tab 逻辑；原有 `field:*`、choice popup、AudioSource transport/timeline 和 `component-add:*` region 保持不变。
+- 紧凑 Inspector 将字段行、组头、搜索栏和音频时间轴高度压缩到仍可读的范围，解决新增分组后 `field:20:clipPath` 不可视的回归；没有改模型字段契约或底层渲染接口。
+
+### 契约与证据
+
+- 增量构建：`cmake --build out/build/mingw-debug -j 4` 通过，受影响 engine/sample/capture/test 目标重新链接完成。
+- 首次定向回归发现并修复一个真实信息密度回归：`EditorInteractionTests` 报告 `missing region: field:20:clipPath`；将 compact 行高从 44 调整为 36、组头/搜索栏采用紧凑尺寸后，`shinkou_editor_interaction_tests` 单测 `1/1 passed`，耗时 `45.24 sec`。
+- 原生交互证据：`out/qa/ui-interaction-inspector/interactive.bmp.steps.jsonl` 含 `131/131` 个 `ok=true` action；`inspector-search.state.txt` 同时含 `inspector.filter` 与命中 `field:5:position`，`inspector-group-collapsed.state.txt` 含 `inspector-group:1` 且 Transform 字段被收起，证明搜索、命中和折叠/恢复通过真实窗口输入路由。
+- 视觉证据：`inspector-search.png` 显示中文搜索框、焦点环、仅保留“变换/位置”命中结果；`inspector-group-collapsed.png` 显示对象组保留字段、变换组收起、组件添加区仍可用，未出现按钮堆叠或文本裁切。
+- 主题矩阵：`out/qa/ui-matrix-inspector/matrix.manifest.json` 的 6 个场景均 `captureStatus=captured`，GPU 使用 `EngineGpuReadback`、GDI 使用 `WindowDC`；dark 1024 的 command/text 为 `265/27`，viewport 仍为有效矩形，实际主机 DPI 150% 导致请求 100%/125% 按规则标记 `inconclusive`。
+
+### 安全、性能与视觉审计
+
+- 搜索只在 retained paint 阶段遍历当前字段快照，匹配集合受当前字段和组件数量约束；没有文件 IO、进程启动、媒体解码、编译器调用或 renderer backend 访问。
+- 组折叠和搜索文本进入 paint key；搜索/折叠后不会复用旧字段布局，现有输入 region 稳定 ID 和业务回调未改变。
+- 真实测试保留 AudioSource clip picker、bus choice、空间字段、timeline waveform、Undo/Redo 和文件操作回归；搜索输入不会改变对象过滤或资源过滤的 callback。
+
+### 未解决风险与下一轮
+
+- 仍缺少 Inspector 禁用/校验态、单位显示、错误提示的完整视觉规范；当前 group 名称从现有字段标签推导，未来可在不破坏字段契约的前提下引入显式 metadata。
+- 当前主机仍只能证明 150% DPI 的像素表现；100%/125% Windows 缩放、CJK fallback、UI frame-time/分配/dirty-region 基线继续排队。
+- 媒体连续解码、模型 skin、构建工具扩展和非统一接口旁路继续冻结。
+
+## 第 4.62 子阶段：Inspector 组件状态、单位与校验反馈
+
+### 实现与范围
+
+- `EditorUi::draw_inspector` 将组件的 `enabled:*` 字段提升到组头 toggle；关闭后组体字段继续展示标签和值的结构，但使用 muted token 且不注册可编辑字段 region，避免用户误以为禁用字段仍可写。
+- 距离字段通过 Inspector presentation 显示 `m` 单位，未改动 `EditorInspectorField` 值字符串、字段回调或序列化契约。
+- `draw_input` 在当前编辑字段存在 `editError_` 时使用 danger 边框，保留原有 focus/hover 路由；没有引入弹窗或额外阻塞状态。
+- `Tools/UiCapture/EditorInteraction.txt` 新增组件组头关闭、禁用态 capture、重新启用路径，稳定 region 为 `field:enabled:*`。
+
+### 契约与证据
+
+- 定向 UI 回归：theme、ui_render、editor_interaction、style `4/4 passed`；最新完整 CTest `59/59 passed`，总计 `66.00 sec`。
+- 原生交互证据：`out/qa/ui-interaction-component-disabled/interactive.bmp.steps.jsonl` 为 `134/134` 个 `ok=true` action；`inspector-component-disabled.state.txt` 含 `field:enabled:5`，对象状态为 `Transform enabled=false`，证明组头 toggle 已通过真实输入路由改变组件状态。
+- 视觉证据：`out/qa/ui-interaction-component-disabled/inspector-component-disabled.png` 已人工检查；Transform 组头显示关闭状态，位置/旋转/缩放值降为 muted，Inspector 搜索、中文字段、组件添加区和主视口仍保持清晰层级。
+- 主题/尺寸矩阵：`out/qa/ui-matrix-component-disabled/matrix.manifest.json` 的六个场景均 `captureStatus=captured`，GPU 场景为 `EngineGpuReadback`，GDI fallback 为 `WindowDC`；实际主机 DPI 为 150%，因此请求 100%/125% 的像素匹配按规则保留为 `inconclusive`。
+
+### 安全、性能与视觉审计
+
+- 组件状态仅复用既有 Inspector 字段回调与 retained region；没有直接调用 DX11/D3D12/Vulkan、没有新增文件 IO、进程启动、媒体解码或构建工具调用。
+- 禁用态不删除字段模型，只改变可视/可编辑层，因此恢复启用后原字段路径仍能继续参与交互；paint key 已包含 Inspector filter 与折叠状态，避免复用旧布局。
+- 矩阵与完整 CTest 均未发现 UI 改动对资源、音频、视频、模型、编译器集成或渲染回归造成影响。
+
+### 未解决风险与下一轮
+
+- 当前交互证据证明了组件开关和 muted 视觉，但错误边框还需要专门的可视化输入失败脚本与截图；距离单位当前覆盖已知距离字段，未来显式 metadata 可继续扩展。
+- 当前主机仍只能给出 150% DPI 的真实像素；100%/125% Windows 缩放、CJK fallback、UI frame-time/分配/dirty-region 基线继续排队。
+- 媒体连续解码、模型 skin、构建工具扩展和非统一接口旁路继续冻结。

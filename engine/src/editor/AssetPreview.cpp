@@ -29,10 +29,11 @@ AssetPreviewKind AssetPreviewCatalog::classify(const std::filesystem::path& path
                                                bool directory) {
     if (directory) return AssetPreviewKind::Folder;
     const auto extension = lower_extension(path);
+    if (extension == ".docx") return AssetPreviewKind::Document;
     if (is_one_of(extension, {".txt", ".md", ".log", ".ini", ".cfg", ".json", ".yaml", ".yml",
                               ".xml", ".cmake", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
                               ".hxx", ".cs", ".java", ".kt", ".lua", ".py", ".js", ".ts", ".rs",
-                              ".go", ".sh", ".bat", ".cmd", ".ps1"})) {
+                              ".go", ".sh", ".bat", ".cmd", ".ps1", ".csv", ".toml", ".tsx", ".jsx", ".sql", ".css", ".html", ".mjs"})) {
         return AssetPreviewKind::Text;
     }
     if (is_one_of(extension, {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp", ".ico"})) {
@@ -62,6 +63,7 @@ std::string_view AssetPreviewCatalog::kind_name(AssetPreviewKind kind) noexcept 
     case AssetPreviewKind::Unknown: return "Unknown";
     case AssetPreviewKind::Folder: return "Folder";
     case AssetPreviewKind::Text: return "Text";
+    case AssetPreviewKind::Document: return "Document";
     case AssetPreviewKind::Image: return "Texture";
     case AssetPreviewKind::Audio: return "Audio";
     case AssetPreviewKind::Video: return "Video";
@@ -80,6 +82,7 @@ std::string_view AssetPreviewCatalog::mime_type(AssetPreviewKind kind,
                                                 std::string_view extension) noexcept {
     switch (kind) {
     case AssetPreviewKind::Text: return "text/plain";
+    case AssetPreviewKind::Document: return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     case AssetPreviewKind::Image:
         if (extension == ".jpg" || extension == ".jpeg") return "image/jpeg";
         if (extension == ".png") return "image/png";
@@ -115,6 +118,7 @@ std::string_view AssetPreviewCatalog::preview_title(AssetPreviewKind kind) noexc
     switch (kind) {
     case AssetPreviewKind::Folder: return "Folder Contents";
     case AssetPreviewKind::Text: return "Text Resource";
+    case AssetPreviewKind::Document: return "Document Preview";
     case AssetPreviewKind::Image: return "Texture Preview";
     case AssetPreviewKind::Audio: return "Audio Preview";
     case AssetPreviewKind::Video: return "Video Preview";

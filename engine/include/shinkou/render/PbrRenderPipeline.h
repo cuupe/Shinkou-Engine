@@ -48,6 +48,29 @@ struct PbrMaterialDesc {
 RenderDescriptorValidationResult validate_pbr_material(const PbrMaterialDesc& material);
 RenderDescriptorValidationResult validate_light_component(const LightComponent& light);
 
+struct PbrMeshVertex {
+    math::Vec3 position{};
+    math::Vec2 uv{};
+    math::Vec3 normal{};
+};
+
+// Native programs and renderer resources for the shared metallic/roughness
+// material model. Environment maps use equirectangular 2D textures, with
+// prefiltered specular mip levels and a two-channel BRDF integration LUT.
+class PbrMaterialLibrary {
+    std::vector<ResourceHandle> owned_;
+    ResourceHandle vertex_{},fragment_{},sampler_{},white_{},normal_{},black_{};
+    ResourceHandle scene_{},object_{},lights_{},shadowFrame_{},shadowPipeline_{};
+    std::string colorFormat_;
+    std::string error_;
+public:
+    bool initialize(Renderer& renderer,std::string colorFormat="rgba16f");
+    ResourceHandle create_material(Renderer& renderer,const PbrMaterialDesc& material);
+    void release(Renderer& renderer);
+    const std::string& last_error() const noexcept { return error_; }
+    ResourceHandle shadow_pipeline() const noexcept { return shadowPipeline_; }
+};
+
 struct LightClusterDesc {
     std::uint32_t viewportWidth{1};
     std::uint32_t viewportHeight{1};

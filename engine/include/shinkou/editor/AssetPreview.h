@@ -23,6 +23,7 @@ enum class AssetPreviewKind : std::uint8_t {
     Font,
     Archive,
     Binary,
+    Document,
 };
 
 enum class AssetPreviewCapability : std::uint8_t {

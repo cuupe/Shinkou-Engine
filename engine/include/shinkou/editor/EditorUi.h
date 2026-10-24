@@ -151,6 +151,8 @@ private:
     std::unordered_map<std::string, AssetAction> assetActions_;
     std::unordered_map<std::string, AssetAction> assetContextActions_;
     std::unordered_map<std::string, std::pair<std::string, std::string>> inspectorChoiceActions_;
+    std::unordered_map<std::string, std::string> inspectorGroupActions_;
+    std::unordered_set<std::string> collapsedInspectorGroups_;
     std::unordered_set<std::string> activeRegions_;
     DockWorkspace* workspace_{nullptr};
     DockRect dockArea_{};
@@ -171,6 +173,27 @@ private:
         std::size_t depth{0};
         bool directory{false};
         AssetIconKind icon{AssetIconKind::File};
+    };
+    struct VisualTokens {
+        ui::ThemeColor window{};
+        ui::ThemeColor surface{};
+        ui::ThemeColor surfaceRaised{};
+        ui::ThemeColor surfaceInset{};
+        ui::ThemeColor border{};
+        ui::ThemeColor borderStrong{};
+        ui::ThemeColor text{};
+        ui::ThemeColor textSecondary{};
+        ui::ThemeColor textMuted{};
+        ui::ThemeColor accent{};
+        ui::ThemeColor accentSoft{};
+        ui::ThemeColor selection{};
+        ui::ThemeColor hover{};
+        ui::ThemeColor pressed{};
+        ui::ThemeColor success{};
+        ui::ThemeColor warning{};
+        ui::ThemeColor danger{};
+        ui::ThemeColor viewport{};
+        ui::ThemeColor viewportGrid{};
     };
     std::vector<AssetDisplayItem> assetItems_;
     std::uint64_t assetIndexKey_{0};
@@ -202,6 +225,11 @@ private:
     bool floatingDragActive_{false};
     std::string inspectorName_;
     ObjectId inspectorObject_{0};
+    // A narrow shell may temporarily hide the inspector to protect the
+    // viewport. This is a presentation policy only: the persisted layout
+    // preference remains untouched and the panel can be restored in-place.
+    bool compactInspectorAutoCollapsed_{false};
+    bool compactInspectorExpanded_{false};
     float physicalWidth_{1280.0f};
     float physicalHeight_{720.0f};
     float dpiScale_{1.0f};
@@ -242,6 +270,7 @@ private:
     std::string editFieldId_, editText_, editError_;
     bool editSelectAll_{false}, assetSelectAll_{false};
     std::unordered_map<std::string, EditorInspectorField> inspectorFields_;
+    std::string inspectorFilter_;
     std::string openInspectorChoiceId_;
     float inspectorChoiceScroll_{0.0f};
     float inspectorScroll_{0}, hierarchyScroll_{0}, hierarchyContentHeight_{0}, hierarchyPageHeight_{0};
@@ -297,11 +326,15 @@ private:
     void draw_generic_panel(const DockRect& rect, std::string_view id,
                             std::string_view title, const EditorLayoutState& layout);
     void draw_button(ui::Rect rect, std::string id, std::string_view label,
-                     const EditorLayoutState& layout, bool primary = false);
+                     const EditorLayoutState& layout, bool primary = false,
+                     std::string_view icon = {});
+    void draw_toggle(ui::Rect rect, std::string id, bool checked,
+                     const EditorLayoutState& layout);
 
     std::string_view tr(std::string_view english) const noexcept { return localization_.text(english); }
 
     ui::ThemeColor color(std::string_view hex, ui::ThemeColor fallback = {}) const;
+    VisualTokens visual_tokens(const EditorLayoutState& layout) const;
     static ui::Rect rect(DockRect value) noexcept;
     static DockRect content_rect(DockRect value) noexcept;
     static std::string path_key(std::string_view prefix, const DockNodePath& path);

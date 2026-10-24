@@ -92,6 +92,7 @@ class EditorModelPreviewRenderer final {
     bool actualNormalTexture_{false};
     bool actualMetallicRoughnessTexture_{false};
     std::string pipelineColorFormat_{};
+    bool pipelineWireframe_{false};
     std::uint32_t offscreenWidth_{0};
     std::uint32_t offscreenHeight_{0};
     std::string offscreenColorFormat_{};
@@ -108,7 +109,8 @@ public:
         const EditorModelPreviewSceneState& scene,
         std::int32_t materialIndex,
         std::shared_ptr<const ui::UiImageSnapshot> textureSnapshot = {},
-        EditorModelPreviewTextureRole textureRole = EditorModelPreviewTextureRole::BaseColor);
+        EditorModelPreviewTextureRole textureRole = EditorModelPreviewTextureRole::BaseColor,
+        bool compositeToViewport = true, bool wireframe = false);
 
     void clear(render::Renderer& renderer) noexcept;
     const render::ResourceHandle& vertex_buffer() const noexcept { return vertexBuffer_; }

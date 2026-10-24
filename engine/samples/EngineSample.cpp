@@ -1,6 +1,7 @@
 #include "shinkou/Engine.h"
 #include "shinkou/physics/SimplePhysicsWorld.h"
 #include "shinkou/render/RenderScene.h"
+#include "shinkou/render/StandardRenderPipeline.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -167,6 +168,7 @@ int main(int argc, char** argv) {
     if (audioFixtureRequested) config.audio.startDevice = false;
     if (editorRequested && !framesRequested) requestedFrames = 0;
     config.editor = editorRequested;
+    config.window.maximized=editorRequested;
     if (config.editor) config.window.title = "ShinkouEngine Editor";
     shinkou::Engine engine(config);
     if (!engine.initialize()) return 1;
@@ -213,7 +215,7 @@ int main(int argc, char** argv) {
     auto& demoScene = engine.world().create_object("Demo Scene");
     demoScene.create_child("Editor Camera");
     demoScene.create_child("Directional Light");
-    demoScene.create_child("Demo Mesh");
+    auto& demoMesh=demoScene.create_child("Demo Mesh");
     auto entity = engine.world().ecs().create();
     engine.world().ecs().emplace<Velocity>(entity, Velocity{shinkou::math::Vec3{1, 0, 0}});
     engine.world().ecs().emplace<Position>(entity, Position{});
@@ -271,7 +273,8 @@ int main(int argc, char** argv) {
         engine.renderer().destroy_resource(mipHandle);
     }
 
-    const shinkou::render::TextureDesc colorDesc{engine.window().width(), engine.window().height(), 1, 1, "bgra8", true, false, {}};
+    shinkou::render::TextureDesc colorDesc{engine.window().width(), engine.window().height(), 1, 1, editorRequested?"bgra8":"rgba16f", true, false, {}};
+    colorDesc.hdr=!editorRequested;
     shinkou::render::TextureDesc depthDesc{engine.window().width(), engine.window().height(), 1, 1, "d24s8", false, false, {}};
     depthDesc.depthStencil = true;
     shinkou::render::TextureDesc spriteDesc{256, 256, 1, 1, "rgba8", false, false, {}};
@@ -295,7 +298,13 @@ int main(int argc, char** argv) {
     std::memcpy(vertexData.data(), triangleVertices, vertexData.size());
     std::vector<std::uint8_t> indexData(sizeof(triangleIndices));
     std::memcpy(indexData.data(), triangleIndices, indexData.size());
-    const shinkou::render::BufferDesc vertexDesc{sizeof(triangleVertices), sizeof(float) * 3, true, false, vertexData};
+    shinkou::render::BufferDesc vertexDesc{sizeof(triangleVertices), sizeof(float) * 3, true, false, vertexData};
+    if (!editorRequested) {
+        const shinkou::render::PbrMeshVertex pbrVertices[]{
+            {{-0.6f,-0.5f,0},{0,1},{0,0,-1}},{{0,0.6f,0},{0.5f,0},{0,0,-1}},{{0.6f,-0.5f,0},{1,1},{0,0,-1}}};
+        vertexDesc.size=sizeof(pbrVertices);vertexDesc.stride=sizeof(shinkou::render::PbrMeshVertex);
+        vertexDesc.initialData.resize(sizeof(pbrVertices));std::memcpy(vertexDesc.initialData.data(),pbrVertices,sizeof(pbrVertices));
+    }
     const shinkou::render::BufferDesc indexDesc{sizeof(triangleIndices), sizeof(std::uint32_t), false, true, indexData};
     const auto color = engine.renderer().create_texture(colorDesc);
     const auto depth = engine.renderer().create_depth_stencil(depthDesc);
@@ -338,36 +347,114 @@ int main(int argc, char** argv) {
     const auto meshVertexShader = engine.renderer().create_shader(meshVertexShaderDesc);
     const auto fragmentShader = engine.renderer().create_shader(fragmentShaderDesc);
     shinkou::render::PipelineDesc pipelineDescription{"sample_pipeline", vertexShader.id, fragmentShader.id, 0, false, false, false, false};
-    pipelineDescription.colorFormat = "bgra8";
+    pipelineDescription.colorFormat = colorDesc.format;
     const auto pipeline = engine.renderer().create_pipeline(pipelineDescription);
     shinkou::render::PipelineDesc meshPipelineDescription{"sample_mesh_pipeline", meshVertexShader.id, fragmentShader.id, 0, false, false, false, true};
-    meshPipelineDescription.colorFormat = "bgra8";
+    meshPipelineDescription.colorFormat = colorDesc.format;
     const auto meshPipeline = engine.renderer().create_pipeline(meshPipelineDescription);
     const auto material = engine.renderer().create_material({"sample_material", pipeline, {{"albedo", spriteTexture, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
-    const auto presentMaterial = engine.renderer().create_material({"present_material", pipeline, {{"color", color, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
+    auto displayPipelineDescription=pipelineDescription;
+    displayPipelineDescription.name="sample_present_pipeline";displayPipelineDescription.colorFormat="bgra8";
+    const auto displayPipeline=engine.renderer().create_pipeline(displayPipelineDescription);
+    const auto presentMaterial = engine.renderer().create_material({"present_material", displayPipeline, {{"color", color, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
 
-    const auto meshMaterial = engine.renderer().create_material({"mesh_material", meshPipeline, {{"albedo", spriteTexture, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
-    auto meshEntity = engine.world().ecs().create();
+    auto meshMaterial = engine.renderer().create_material({"mesh_material", meshPipeline, {{"albedo", spriteTexture, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
+    shinkou::render::PbrMaterialLibrary editorMaterials;
+    shinkou::render::ResourceHandle companionMaterial{},groundMaterial{};
+    if (editorRequested && api==shinkou::render::BackendApi::DirectX11) {
+        if (!editorMaterials.initialize(engine.renderer(),"bgra8")) {std::cerr<<editorMaterials.last_error();return 10;}
+        shinkou::render::PbrMaterialDesc pbr;
+        pbr.name="editor_world_material";pbr.baseColorFactor={0.32f,0.56f,0.82f,1};
+        pbr.metallic=0.15f;pbr.roughness=0.45f;pbr.doubleSided=true;
+        meshMaterial=editorMaterials.create_material(engine.renderer(),pbr);
+        if (!meshMaterial) {std::cerr<<editorMaterials.last_error();return 10;}
+        pbr.name="editor_companion_material";pbr.baseColorFactor={0.8f,0.36f,0.13f,1};pbr.metallic=0.05f;
+        companionMaterial=editorMaterials.create_material(engine.renderer(),pbr);
+        pbr.name="editor_ground_material";pbr.baseColorFactor={0.26f,0.28f,0.31f,1};pbr.metallic=0;pbr.roughness=0.9f;
+        groundMaterial=editorMaterials.create_material(engine.renderer(),pbr);
+    }
+    shinkou::render::StandardRenderPipeline standardPipeline;
+    if (!editorRequested) {
+        shinkou::render::StandardRenderPipelineDesc description;
+        description.sky.enabled=true;
+        description.exposureParameters.metering=shinkou::render::ExposureMetering::Histogram;
+        description.width=colorDesc.width;description.height=colorDesc.height;
+        if (!standardPipeline.initialize(engine.renderer(),description)) {
+            std::cerr<<standardPipeline.last_error()<<'\n';return 10;
+        }
+        shinkou::render::PbrMaterialDesc pbr;
+        pbr.name="sample_pbr_material";pbr.baseColorFactor={0.2f,0.5f,0.9f,1};pbr.metallic=0.25f;pbr.roughness=0.4f;pbr.doubleSided=true;
+        meshMaterial=standardPipeline.create_material(engine.renderer(),pbr);
+        if (!meshMaterial) {std::cerr<<standardPipeline.last_error()<<'\n';return 10;}
+        const auto lightEntity=engine.world().ecs().create();
+        engine.world().ecs().emplace<shinkou::render::TransformComponent>(lightEntity,shinkou::render::TransformComponent{});
+        shinkou::render::LightComponent light;light.intensity=3;light.castsShadow=true;
+        engine.world().ecs().emplace<shinkou::render::LightComponent>(lightEntity,light);
+    }
+    auto meshEntity = editorRequested ? demoMesh.enable_ecs() : engine.world().ecs().create();
     shinkou::render::TransformComponent meshTransform;
     meshTransform.local.position = {0.0f, 0.0f, 0.0f};
     engine.world().ecs().emplace<shinkou::render::TransformComponent>(meshEntity, meshTransform);
     engine.world().ecs().emplace<shinkou::render::MeshRendererComponent>(meshEntity,
         shinkou::render::MeshRendererComponent{vertexBuffer, indexBuffer, meshMaterial, 3, true});
+    if (editorRequested && api==shinkou::render::BackendApi::DirectX11) {
+        using shinkou::math::Vec3;
+        const Vec3 corners[]={{-0.7f,-0.7f,-0.7f},{0.7f,-0.7f,-0.7f},{0.7f,0.7f,-0.7f},{-0.7f,0.7f,-0.7f},
+            {-0.7f,-0.7f,0.7f},{0.7f,-0.7f,0.7f},{0.7f,0.7f,0.7f},{-0.7f,0.7f,0.7f}};
+        const std::uint32_t faces[][4]={{0,3,2,1},{5,6,7,4},{4,7,3,0},{1,2,6,5},{3,7,6,2},{4,0,1,5}};
+        std::vector<shinkou::render::PbrMeshVertex> cubeVertices;
+        std::vector<std::uint32_t> cubeIndices;
+        for (const auto& face:faces) {
+            const auto normal=shinkou::math::Normalize(shinkou::math::Cross(corners[face[1]]-corners[face[0]],corners[face[2]]-corners[face[0]]));
+            const auto base=static_cast<std::uint32_t>(cubeVertices.size());
+            for (const auto corner:face) cubeVertices.push_back({corners[corner],{0,0},normal});
+            for (auto index:{0u,1u,2u,0u,2u,3u}) cubeIndices.push_back(base+index);
+        }
+        shinkou::render::BufferDesc vertices;
+        vertices.size=cubeVertices.size()*sizeof(cubeVertices[0]);vertices.stride=sizeof(cubeVertices[0]);vertices.vertexBuffer=true;
+        vertices.initialData.resize(vertices.size);std::memcpy(vertices.initialData.data(),cubeVertices.data(),vertices.size);
+        shinkou::render::BufferDesc indices;
+        indices.size=cubeIndices.size()*4;indices.stride=4;indices.indexBuffer=true;
+        indices.initialData.resize(indices.size);std::memcpy(indices.initialData.data(),cubeIndices.data(),indices.size);
+        const auto vb=engine.renderer().create_buffer(vertices),ib=engine.renderer().create_buffer(indices);
+        const auto attach=[&](shinkou::GameObject& object,shinkou::math::Vec3 position,shinkou::math::Vec3 scale,shinkou::render::ResourceHandle surface) {
+            object.get_component<shinkou::components::TransformComponent>()->set_position(position);
+            object.get_component<shinkou::components::TransformComponent>()->set_scale(scale);
+            const auto e=object.enable_ecs();
+            engine.world().ecs().emplace<shinkou::render::TransformComponent>(e,shinkou::render::TransformComponent{});
+            engine.world().ecs().emplace<shinkou::render::MeshRendererComponent>(e,
+                shinkou::render::MeshRendererComponent{vb,ib,surface,36,true,false,{},1.22f});
+        };
+        // Replace the old sample triangle with real editable World geometry.
+        engine.world().ecs().remove<shinkou::render::TransformComponent>(meshEntity);
+        engine.world().ecs().remove<shinkou::render::MeshRendererComponent>(meshEntity);
+        attach(demoMesh,{-1.0f,0.7f,0},{1,1,1},meshMaterial);
+        auto& second=demoScene.create_child("Companion Mesh");attach(second,{1.1f,0.5f,0.7f},{0.7f,0.7f,0.7f},companionMaterial);
+        auto& floor=demoScene.create_child("Ground");attach(floor,{0,-0.12f,2},{6,0.12f,6},groundMaterial);
+        const auto light=engine.world().ecs().create();
+        shinkou::render::TransformComponent lightTransform;
+        lightTransform.local.rotation=shinkou::math::FromEulerXYZ({0.65f,-0.6f,0});
+        engine.world().ecs().emplace<shinkou::render::TransformComponent>(light,lightTransform);
+        shinkou::render::LightComponent lighting;lighting.intensity=4;
+        engine.world().ecs().emplace<shinkou::render::LightComponent>(light,lighting);
+    }
     auto spriteEntity = engine.world().ecs().create();
     shinkou::render::TransformComponent spriteTransform;
     spriteTransform.local.position = {320.0f, 180.0f, 0.0f};
     engine.world().ecs().emplace<shinkou::render::TransformComponent>(spriteEntity, spriteTransform);
     engine.world().ecs().emplace<shinkou::render::SpriteRendererComponent>(spriteEntity,
         shinkou::render::SpriteRendererComponent{spriteTexture, material, {128.0f, 128.0f}, 0.0f, true});
+    if (editorRequested) engine.world().ecs().get<shinkou::render::SpriteRendererComponent>(spriteEntity).visible=false;
     auto cameraEntity = engine.world().ecs().create();
     shinkou::render::TransformComponent cameraTransform;
     cameraTransform.local.position = {0.0f, 0.0f, -5.0f};
+    if (editorRequested) {cameraTransform.local.position={3,2.4f,-6};cameraTransform.local.rotation=shinkou::math::FromEulerXYZ({0.25f,-0.42f,0});}
     engine.world().ecs().emplace<shinkou::render::TransformComponent>(cameraEntity, cameraTransform);
     engine.world().ecs().emplace<shinkou::render::CameraComponent>(cameraEntity, shinkou::render::CameraComponent{});
 
     shinkou::render::RenderScene renderScene;
     shinkou::render::ForwardRenderer forwardRenderer;
-    const shinkou::render::MaterialDesc presentDescription{"present_material", pipeline,
+    const shinkou::render::MaterialDesc presentDescription{"present_material", displayPipeline,
         {{"color", color, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false};
     shinkou::render::SceneFrameData editorPresentFrame;
     editorPresentFrame.cameraPositionAndFlags[3] = 2.0f;
@@ -384,11 +471,16 @@ int main(int argc, char** argv) {
         sizeof(editorPresentObjectFrame), sizeof(float) * 4, false, false, editorPresentObjectBytes};
     editorPresentObjectDescription.uniformBuffer = true;
     const auto editorPresentObject = engine.renderer().create_buffer(editorPresentObjectDescription);
+    bool temporalSubmitted=false;
+    std::string pipelineError;
     engine.set_render_callback([&, color, colorDesc, depth, depthDesc, presentMaterial, presentDescription,
                                 editorPresentScene, editorPresentSceneDescription,
                                 editorPresentObject, editorPresentObjectDescription](
-        shinkou::render::Renderer& renderer, shinkou::World& world, shinkou::Seconds, shinkou::FrameIndex) {
+        shinkou::render::Renderer& renderer, shinkou::World& world, shinkou::Seconds frameSeconds, shinkou::FrameIndex) {
         if (editorRequested) {
+            // Native editor viewports render the current World into their own
+            // pixel-sized targets. Retained fallback keeps the legacy seam.
+            if (renderer.capabilities().supportsImGui) return;
             // Editor mode still renders the world, but the Renderer will apply
             // the EditorLayer-provided RenderView viewport/scissor before
             // executing these passes. The rest of the swapchain remains owned
@@ -423,30 +515,18 @@ int main(int argc, char** argv) {
             }, shinkou::render::RenderQueue::Graphics, true, false);
             return;
         }
-        renderScene.extract(world, renderer, static_cast<float>(colorDesc.width) / static_cast<float>(colorDesc.height));
-        forwardRenderer.build(renderer, renderScene, color, colorDesc, depth, depthDesc);
-        auto& graph = renderer.graph();
-        graph.import_resource(presentMaterial, presentDescription);
-        const auto presentObjectBuffer = forwardRenderer.prepare_present(renderer);
-        if (const auto* description = renderer.resource_description(presentObjectBuffer)) {
-            graph.import_resource(presentObjectBuffer, *description);
-        }
-        graph.add_pass("present", {
-            {color, shinkou::render::ResourceUsage::ShaderRead},
-            {forwardRenderer.scene_buffer(), shinkou::render::ResourceUsage::ShaderRead},
-            {presentObjectBuffer, shinkou::render::ResourceUsage::ShaderRead}
-        }, [presentMaterial, color, &forwardRenderer, presentObjectBuffer](auto& backend, const auto&) {
-            backend.bind_material(presentMaterial);
-            backend.bind_uniform_buffer(forwardRenderer.scene_buffer(), 2, 0);
-            backend.bind_uniform_buffer(presentObjectBuffer, 3, 0);
-            backend.draw_sprite({color, {0, 0}, {1280, 720}, 0.0f});
-        });
+        if (temporalSubmitted) standardPipeline.complete_frame(renderer.last_error().empty());
+        renderScene.extract(world,renderer,static_cast<float>(colorDesc.width)/static_cast<float>(colorDesc.height));
+        temporalSubmitted=standardPipeline.build(renderer,renderScene,{},frameSeconds);
+        if (!temporalSubmitted) pipelineError=standardPipeline.last_error();
+        return;
     });
 
     if (!engine.run(requestedFrames)) {
         std::cerr << "engine run loop failed\n";
         return 8;
     }
+    if (!pipelineError.empty()) {std::cerr<<pipelineError<<'\n';return 10;}
     if (!engine.renderer().last_error().empty()) {
         std::cerr << "renderer submission reported an error: " << engine.renderer().last_error() << '\n';
         return 9;
@@ -514,6 +594,9 @@ int main(int argc, char** argv) {
               << " hdr-passes=" << diagnostics.hdrPassCount
               << " compile-ns=" << diagnostics.compileNanoseconds
               << " execute-ns=" << diagnostics.executeNanoseconds
+              << " recorded-passes=" << diagnostics.recordedPassCount
+              << " recorded-commands=" << diagnostics.recordedCommandCount
+              << " texture-reuses=" << stats.transientTextureReuses
               << " gpu-timing-delayed=" << (diagnostics.gpuTimingDelayed ? "true" : "false") << '\n';
     for (const auto& timing : renderGraph.pass_timings()) {
         std::cout << "pass " << timing.name
@@ -528,6 +611,8 @@ int main(int argc, char** argv) {
               << " dispatches=" << stats.dispatchCalls
               << " barriers=" << stats.barriers << '\n';
     std::cout << "ShinkouEngine sample initialized with OOP, ECS, physics and render graph support.\n";
+    standardPipeline.complete_frame(engine.renderer().last_error().empty());
+    standardPipeline.release(engine.renderer());
     engine.shutdown();
     return 0;
 }

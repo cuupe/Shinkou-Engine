@@ -91,7 +91,7 @@ bool Engine::initialize() {
         editor_.set_audio_system(&audio_);
         editor_.set_audio_scene_system(&audioScene_);
         editor_.set_asset_system(&assets_);
-        if (!editor_.initialize(false)) {
+        if (!editor_.initialize(renderer_.capabilities().supportsImGui)) {
             SHINKOU_LOG_ERROR("Editor subsystem initialization failed");
             shutdown();
             return false;
@@ -131,6 +131,9 @@ void Engine::tick(Seconds dt) {
     window_.process_events();
     const auto currentWidth = window_.width();
     const auto currentHeight = window_.height();
+    // DPI can change without a client resize when moving across monitors.
+    if (config_.editor && currentWidth && currentHeight)
+        editor_.set_display_size(static_cast<float>(currentWidth),static_cast<float>(currentHeight),window_.dpi_scale());
     if (currentWidth != windowWidth_ || currentHeight != windowHeight_) {
         if (currentWidth > 0 && currentHeight > 0) {
             renderer_.resize(currentWidth, currentHeight);
@@ -156,6 +159,7 @@ void Engine::tick(Seconds dt) {
     }
     audio_.update(lastDeltaSeconds_);
     audioScene_.sync(world_, audio_, &assets_);
+    if (config_.editor) world_.refresh_transforms();
     renderer_.begin_graph();
     if (config_.editor) {
         renderer_.begin_editor_frame();

@@ -81,6 +81,17 @@ click "field:name"
 text "Interactive Object"
 key 13
 state "Property updated"
+click "inspector.filter"
+text "position"
+wait 250
+capture inspector-search
+key 27
+click "inspector-group:1"
+capture inspector-group-collapsed
+click "field:enabled:5"
+click "inspector-group:1"
+capture inspector-component-disabled
+click "field:enabled:5"
 down 17
 key 90
 up 17
@@ -96,6 +107,13 @@ exists "@PROJECT@/assets/Scenes/Untitled.scene"
 resize 1600x900
 wait 200
 resize 1280x720
+resize 1024x768
+wait 250
+capture compact-inspector-collapsed
+click "compact-inspector-toggle"
+wait 250
+capture compact-inspector-expanded
+click "compact-inspector-toggle"
 resize 1920x1080
 wait 250
 remember-camera

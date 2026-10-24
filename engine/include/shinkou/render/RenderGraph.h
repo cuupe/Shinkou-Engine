@@ -2,6 +2,7 @@
 
 #include "shinkou/render/RenderBackend.h"
 #include "shinkou/render/GpuMemoryAllocator.h"
+#include "shinkou/render/RenderCommandList.h"
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -40,6 +41,8 @@ struct RenderGraphDiagnostics {
     std::uint32_t failedQueueBatch{static_cast<std::uint32_t>(-1)};
     bool executionFailed{false};
     bool gpuTimingDelayed{false};
+    std::size_t recordedPassCount{0};
+    std::size_t recordedCommandCount{0};
     std::string lastError;
 };
 
@@ -68,6 +71,9 @@ struct RenderQueueBatch {
 class RenderGraph {
 public:
     using PassCallback = std::function<void(IRenderBackend&, const RenderPassContext&)>;
+    // The callable and captured data must be immutable/thread-safe. Only the
+    // supplied command list may be mutated during worker recording.
+    using RecordCallback = std::function<void(RenderCommandList&,const RenderPassContext&)>;
 
     struct Pass {
         std::string name;
@@ -78,6 +84,8 @@ public:
         RenderQueue queue{RenderQueue::Graphics};
         bool sideEffect{true};
         bool clearAttachments{true};
+        std::optional<bool> clearDepthAttachments{};
+        RecordCallback recordCommands;
     };
 
     struct ResourceNode {
@@ -86,9 +94,14 @@ public:
         ResourceDesc description;
         bool external{false};
     };
+    struct PassDependency {
+        std::size_t producer{0};
+        std::size_t consumer{0};
+    };
 
 private:
     std::vector<Pass> passes_;
+    std::vector<PassDependency> explicitDependencies_;
     std::vector<ResourceNode> resources_;
     // Graph-owned resources use a dedicated high-bit namespace so imported
     // renderer handles cannot collide with transient logical handles.
@@ -101,6 +114,7 @@ private:
     TransientAliasPlan aliasPlan_;
     RenderGraphDiagnostics diagnostics_{};
     bool compiled_{false};
+    std::uint64_t generation_{1};
     ResourceHandle allocate_resource(ResourceKind kind) noexcept;
 
 public:
@@ -123,6 +137,10 @@ public:
                          PassCallback callback, RenderQueue queue = RenderQueue::Graphics,
                          bool sideEffect = true, bool clearAttachments = true);
     bool compile(std::string* error = nullptr);
+    bool set_depth_clear(std::size_t passIndex,bool clearDepth);
+    bool set_command_recorder(std::size_t passIndex,RecordCallback recorder);
+    bool add_dependency(std::size_t producer,std::size_t consumer);
+    const std::vector<PassDependency>& explicit_dependencies() const noexcept { return explicitDependencies_; }
     void execute(IRenderBackend& backend, std::string* error = nullptr,
                  const std::function<void(IRenderBackend&)>& beforePresent = {});
     void reset();
@@ -137,5 +155,6 @@ public:
     const TransientAliasPlan& transient_alias_plan() const noexcept { return aliasPlan_; }
     const std::vector<RenderPassTiming>& pass_timings() const noexcept { return passTimings_; }
     const RenderGraphDiagnostics& diagnostics() const noexcept { return diagnostics_; }
+    std::uint64_t generation() const noexcept { return generation_; }
 };
 }

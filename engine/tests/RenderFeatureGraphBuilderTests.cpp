@@ -21,10 +21,29 @@ int main() {
     description.shadows.atlasSize = 512;
     description.lighting.binning.viewportWidth = description.width;
     description.lighting.binning.viewportHeight = description.height;
+    PostProcessStageDesc temporal;
+    temporal.kind = PostProcessStageKind::TAA;
+    temporal.historyTexture = {70,ResourceKind::Texture2D};
+    temporal.historyOutput = {71,ResourceKind::Texture2D};
+    temporal.historyDescription.width = temporal.historyOutputDescription.width = description.width;
+    temporal.historyDescription.height = temporal.historyOutputDescription.height = description.height;
+    temporal.historyDescription.format = temporal.historyOutputDescription.format = "rgba16f";
+    temporal.historyDescription.renderTarget = temporal.historyOutputDescription.renderTarget = true;
+    temporal.historyDescription.storage = temporal.historyOutputDescription.storage = true;
+    description.postProcessStages.push_back(temporal);
 
+    std::size_t recorded = 0;
+    for (unsigned i = 0; i <= static_cast<unsigned>(RenderFeatureGraphStage::Present); ++i) {
+        description.executors.push_back({static_cast<RenderFeatureGraphStage>(i),
+            [&](auto& backend, const auto& context) {
+                ++recorded;
+                if (context.queue == RenderQueue::Compute) assert(backend.dispatch({1,1,1}));
+                else backend.draw_sprite({});
+            }, {}});
+    }
     RenderGraph graph;
     const auto plan = RenderFeatureGraphBuilder::build(graph, description);
-    assert(plan.valid);
+    assert(plan.valid && plan.executable);
     assert(plan.featurePlan.valid);
     assert(graph.passes().size() == 11);
     assert(plan.passes.size() == 11);
@@ -33,8 +52,8 @@ int main() {
     assert(find_pass(plan, RenderFeatureGraphStage::ClusterCulling)->queue == RenderQueue::Compute);
     assert(find_pass(plan, RenderFeatureGraphStage::Present)->enabled);
     const auto* opaque = find_pass(plan, RenderFeatureGraphStage::Opaque);
-    assert(opaque && opaque->description.outputs.size() == 1);
-    assert(opaque->description.outputs.front().name == "hdr_color");
+    assert(opaque && opaque->description.outputs.size() == 2);
+    assert(opaque->description.outputs.back().name == "hdr_color");
     assert(find_pass(plan, RenderFeatureGraphStage::SSAO)->description.dependsOn.front() == "opaque");
     assert(find_pass(plan, RenderFeatureGraphStage::Present)->description.dependsOn.front() == "tone_map");
     std::string error;
@@ -91,5 +110,41 @@ int main() {
     const auto* customSsao = find_pass(customPlan, RenderFeatureGraphStage::SSAO);
     assert(customSsao && customSsao->description.dependsOn.size() == 1 &&
         customSsao->description.dependsOn.front() == "opaque");
+    auto backend = create_backend(BackendApi::Null);
+    assert(backend->initialize({}));
+    assert(backend->create_resource(temporal.historyTexture,temporal.historyDescription));
+    assert(backend->create_resource(temporal.historyOutput,temporal.historyOutputDescription));
+    graph.execute(*backend, &error);
+    assert(error.empty() && recorded == 11);
+    assert(backend->stats().drawCalls > 0 && backend->stats().dispatchCalls > 0);
+
+    auto missing = description;
+    missing.executors.clear();
+    RenderGraph untouched;
+    const auto sentinel = untouched.create_buffer({16,4});
+    const auto missingPlan = RenderFeatureGraphBuilder::build(untouched,missing);
+    assert(!missingPlan.valid && !missingPlan.executable);
+    assert(missingPlan.error.find("no executable implementation") != std::string::npos);
+    assert(untouched.passes().empty() && untouched.resources().size() == 1 && untouched.contains_resource(sentinel));
+    RenderGraph planning;
+    const auto descriptive = RenderFeatureGraphBuilder::plan(planning,missing);
+    assert(descriptive.valid && !descriptive.executable && planning.passes().empty());
+
+    auto duplicate = description;
+    duplicate.executors.push_back(duplicate.executors.front());
+    assert(!RenderFeatureGraphBuilder::build(untouched,duplicate).valid);
+    auto duplicateSettings=description;
+    duplicateSettings.postProcessStages.push_back(duplicateSettings.postProcessStages.front());
+    assert(!RenderFeatureGraphBuilder::build(untouched,duplicateSettings).valid);
+    auto mismatchedSettings=description;
+    mismatchedSettings.postProcessStages.front().parameters=BloomStageParameters{};
+    assert(!RenderFeatureGraphBuilder::build(untouched,mismatchedSettings).valid);
+    auto badDependency = description;
+    PostProcessStageDesc invalidOrder;
+    invalidOrder.kind = PostProcessStageKind::SSAO;
+    invalidOrder.dependsOn = {"missing_effect"};
+    badDependency.postProcessStages.push_back(invalidOrder);
+    assert(!RenderFeatureGraphBuilder::build(untouched,badDependency).valid);
+    assert(untouched.resources().size() == 1);
     return 0;
 }

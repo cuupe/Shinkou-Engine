@@ -1,0 +1,60 @@
+# Native Dear ImGui workspace regression. Uses upstream widget rectangles.
+wait 700
+capture workspace
+click "command:create-empty"
+wait 200
+click "field:name"
+down 17
+key 65
+up 17
+text "ImGui 渲染对象"
+key 13
+wait 200
+state "Property updated"
+object-name "ImGui 渲染对象"
+down 17
+key 90
+up 17
+object-name "GameObject"
+down 17
+key 89
+up 17
+object-name "ImGui 渲染对象"
+capture inspector
+click "command:create-empty"
+object-name "GameObject"
+click "field:name"
+down 17
+key 65
+up 17
+text "Uncommitted"
+click "hierarchy-name:ImGui 渲染对象"
+object-name "ImGui 渲染对象"
+click "hierarchy-name:GameObject"
+object-name "GameObject"
+click "hierarchy-name:ImGui 渲染对象"
+click "toolbar.play"
+state "playing=1"
+click "toolbar.pause"
+state "paused=1"
+click "toolbar.step"
+click "toolbar.play"
+state "playing=0"
+click "tab:assets"
+click "assets.filter"
+text "hello"
+key 13
+click "asset:assets/hello.txt"
+capture assets
+click "toolbar.panels"
+click "window:profiler"
+capture profiler
+click "toolbar.panels"
+click "window:settings"
+capture settings
+resize 1024x768
+wait 400
+capture narrow
+resize 1440x900
+wait 300
+capture restored

@@ -206,6 +206,8 @@ void reflect_spirv(CompiledShader& result) {
     std::unordered_map<std::uint32_t, Decoration> decorations;
     std::unordered_map<std::uint32_t, std::uint32_t> pointeeTypes;
     std::unordered_map<std::uint32_t, std::uint32_t> typeKinds;
+    std::unordered_map<std::uint32_t, std::uint32_t> imageSampling;
+    std::unordered_map<std::uint32_t,bool> bufferBlocks,nonWritable;
     std::unordered_map<std::uint32_t, std::uint32_t> arrayLengths;
     std::unordered_map<std::uint32_t, std::uint32_t> constants;
     std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>> variables;
@@ -227,14 +229,19 @@ void reflect_spirv(CompiledShader& result) {
                 }
             }
             names[id] = std::move(name);
-        } else if (opcode == 71 && count >= 4) {
+        } else if (opcode == 71 && count >= 3) {
+            if (words[cursor+2]==3) bufferBlocks[words[cursor+1]]=true;
+            if (words[cursor+2]==24) nonWritable[words[cursor+1]]=true;
             auto& decoration = decorations[words[cursor + 1]];
-            if (words[cursor + 2] == 33) decoration.binding = words[cursor + 3];
-            if (words[cursor + 2] == 34) decoration.set = words[cursor + 3];
+            if (count>=4 && words[cursor + 2] == 33) decoration.binding = words[cursor + 3];
+            if (count>=4 && words[cursor + 2] == 34) decoration.set = words[cursor + 3];
+        } else if (opcode==72 && count>=4 && words[cursor+3]==24) {
+            nonWritable[words[cursor+1]]=true;
         } else if (opcode == 59 && count >= 4) {
             variables.emplace_back(words[cursor + 1], words[cursor + 2], words[cursor + 3]);
         } else if (opcode == 25 || opcode == 26 || opcode == 27 || opcode == 30) {
             if (count >= 2) typeKinds[words[cursor + 1]] = opcode;
+            if (opcode == 25 && count >= 9) imageSampling[words[cursor+1]] = words[cursor+7];
         } else if (opcode == 43 && count >= 4) {
             constants[words[cursor + 2]] = words[cursor + 3];
         } else if (opcode == 28 || opcode == 29) {
@@ -249,13 +256,18 @@ void reflect_spirv(CompiledShader& result) {
         cursor += count;
     }
 
-    struct ReflectedType { std::string type; std::uint32_t count{1}; bool unbounded{false}; };
+    struct ReflectedType { std::string type; std::uint32_t count{1}; bool unbounded{false}; bool separateImage{false}; };
     const auto classify = [&](std::uint32_t typeId) {
         ReflectedType reflected;
         for (std::size_t depth = 0; depth < 16; ++depth) {
             const auto kind = typeKinds.find(typeId);
             if (kind != typeKinds.end()) {
-                if ((kind->second == 25 || kind->second == 27) && reflected.type.empty()) reflected.type = "texture";
+                if ((kind->second == 25 || kind->second == 27) && reflected.type.empty()) {
+                    const auto sampling = imageSampling.find(typeId);
+                    const bool storage = sampling != imageSampling.end() && sampling->second == 2;
+                    reflected.type = storage ? "storage_texture" : "texture";
+                    reflected.separateImage = kind->second == 25 && !storage;
+                }
                 if (kind->second == 26 && reflected.type.empty()) reflected.type = "sampler";
                 if (kind->second == 30 && reflected.type.empty()) reflected.type = "uniform_buffer";
                 if (kind->second == 28 || kind->second == 29) {
@@ -278,11 +290,19 @@ void reflect_spirv(CompiledShader& result) {
         const auto decoration = decorations.find(id);
         if (decoration == decorations.end() || decoration->second.binding == invalid_binding) continue;
         auto reflected = classify(typeId);
+        auto baseType=typeId;
+        for (unsigned depth=0;depth<16;++depth) {
+            const auto next=pointeeTypes.find(baseType);
+            if (next==pointeeTypes.end()) break;
+            baseType=next->second;
+        }
+        if (storageClass==12 || bufferBlocks.count(baseType))
+            reflected.type=nonWritable.count(baseType) || nonWritable.count(id) ? "structured_buffer":"storage_buffer";
         if (storageClass == 2 && reflected.type == "unknown") reflected.type = "uniform_buffer";
         if (storageClass == 12 && reflected.type == "unknown") reflected.type = "storage_buffer";
         if (reflected.count == 0 && !reflected.unbounded) result.layoutValid = false;
         append_binding(result, {names.count(id) ? names[id] : std::string{}, decoration->second.binding, decoration->second.set,
-            std::move(reflected.type), reflected.count, reflected.unbounded});
+            std::move(reflected.type), reflected.count, reflected.unbounded, reflected.separateImage});
     }
 }
 
@@ -306,6 +326,10 @@ void reflect_dxbc(CompiledShader& result) {
                 case D3D_SIT_CBUFFER: reflected.type = "uniform_buffer"; break;
                 case D3D_SIT_TEXTURE: reflected.type = "texture"; break;
                 case D3D_SIT_SAMPLER: reflected.type = "sampler"; break;
+                case D3D_SIT_STRUCTURED: reflected.type = "structured_buffer"; break;
+                case D3D_SIT_UAV_RWTYPED:
+                    reflected.type = binding.Dimension==D3D_SRV_DIMENSION_BUFFER ? "storage_buffer":"storage_texture";
+                    break;
                 default: reflected.type = "storage_buffer"; break;
                 }
                 append_binding(result, std::move(reflected));
@@ -363,6 +387,8 @@ void reflect_dxil(CompiledShader& result) {
                 case D3D_SIT_STRUCTURED: reflected.type = "structured_buffer"; break;
                 case D3D_SIT_BYTEADDRESS: reflected.type = "storage_buffer"; break;
                 case D3D_SIT_UAV_RWTYPED:
+                    reflected.type = binding.Dimension==D3D_SRV_DIMENSION_BUFFER ? "storage_buffer":"storage_texture";
+                    break;
                 case D3D_SIT_UAV_RWSTRUCTURED:
                 case D3D_SIT_UAV_RWBYTEADDRESS: reflected.type = "storage_buffer"; break;
                 case D3D_SIT_UAV_APPEND_STRUCTURED:
@@ -427,7 +453,7 @@ private:
         std::uint32_t bindingCount = 0;
         std::uint64_t bytecodeSize = 0;
         std::uint64_t storedKey = 0;
-        if (!stream.read(reinterpret_cast<char*>(&version), sizeof(version)) || version != 5 ||
+        if (!stream.read(reinterpret_cast<char*>(&version), sizeof(version)) || version != 8 ||
             !stream.read(reinterpret_cast<char*>(&storedKey), sizeof(storedKey)) || storedKey != key ||
             !stream.read(reinterpret_cast<char*>(&stage), sizeof(stage)) ||
             !stream.read(reinterpret_cast<char*>(&format), sizeof(format)) ||
@@ -448,6 +474,7 @@ private:
                 !stream.read(reinterpret_cast<char*>(&binding.space), sizeof(binding.space)) ||
                 !stream.read(reinterpret_cast<char*>(&binding.count), sizeof(binding.count)) ||
                 !stream.read(reinterpret_cast<char*>(&binding.unbounded), sizeof(binding.unbounded)) ||
+                !stream.read(reinterpret_cast<char*>(&binding.separateImage), sizeof(binding.separateImage)) ||
                 !stream.read(reinterpret_cast<char*>(&nameSize), sizeof(nameSize)) || nameSize > (1u << 20)) return false;
             binding.type.resize(nameSize);
             if (nameSize && !stream.read(binding.type.data(), static_cast<std::streamsize>(nameSize))) return false;
@@ -473,7 +500,7 @@ private:
         const auto temporary = path.string() + ".tmp";
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
         if (!stream) return;
-        const std::uint32_t version = 5;
+        const std::uint32_t version = 8;
         const auto stage = static_cast<std::uint32_t>(result.stage);
         const auto format = static_cast<std::uint32_t>(result.format);
         const auto bytecodeSize = static_cast<std::uint64_t>(result.bytecode.size());
@@ -494,6 +521,7 @@ private:
             stream.write(reinterpret_cast<const char*>(&binding.space), sizeof(binding.space));
             stream.write(reinterpret_cast<const char*>(&binding.count), sizeof(binding.count));
             stream.write(reinterpret_cast<const char*>(&binding.unbounded), sizeof(binding.unbounded));
+            stream.write(reinterpret_cast<const char*>(&binding.separateImage), sizeof(binding.separateImage));
             stream.write(reinterpret_cast<const char*>(&typeSize), sizeof(typeSize));
             stream.write(binding.type.data(), static_cast<std::streamsize>(typeSize));
         }
@@ -626,7 +654,8 @@ bool merge_shader_bindings(const std::vector<ShaderBinding>& source,
             merged.push_back(binding);
             continue;
         }
-        if (existing->type != binding.type || existing->count != binding.count || existing->unbounded != binding.unbounded) {
+        if (existing->type != binding.type || existing->count != binding.count || existing->unbounded != binding.unbounded ||
+            existing->separateImage != binding.separateImage) {
             diagnostics = "shader stages disagree on descriptor space=" + std::to_string(binding.space) +
                 " slot=" + std::to_string(binding.slot) + " (" + existing->type + " vs " + binding.type + ")";
             return false;

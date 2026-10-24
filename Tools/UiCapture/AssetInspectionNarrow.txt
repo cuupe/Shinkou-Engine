@@ -1,0 +1,29 @@
+wait 1200
+click "assets.filter"
+text "triangle.fbx"
+click "asset:assets/triangle.fbx"
+wait 900
+state "Model preview ready"
+capture binary-model
+resize 1024x768
+wait 400
+capture model-narrow
+click "asset-settings-tab"
+state "assettab=\"settings\""
+click "asset-option.model-wire"
+click "asset-option.save"
+state "Asset settings saved"
+capture settings-narrow
+click "asset-preview-tab"
+capture wireframe-narrow
+resize 1440x900
+wait 300
+click "assets.filter"
+down 17
+key 65
+up 17
+text "document.docx"
+click "asset:assets/document.docx"
+wait 600
+state "DOCX paragraphs and tables preview"
+capture document-contrast

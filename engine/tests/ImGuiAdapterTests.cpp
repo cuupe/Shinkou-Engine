@@ -3,6 +3,9 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#if defined(SHINKOU_WITH_IMGUI)
+#include <imgui.h>
+#endif
 
 int main() {
     using namespace shinkou::ui;
@@ -43,6 +46,16 @@ int main() {
     assert(!result.backendAvailable);
     assert(!result.styleApplied);
     assert(result.message.find("description") != std::string::npos);
+#else
+    assert(!result.backendAvailable && !result.styleApplied);
+    assert(result.message.find("context") != std::string::npos);
+    ImGui::CreateContext();
+    const auto nativeResult = ImGuiAdapter::apply(registry, config, options);
+    assert(nativeResult.backendAvailable && nativeResult.styleApplied);
+    const float rounding=ImGui::GetStyle().FrameRounding;
+    ImGuiAdapter::apply(registry, config, options);
+    assert(std::fabs(ImGui::GetStyle().FrameRounding-rounding)<0.001f);
+    ImGui::DestroyContext();
 #endif
 
     ImGuiApplyOptions customFont;

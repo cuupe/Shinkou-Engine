@@ -50,6 +50,9 @@ public:
     ~Renderer();
     bool initialize();
     bool initialize_imgui();
+    bool new_imgui_frame();
+    void invalidate_imgui_fonts();
+    std::uint64_t imgui_texture(ResourceHandle texture);
     void shutdown_imgui();
     bool imgui_ready() const noexcept { return imguiReady_; }
     void set_imgui_draw_data(ImDrawData* drawData) noexcept { imguiDrawData_ = drawData; }

@@ -31,9 +31,19 @@ struct FileChange {
     bool currentDirectory{false};
 };
 
+struct FileListResult {
+    std::vector<FileEntry> entries;
+    bool complete{true};
+    bool truncated{false};
+    std::string error;
+};
+
 struct FileScanResult {
     std::vector<FileEntry> entries;
     std::vector<FileChange> changes;
+    bool complete{true};
+    bool truncated{false};
+    std::string error;
 };
 
 // Editor-scoped file access. All paths are relative to the project root and
@@ -52,9 +62,10 @@ class FileSystemService final {
     std::filesystem::path root_;
     std::unordered_map<std::string, SnapshotValue> snapshot_;
     std::string snapshotScope_;
+    bool snapshotRecursive_{true};
 
     std::filesystem::path resolve(std::filesystem::path relative, bool allowMissing) const;
-    static std::uint64_t stamp(const std::filesystem::directory_entry& entry) noexcept;
+    std::filesystem::path resolve_entry(std::filesystem::path relative) const;
 
 public:
     explicit FileSystemService(std::filesystem::path root = {});
@@ -72,6 +83,11 @@ public:
 
     std::vector<FileEntry> list(std::filesystem::path relative = {}, bool recursive = false,
                                 std::size_t maxEntries = 4096) const;
+    // Unlike list(), reports a budget limit or an IO failure. Links outside
+    // the project and dangling links are omitted; directory links are never
+    // traversed. Entry paths retain their own names rather than link targets.
+    FileListResult list_detailed(std::filesystem::path relative = {}, bool recursive = false,
+                                 std::size_t maxEntries = 4096) const;
     bool read_text(const std::filesystem::path& relative, std::string& output,
                    std::string* error = nullptr) const;
     bool read_text_limited(const std::filesystem::path& relative, std::size_t maxBytes,
@@ -81,10 +97,14 @@ public:
                            std::string* error = nullptr) const;
     bool ensure_directory(const std::filesystem::path& relative, std::string* error = nullptr) const;
     bool exists(const std::filesystem::path& relative, bool* directory = nullptr) const noexcept;
+    // A final path component that is a link is removed/renamed itself.
     bool remove(const std::filesystem::path& relative, std::string* error = nullptr) const;
     bool rename(const std::filesystem::path& from, const std::filesystem::path& to,
                 std::string* error = nullptr) const;
 
+    // Only complete scans publish changes and replace the baseline. Changing
+    // the directory or recursion mode starts a new baseline. Missing scan
+    // directories are complete empty results, so real deletions are reported.
     FileScanResult scan(bool recursive = true, std::size_t maxEntries = 8192);
     FileScanResult scan(std::filesystem::path relative, bool recursive, std::size_t maxEntries = 8192);
     std::vector<FileChange> poll_changes(bool recursive = true, std::size_t maxEntries = 8192);

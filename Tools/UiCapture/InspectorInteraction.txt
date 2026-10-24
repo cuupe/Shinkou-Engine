@@ -1,0 +1,89 @@
+# Typed axes, undo, real native detachment, redocking, high DPI and narrow UI.
+wait 700
+click "world-object:Demo Mesh"
+object-name "Demo Mesh"
+capture inspector-initial
+double "field:name"
+down 17
+key 65
+up 17
+text "Edited Mesh"
+key 13
+object-name "Edited Mesh"
+down 17
+key 90
+up 17
+object-name "Demo Mesh"
+double "field:name"
+down 17
+key 65
+up 17
+text "Cancel This"
+key 27
+object-name "Demo Mesh"
+double "transform:position:X"
+down 17
+key 65
+up 17
+text "2.5"
+key 13
+capture inspector-input-debug
+typed "Transform:position" "2.5 0.7 0"
+double "transform:rotation:Y"
+down 17
+key 65
+up 17
+text "35"
+key 13
+typed "Transform:Rotation" "0 35 0"
+double "transform:scale:Z"
+down 17
+key 65
+up 17
+text "1.5"
+key 13
+typed "Transform:scale" "1 1 1.5"
+capture inspector-axes
+down 17
+key 90
+up 17
+typed "Transform:scale" "1 1 1"
+detach "tab:inspector" 500 80
+wait 600
+detached "transform:position:X"
+capture-window "transform:position:X" inspector-detached
+double "transform:position:Z"
+down 17
+key 65
+up 17
+text "-3"
+key 13
+capture-window "transform:position:X" inspector-detached-input-debug
+typed "Transform:position" "2.5 0.7 -3"
+capture-window "transform:position:X" inspector-detached-edited
+close-panel "tab:inspector"
+click "toolbar.panels"
+click "window:inspector"
+wait 300
+detached "transform:position:X"
+redock "tab:inspector" "tab:viewport"
+wait 500
+docked "transform:position:X"
+capture inspector-redocked
+click "toolbar.panels"
+click "window:settings"
+click "settings.reset-layout"
+wait 400
+click "tab:inspector"
+resize 3840x2160
+wait 600
+capture inspector-4k
+resize 1024x768
+wait 500
+capture inspector-narrow
+resize 1440x900
+wait 400
+click "tab:settings"
+click "settings.save"
+click "tab:inspector"
+capture inspector-final

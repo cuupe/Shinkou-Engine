@@ -236,6 +236,23 @@ int main() {
         }
     }
 
+    if(nativePathExercised) {
+        nativeRenderer.begin_graph();nativeRenderer.begin_editor_frame();
+        render::EditorViewportSeam independent;
+        independent.viewport={0,0,320,160};independent.enabled=true;independent.strictTarget=false;
+        assert(nativeRenderer.set_editor_viewport(independent));
+        const auto square=previewRenderer.render(nativeRenderer,*snapshot,*sceneState,0,{},
+            EditorModelPreviewTextureRole::BaseColor,false);
+        assert(square.rendererReady && !square.offscreenCompositeApplied);
+        const auto* description=nativeRenderer.resource_description(previewRenderer.offscreen_color());
+        const auto* texture=description?std::get_if<render::TextureDesc>(description):nullptr;
+        assert(texture && texture->width==512 && texture->height==512);
+        independent.viewport={0,0,160,320};assert(nativeRenderer.set_editor_viewport(independent));
+        const auto textureBefore=previewRenderer.offscreen_color();
+        const auto resized=previewRenderer.render(nativeRenderer,*snapshot,*sceneState,0,{},
+            EditorModelPreviewTextureRole::BaseColor,false,true);
+        assert(resized.rendererReady && previewRenderer.offscreen_color().id==textureBefore.id);
+    }
     std::cout << "Editor model preview renderer capability fallback passed"
               << " native-d3d11-attempted=" << (nativePathAttempted ? 1 : 0)
               << " native-d3d11-pass=" << (nativePathExercised ? 1 : 0)

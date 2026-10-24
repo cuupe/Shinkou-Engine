@@ -62,6 +62,10 @@ struct LightBinningDesc {
     std::uint32_t maxLightsPerBin{128};
     float nearPlane{0.05f};
     float farPlane{1000.0f};
+    bool logarithmicDepth{true};
+    bool includeDirectionalLights{true};
+    std::size_t maxBinCount{1u<<20};
+    std::size_t maxLightIndexCount{16u<<20};
 };
 
 struct LightBinRange {

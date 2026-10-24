@@ -1,6 +1,7 @@
 #include "shinkou/render/LightingPipeline.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <limits>
 #include <type_traits>
@@ -40,6 +41,7 @@ bool valid_stage_kind(PostProcessStageKind kind) {
     case PostProcessStageKind::TAA:
     case PostProcessStageKind::SSR:
     case PostProcessStageKind::ToneMap:
+    case PostProcessStageKind::MotionBlur:
         return true;
     }
     return false;
@@ -59,64 +61,21 @@ void append_error(LightingValidationResult& result, const std::string& message) 
     result.errors.push_back(message);
 }
 
-bool validate_stage_parameters(const PostProcessStageDesc& stage, std::string& error) {
-    if (!math::IsFinite(stage.exposure) || !math::IsFinite(stage.blendFactor) || stage.blendFactor < 0.0f) {
-        error = "post-process stage has invalid exposure or blend factor";
-        return false;
-    }
-    if (!valid_handle(stage.pipeline, ResourceKind::Pipeline) ||
-        !valid_handle(stage.sampler, ResourceKind::Sampler) ||
-        !valid_handle(stage.historyTexture, ResourceKind::Texture2D) ||
-        !valid_handle(stage.historyOutput, ResourceKind::Texture2D) ||
-        !valid_handle(stage.auxiliaryTexture, ResourceKind::Texture2D)) {
-        error = "post-process stage has a resource with the wrong kind";
-        return false;
+
+bool validate_stage_parameters(const PostProcessStageDesc& stage,std::string& error) {
+    if (!validate_post_process_parameters(stage,error)) return false;
+    if (!valid_handle(stage.pipeline,ResourceKind::Pipeline) || !valid_handle(stage.sampler,ResourceKind::Sampler) ||
+        !valid_handle(stage.historyTexture,ResourceKind::Texture2D) || !valid_handle(stage.historyOutput,ResourceKind::Texture2D) ||
+        !valid_handle(stage.auxiliaryTexture,ResourceKind::Texture2D)) {
+        error="post-process stage has a resource with the wrong kind";return false;
     }
     if ((stage.historyTexture && !valid_texture_description(stage.historyDescription)) ||
         (stage.historyOutput && !valid_texture_description(stage.historyOutputDescription)) ||
         (stage.auxiliaryTexture && !valid_texture_description(stage.auxiliaryDescription)) ||
         !valid_texture_description(stage.output)) {
-        error = "post-process stage has an invalid texture description";
-        return false;
+        error="post-process stage has an invalid texture description";return false;
     }
-
-    const auto valid_variant = [&error](const auto& value) {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, ExposureStageParameters>) {
-            if (!math::IsFinite(value.exposure) || !finite_non_negative(value.adaptationRate)) {
-                error = "exposure parameters must be finite and non-negative where applicable";
-                return false;
-            }
-        } else if constexpr (std::is_same_v<T, BloomStageParameters>) {
-            if (!finite_non_negative(value.threshold) || value.knee < 0.0f || value.knee > 1.0f ||
-                !finite_non_negative(value.intensity) || value.mipLevels == 0) {
-                error = "bloom parameters are outside their supported ranges";
-                return false;
-            }
-        } else if constexpr (std::is_same_v<T, SsaoStageParameters>) {
-            if (!(value.radius > 0.0f) || !math::IsFinite(value.radius) ||
-                !finite_non_negative(value.power) || !finite_non_negative(value.bias) || value.sampleCount == 0) {
-                error = "SSAO parameters are outside their supported ranges";
-                return false;
-            }
-        } else if constexpr (std::is_same_v<T, TaaStageParameters>) {
-            if (value.feedback < 0.0f || value.feedback > 1.0f || !math::IsFinite(value.feedback) ||
-                !finite_non_negative(value.sharpness) || value.motionRejection < 0.0f ||
-                value.motionRejection > 1.0f || !math::IsFinite(value.motionRejection)) {
-                error = "TAA parameters are outside their supported ranges";
-                return false;
-            }
-        } else if constexpr (std::is_same_v<T, SsrStageParameters>) {
-            if (!(value.maxDistance > 0.0f) || !math::IsFinite(value.maxDistance) ||
-                !finite_non_negative(value.thickness) || !(value.stride > 0.0f) ||
-                !math::IsFinite(value.stride) || value.maxSteps == 0) {
-                error = "SSR parameters are outside their supported ranges";
-                return false;
-            }
-        }
-        return true;
-    };
-    return std::visit(valid_variant, stage.parameters);
+    return true;
 }
 
 bool validate_light(const LightingLight& light, std::string& error) {
@@ -147,6 +106,10 @@ bool validate_binning(const LightBinningDesc& description, std::string& error) {
         !(description.farPlane > description.nearPlane) || !math::IsFinite(description.farPlane)) {
         error = "light binning requires positive viewport, tile, capacity, and depth ranges";
         return false;
+    }
+    if (!description.maxBinCount || !description.maxLightIndexCount ||
+        description.viewportWidth>INT_MAX || description.viewportHeight>INT_MAX) {
+        error="light binning dimensions or memory budgets are unsupported";return false;
     }
     return true;
 }
@@ -214,8 +177,10 @@ std::uint32_t depth_slice(float depth, const LightBinningDesc& description, std:
     if (sliceCount <= 1) return 0;
     const float logRange = std::log(description.farPlane / description.nearPlane);
     if (!(logRange > 0.0f) || !math::IsFinite(logRange)) return 0;
-    const float t = std::clamp(std::log(std::max(description.nearPlane, depth) / description.nearPlane) / logRange,
-                               0.0f, 0.99999994f);
+    const float normalized = description.logarithmicDepth
+        ? std::log(std::max(description.nearPlane, depth) / description.nearPlane) / logRange
+        : (depth - description.nearPlane) / (description.farPlane - description.nearPlane);
+    const float t = std::clamp(normalized, 0.0f, 0.99999994f);
     return std::min(sliceCount - 1u, static_cast<std::uint32_t>(t * static_cast<float>(sliceCount)));
 }
 
@@ -265,14 +230,25 @@ LightBinningPlan build_light_binning(const RenderView& view,
         fail(error, validationError);
         return result;
     }
-    result.tileCountX = (description.viewportWidth + description.tileSize - 1u) / description.tileSize;
-    result.tileCountY = (description.viewportHeight + description.tileSize - 1u) / description.tileSize;
+    result.tileCountX = 1u+(description.viewportWidth-1u)/description.tileSize;
+    result.tileCountY = 1u+(description.viewportHeight-1u)/description.tileSize;
     result.sliceCount = description.mode == LightBinningMode::Clusters ? description.depthSlices : 1u;
-    const auto binCount = static_cast<std::size_t>(result.tileCountX) * result.tileCountY * result.sliceCount;
+    const auto tileCount=static_cast<std::uint64_t>(result.tileCountX)*result.tileCountY;
+    if (tileCount>description.maxBinCount/result.sliceCount || lights.size()>UINT32_MAX) {
+        fail(error,"light binning exceeds its bin budget or 32-bit light index range");return result;
+    }
+    const auto binCount=static_cast<std::size_t>(tileCount)*result.sliceCount;
     result.bins.resize(binCount);
     std::vector<std::vector<std::uint32_t>> perBin(binCount);
-    for (auto& bin : perBin) bin.reserve(description.maxLightsPerBin);
+    // Allocate a bin payload only when a light actually intersects it.
+    // Empty scenes must not allocate maxLightsPerBin for every screen cluster.
 
+    std::size_t storedIndices=0;
+    const auto append=[&](auto& bin,std::uint32_t lightIndex) {
+        if (bin.size()>=description.maxLightsPerBin) {++result.droppedLightCount;return true;}
+        if (storedIndices>=std::min<std::size_t>(UINT32_MAX,description.maxLightIndexCount)) return false;
+        bin.push_back(lightIndex);++storedIndices;return true;
+    };
     for (std::size_t lightIndex = 0; lightIndex < lights.size(); ++lightIndex) {
         const auto& light = lights[lightIndex];
         std::string lightError;
@@ -283,9 +259,11 @@ LightBinningPlan build_light_binning(const RenderView& view,
         }
         if (light.type == LightType::Directional) {
             ++result.directionalLightCount;
+            if (!description.includeDirectionalLights) continue;
             for (auto& bin : perBin) {
-                if (bin.size() < description.maxLightsPerBin) bin.push_back(static_cast<std::uint32_t>(lightIndex));
-                else ++result.droppedLightCount;
+                if (!append(bin,static_cast<std::uint32_t>(lightIndex))) {
+                    fail(error,"light binning exceeds its index memory budget");return result;
+                }
             }
             continue;
         }
@@ -301,8 +279,9 @@ LightBinningPlan build_light_binning(const RenderView& view,
             for (std::uint32_t tileY = minTileY; tileY <= maxTileY; ++tileY) {
                 for (std::uint32_t tileX = minTileX; tileX <= maxTileX; ++tileX) {
                     auto& bin = perBin[result.bin_index(tileX, tileY, slice)];
-                    if (bin.size() < description.maxLightsPerBin) bin.push_back(static_cast<std::uint32_t>(lightIndex));
-                    else ++result.droppedLightCount;
+                    if (!append(bin,static_cast<std::uint32_t>(lightIndex))) {
+                        fail(error,"light binning exceeds its index memory budget");return result;
+                    }
                 }
             }
         }
@@ -339,6 +318,9 @@ LightingStageDesc make_lighting_stage(std::string name, PostProcessStageKind kin
         break;
     case PostProcessStageKind::SSR:
         result.postProcess.parameters = SsrStageParameters{};
+        break;
+    case PostProcessStageKind::MotionBlur:
+        result.postProcess.parameters=MotionBlurStageParameters{};
         break;
     case PostProcessStageKind::Custom:
     case PostProcessStageKind::ToneMap:

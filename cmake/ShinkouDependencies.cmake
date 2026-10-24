@@ -1,5 +1,19 @@
 include(FetchContent)
 
+# Pinned, offline asset readers. Keep third-party warnings out of engine code.
+add_library(shinkou_asset_readers STATIC
+    "${PROJECT_SOURCE_DIR}/third_party/ufbx/ufbx.c"
+    "${PROJECT_SOURCE_DIR}/third_party/pugixml/pugixml.cpp"
+    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz.c"
+    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz_zip.c"
+    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz_tinfl.c"
+    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz_tdef.c")
+target_include_directories(shinkou_asset_readers SYSTEM PUBLIC
+    "${PROJECT_SOURCE_DIR}/third_party/ufbx"
+    "${PROJECT_SOURCE_DIR}/third_party/pugixml"
+    "${PROJECT_SOURCE_DIR}/third_party/miniz")
+target_compile_features(shinkou_asset_readers PRIVATE c_std_99 cxx_std_17)
+
 set(SHINKOU_WITH_SDL3 OFF)
 set(SHINKOU_WITH_VULKAN OFF)
 set(SHINKOU_WITH_PHYSX OFF)
@@ -130,40 +144,52 @@ if(SHINKOU_ENABLE_PHYSX)
 endif()
 
 if(SHINKOU_ENABLE_IMGUI)
-    find_path(IMGUI_INCLUDE_DIR imgui.h PATH_SUFFIXES imgui)
-    if(IMGUI_INCLUDE_DIR)
-        find_library(IMGUI_LIBRARY NAMES imgui)
-        if(IMGUI_LIBRARY)
-            set(SHINKOU_WITH_IMGUI ON)
-        endif()
+    set(SHINKOU_IMGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui" CACHE PATH "Dear ImGui docking source directory")
+    if(EXISTS "${SHINKOU_IMGUI_SOURCE_DIR}/imgui.cpp")
+        set(imgui_SOURCE_DIR "${SHINKOU_IMGUI_SOURCE_DIR}")
     elseif(SHINKOU_FETCH_DEPENDENCIES)
         FetchContent_Declare(imgui
             GIT_REPOSITORY https://github.com/ocornut/imgui.git
-            GIT_TAG v1.91.9b
-        )
+            GIT_TAG 4806a1924ff6181180bf5e4b8b79ab4394118875)
         FetchContent_MakeAvailable(imgui)
+    else()
+        message(FATAL_ERROR "Editor UI needs the pinned Dear ImGui docking sources. Set SHINKOU_IMGUI_SOURCE_DIR or disable SHINKOU_ENABLE_IMGUI.")
+    endif()
+    if(imgui_SOURCE_DIR)
         set(IMGUI_INCLUDE_DIR "${imgui_SOURCE_DIR}")
         add_library(shinkou_imgui STATIC
+            "${imgui_SOURCE_DIR}/imgui_demo.cpp"
             "${imgui_SOURCE_DIR}/imgui.cpp"
             "${imgui_SOURCE_DIR}/imgui_draw.cpp"
             "${imgui_SOURCE_DIR}/imgui_tables.cpp"
             "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
-            "${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
-            "${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp"
-            "${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp"
-            "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
         )
         target_include_directories(shinkou_imgui PUBLIC "${imgui_SOURCE_DIR}")
         target_include_directories(shinkou_imgui PRIVATE "${imgui_SOURCE_DIR}/backends")
         if(WIN32)
+            target_sources(shinkou_imgui PRIVATE
+                "${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
+                "${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp"
+                "${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp")
             target_compile_definitions(shinkou_imgui PRIVATE VK_USE_PLATFORM_WIN32_KHR=1)
             target_link_libraries(shinkou_imgui PUBLIC d3d11 dxgi dwmapi)
         endif()
         if(TARGET Vulkan::Vulkan)
+            target_sources(shinkou_imgui PRIVATE "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
             target_link_libraries(shinkou_imgui PUBLIC Vulkan::Vulkan)
         endif()
         set(IMGUI_LIBRARY shinkou_imgui)
         set(SHINKOU_WITH_IMGUI ON)
+        add_library(shinkou_editor_widgets STATIC
+            "${PROJECT_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/hello_imgui/imgui_theme.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/implot/implot.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/implot/implot_items.cpp")
+        target_include_directories(shinkou_editor_widgets PUBLIC
+            "${PROJECT_SOURCE_DIR}/third_party/ImGuizmo"
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/hello_imgui"
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/implot")
+        target_link_libraries(shinkou_editor_widgets PUBLIC shinkou_imgui)
     endif()
 endif()
 

@@ -78,6 +78,7 @@ std::string pipeline_cache_key(const PipelineDesc& description) {
         key += format;
         key.push_back(',');
     }
+    key += ':' + pipeline_state_key(description);
     return key;
 }
 
@@ -351,7 +352,8 @@ bool validate_material_bindings(const MaterialDesc& description,
                         reflected.count == binding.count && reflected.unbounded == binding.unbounded;
                 });
             if (!matched) {
-                error = "material binding does not match the reflected shader descriptor layout";
+                error = "material binding '"+binding.name+"' at space="+std::to_string(binding.space)+
+                    " slot="+std::to_string(binding.slot)+" does not match the reflected shader descriptor layout";
                 return false;
             }
         }
@@ -595,10 +597,20 @@ bool Renderer::initialize_imgui() {
     imguiReady_ = backend_ && initialized_ && backend_->initialize_imgui();
     return imguiReady_;
 }
+bool Renderer::new_imgui_frame() {
+    if (!imguiReady_ && !initialize_imgui()) return false;
+    backend_->new_imgui_frame();return true;
+}
+void Renderer::invalidate_imgui_fonts() {
+    if (backend_ && imguiReady_) {backend_->wait_idle();backend_->invalidate_imgui_fonts();}
+}
+std::uint64_t Renderer::imgui_texture(ResourceHandle texture) {
+    return imguiReady_ && backend_?backend_->imgui_texture(texture):0;
+}
 
 void Renderer::shutdown_imgui() {
     if (backend_ && imguiReady_) backend_->wait_idle();
-    if (backend_) backend_->shutdown_imgui();
+    if (backend_ && imguiReady_) backend_->shutdown_imgui();
     imguiReady_ = false;
     imguiDrawData_ = nullptr;
 }
@@ -703,6 +715,7 @@ ResourceHandle Renderer::create_depth_stencil(const TextureDesc& description) {
         return {};
     }
     auto persistentDescription = description;
+    persistentDescription.depthStencil=true;
     if (persistentDescription.mipLevels == 0) {
         persistentDescription.mipLevels = texture_full_mip_count(persistentDescription);
         if (persistentDescription.mipLevels == 0) {
@@ -852,6 +865,7 @@ bool Renderer::reload_shader(ResourceHandle shader, const ShaderDesc& descriptio
 }
 
 ResourceHandle Renderer::create_pipeline(const PipelineDesc& description) {
+    if (!validate_pipeline_state(description, lastError_)) return {};
     if (description.colorFormats.size() > 8 ||
         !is_supported_color_format(description.colorFormat) ||
         std::any_of(description.colorFormats.begin(), description.colorFormats.end(),
@@ -1248,9 +1262,17 @@ bool Renderer::execute_graph(RenderGraph& graph, std::string* error) {
         lastError_ = reason;
         return false;
     }
-    graph.execute(*backend_, error);
-    if (error && !error->empty()) {
-        lastError_ = *error;
+    lastError_.clear();
+    if (!backend_->flush_upload_batch()) {
+        lastError_ = backend_->last_error();
+        if (error) *error = lastError_;
+        return false;
+    }
+    std::string executionError;
+    graph.execute(*backend_, &executionError);
+    if (!executionError.empty() || graph.diagnostics().executionFailed) {
+        lastError_ = executionError.empty() ? graph.diagnostics().lastError : executionError;
+        if (error) *error = lastError_;
         return false;
     }
     if (!backend_->last_error().empty()) {

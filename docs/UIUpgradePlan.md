@@ -1386,6 +1386,47 @@
 - 全量 CTest：57/57 通过，总计 65.59 秒；包含音频/图片/视频/模型预览、编译器命令、文件系统、UI 与渲染回归。
 - 非确定项：当前主机仍为 150% DPI，100%/125% 像素矩阵需在对应 Windows 缩放环境复跑；模型深度像素 oracle、动画 skin/playback、内容 diff/hash 与 UI 分配实测仍在后续队列。
 
+### 第 4.61 子阶段：Inspector 分组、搜索与紧凑信息密度
+
+目标：把 Inspector 从扁平字段列表升级为可扫描、可折叠、可过滤的专业属性面板，同时保留现有字段编辑、选择器、音频传输、撤销和自定义布局契约。
+
+实现范围：
+
+- 在 `EditorUi` retained 绘制层按对象与连续组件字段建立分组；组头使用稳定 region ID，支持展开/收起，状态只存在当前 UI 会话，不写入场景或布局文件。
+- Inspector 增加本地化搜索框，匹配字段名、当前值、英文/中文标签和组件组名；搜索时自动展开命中组，组件添加列表按同一查询过滤，无匹配时提供明确空状态。
+- 搜索字段接入现有 `UiRuntime` focus、TextInput、KeyDown fallback、Backspace、Ctrl+A、Escape 和 Tab 路由；现有 `field:*`、`component-add:*`、音频 timeline region 保持稳定。
+- 在窄高 Inspector 中采用更紧凑但仍可读的组头、搜索栏、字段行和时间轴高度，确保 AudioSource 的 clip/bus/空间参数在现有交互窗口中仍可达。
+- 非目标：本阶段不改 `EditorUiModel` 字段契约、不引入反射属性编辑器、不修改媒体/构建/模型能力、不增加底层图形 API 路径。
+
+审计与验证安排：
+
+- 定向 CTest：localization、theme、dock、render、style 和 EditorInteraction；特别检查 AudioSource picker、bus、空间字段、waveform 和现有 Undo/Redo。
+- 原生窗口：交互脚本增加 Inspector 搜索、命中结果 capture、组折叠/恢复 capture；state 必须同时证明 `inspector.filter`、命中 `field:*` 和 `inspector-group:*` 存在。
+- 视觉矩阵：重新捕获 dark/light/high-contrast、1280x720、1600x900、1024x768 与 GDI fallback，检查搜索焦点环、中文组名、空状态、窄高密度和无裁切。
+- 安全/性能：搜索仅过滤 immutable `EditorUiModel` 快照并更新 retained paint key，不读盘、不启动进程、不改变 renderer/backend 边界；组集合有界于当前 Inspector 字段数量。
+
+下一入口：根据截图反馈继续完善 Inspector 禁用/校验态、组件卡片层级和字段单位；随后建立 UI frame-time、分配和 dirty-region 基线，非 UI 功能继续冻结。
+
+### 第 4.62 子阶段：Inspector 组件状态、单位与校验反馈
+
+目标：把 Inspector 从“能编辑”推进到专业引擎常见的状态表达：组件启用状态位于组头，禁用字段明确降级，距离字段带单位，输入校验错误直接反映到控件边界；保持现有字段回调和统一 retained UI 接口不变。
+
+实现范围：
+
+- 从组件组中识别稳定的 `enabled:*` 布尔字段，并将其提升到组件组头右侧作为 toggle；组体关闭时保留字段标签和值的结构，但以 muted 视觉呈现且不注册可编辑字段区域。
+- 对 `minDistance`/`maxDistance` 这类距离属性增加 `m` 单位显示，单位仅属于 Inspector presentation，不改变模型字符串契约或序列化内容。
+- 编辑错误沿用现有 `editError_` 状态，在对应输入边界使用 danger token；不添加弹窗、不阻塞输入路由，避免把短暂校验反馈变成工作流中断。
+- 原生交互脚本覆盖组件组折叠、组头启用切换、禁用字段视觉、恢复启用和后续对象/资源操作；搜索、分组、布局自定义与本地化继续保持兼容。
+
+审计与验证安排：
+
+- 构建/单元：全量 `ctest --test-dir out/build/mingw-debug --output-on-failure`，并继续覆盖 theme、render、style、editor interaction 等 UI 定向测试。
+- 交互：`RunEditorInteraction.ps1` 现为 `134/134` 步 `ok=true`；必须保留 `field:enabled:*` 组头区域、禁用态截图和恢复后的后续操作证据。
+- 视觉：重新生成六场景主题/尺寸矩阵，检查组头 toggle、muted 字段、单位文本、错误边框在 dark/light/high-contrast 和 GDI fallback 下不裁切；真实主机 DPI 与请求值不一致时继续标记 `inconclusive`。
+- 安全/性能：状态仅存在于 Inspector UI 会话与现有编辑回调，paint key 包含过滤/折叠/组件状态；不接触底层图形 API、文件 IO、进程、媒体解码或非 UI 子系统。
+
+下一入口：收集本轮 Inspector 截图反馈后，建立 UI frame-time、分配和 dirty-region 基线；继续冻结媒体连续解码、模型 skin、构建工具扩展和非统一接口旁路。
+
 ### 第 4.55 子阶段：模型 CPU 动画采样与预览时间轴
 
 目标：把 glTF 的首个真实线性 TRS clip 接入既有 `animation::Animator`，使模型预览具备可验证的播放、暂停、选择和时间轴定位能力，并让 retained 线框与 D3D11 offscreen 顶点上传使用同一份采样姿态。
@@ -1445,6 +1486,64 @@
 - 集成：无效视频 fixture 仍必须诚实报告 decoder unavailable，同时 retained Media Preview 必须注册四个传输区域，证明 UI 能力不依赖伪造可用帧。
 - 安全/性能：只消费 immutable preview snapshot；取帧请求有 generation/source stamp/cancel 边界，不读盘、不启动进程、不阻塞渲染提交。
 - 下一入口：接入有真实时长/帧的跨平台视频 fixture，验证连续帧推进与停止/循环视觉差异，再评估 A/V clock 和 decoder session；并继续 CJK fallback、窄窗口、UI 分配/frame-time、内容 diff/hash 审计。
+
+### 第 4.58 子阶段：编辑器壳层专业化重做与交互视觉收敛
+
+目标：只投入编辑器 UI 壳层和交互表现，把当前 retained UI 从原型式按钮堆叠升级为专业引擎编辑器的可长期使用界面；暂停媒体、构建、模型等非 UI 功能扩展。
+
+实现范围：
+
+- 保留 `EditorUi` 的命令 ID、输入路由、停靠/浮动/布局持久化和现有业务回调，仅重做绘制层、视觉 token、图标、状态反馈和响应式密度。
+- 工具栏改为紧凑图标命令带；Hierarchy、Viewport、Inspector、Asset Browser 使用清晰的区域标题、选中条、焦点环、语义边界和有限强调色，减少大面积纯色按钮和无意义装饰。
+- Inspector 增加选中对象头部卡片、开关控件和字段密度策略；资源浏览器使用搜索图标、视图模式图标、树导线和稳定的 hover/pressed/focus 状态；Viewport 保持场景区域优先。
+- 图标由 retained draw list 生成的几何 glyph 提供，不依赖 emoji、系统图标字体或底层后端 API；英文/中文切换继续使用稳定命令键，不破坏自动化交互。
+- 扩充中文本地化覆盖到对象字段、组件类型、音频字段和编辑器 shell 文案；用户对象名、路径和外部工具输出保持原文。
+- 非目标：本阶段不新增资源 provider、编译器能力、媒体解码、模型渲染、DX11/D3D12/Vulkan 专用旁路，也不删除现有可自定义布局能力。
+
+审计与验证安排：
+
+- 构建/单元：受影响 editor target、localization、UI render、theme、dock、style 和 interaction 测试必须通过。
+- 交互：保留现有 116 步原生脚本，覆盖过滤、重命名、资源视图切换、对象选择、检查器字段、组件添加、相机操作、保存和布局区域。
+- 视觉：至少保留 dark 真实窗口截图；随后补 light/high-contrast 和 1280x720、1600x900、1024x768 矩阵，检查 CJK fallback、图标识别度、面板裁切和 DPI。
+- 安全/性能：绘制层只能提交统一 retained render list，不访问底层 renderer API、不读盘、不启动进程；新增 token 和 glyph 不改变现有 IO/命令边界。完成本阶段后再测 UI 分配与 frame-time 基线。
+
+下一入口：先根据真实截图收集视觉反馈，再按“图标一致性 → 窄窗口折叠 → Inspector 分组/搜索 → 主题矩阵 → 性能基线”的顺序迭代；非 UI 功能保持冻结。
+
+### 第 4.59 子阶段：主题矩阵与图标控件可发现性
+
+目标：把专业化壳层从单张设计图推进到可审计的多尺寸、多主题交互表面，保证图标命令在 Inspector、资源工具和媒体 transport 中都有明确的悬停语义。
+
+实现范围：
+
+- 为 panel-local icon-only controls 增加统一 tooltip fallback，覆盖新建对象、聚焦选中对象、资源刷新/视图切换以及音频/视频播放控制；工具栏保留其独立的命令带 tooltip。
+- 运行 1280x720、1600x900、1024x768、light、dark、high-contrast 与 GDI fallback 场景，检查 viewport、Hierarchy、Inspector、Asset Browser、status bar 的比例和状态。
+- 保持自定义布局、停靠拖动、浮动面板和稳定命令 ID 不变；不新增媒体/构建/模型能力。
+
+审计与验证安排：
+
+- 真实窗口矩阵必须输出 EngineGpuReadback/WindowDC、client/surface 尺寸、UI command/text 计数、theme、viewport rect 和截图；主机 DPI 与请求 DPI 不一致时标记 inconclusive。
+- UI 定向回归覆盖 theme、render-list、style 和 editor interaction；tooltip 不得改变输入区域 ID 或业务回调。
+- 下一入口：在用户视觉反馈后实现窄窗口面板折叠策略，再做 Inspector 分组/搜索和 UI frame-time/分配基线；非 UI 功能继续冻结。
+
+### 第 4.60 子阶段：窄窗口的可逆 Inspector 折叠
+
+目标：在真实窄窗口中优先保护场景视口和资源工作区，同时保留用户可理解、可恢复的 Inspector 入口；不把临时响应式策略写入用户的自定义布局。
+
+实现范围：
+
+- `EditorUi::prepare_layout` 以逻辑宽度 `< 760` 作为窄壳层策略阈值，仅在 `layout.showInspector` 仍为真且 Inspector 不是浮动面板时临时隐藏 Inspector。
+- 隐藏状态通过右侧设置 glyph 入口恢复；恢复后 Inspector 头部提供同一交互区域再次收起。离开窄窗口时自动恢复原可见状态，保存/重载布局字段不被改写。
+- 现有停靠、浮动、分隔条、稳定 region ID 和 EditorLayer 命令回调保持不变；媒体、构建、模型和底层后端能力继续冻结。
+- 原生交互脚本增加 1024x768 下的收起、展开、再次收起和回到 1920x1080 步骤，确保策略不是只在静态截图中存在。
+
+审计与验证安排：
+
+- 构建：全量 `cmake --build out/build/mingw-debug -j 4`；UI 定向 CTest 继续覆盖 theme、render、interaction、style。
+- 交互：`RunEditorInteraction.ps1` 的步骤从 116 扩展为 123，新增 compact Inspector 两张 GPU capture；collapsed/expanded state 必须分别包含入口和 Inspector 字段区域。
+- 视觉：矩阵重新生成 dark 1280x720、dark 1600x900、dark 1024x768、light、high-contrast 和 GDI fallback；1024 截图应让视口/资源区延展到右侧，不能出现原来的空 Inspector 区域。
+- 安全/性能：折叠只调用 `DockWorkspace::set_panel_visibility`，不修改持久化 `EditorLayoutState`，不读盘、不启动进程、不接触 renderer backend；paint key 纳入临时状态，避免 retained cache 使用旧布局。
+
+下一入口：等待用户对窄屏入口、Inspector header、面板比例和图标语义的视觉反馈，再实现 Inspector 分组/搜索与禁用/校验态；UI frame-time、分配和 dirty-region 基线继续排队，非 UI 功能保持冻结。
 
 ### 第 4.54 子阶段：原生输入兜底与完整交互性能证据
 

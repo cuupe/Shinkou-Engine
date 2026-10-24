@@ -1,4 +1,5 @@
 #include "shinkou/render/RenderGraph.h"
+#include "shinkou/render/RenderGraphScheduler.h"
 #include <algorithm>
 #include <chrono>
 #include <limits>
@@ -209,6 +210,7 @@ void RenderGraph::import_texture(ResourceHandle handle, const TextureDesc& descr
 ResourceHandle RenderGraph::create_depth_stencil(const TextureDesc& description) {
     if (description.width == 0 || description.height == 0 || description.layers == 0) return {};
     auto normalized = description;
+    normalized.depthStencil=true;
     if (normalized.mipLevels == 0) normalized.mipLevels = texture_full_mip_count(normalized);
     if (normalized.mipLevels == 0) return {};
     const auto handle = allocate_resource(ResourceKind::DepthStencil);
@@ -233,6 +235,8 @@ ResourceHandle RenderGraph::create_shader(const ShaderDesc& description) {
 }
 
 ResourceHandle RenderGraph::create_pipeline(const PipelineDesc& description) {
+    std::string error;
+    if (!validate_pipeline_state(description, error)) return {};
     const auto handle = allocate_resource(ResourceKind::Pipeline);
     if (!handle) return {};
     resources_.push_back({handle, handle, description, false});
@@ -306,6 +310,7 @@ bool RenderGraph::compile(std::string* error) {
     passTimings_.clear();
     aliasPlan_ = {};
     diagnostics_ = {};
+    for (auto& resource:resources_) resource.physicalHandle=resource.handle;
     diagnostics_.passCount = count;
     diagnostics_.resourceCount = resources_.size();
     const auto fail_compile = [&](std::string message, bool validation = true) {
@@ -462,6 +467,11 @@ bool RenderGraph::compile(std::string* error) {
         }
     }
 
+    for (const auto& dependency:explicitDependencies_) {
+        if (dependency.producer>=count || dependency.consumer>=count || dependency.producer==dependency.consumer)
+            return fail_compile("render graph has an invalid explicit pass dependency");
+        addEdge(dependency.producer,dependency.consumer);
+    }
     std::priority_queue<std::size_t, std::vector<std::size_t>, std::greater<>> ready;
     for (std::size_t i = 0; i < count; ++i) if (indegree[i] == 0) ready.push(i);
     executionOrder_.clear();
@@ -626,6 +636,14 @@ bool RenderGraph::compile(std::string* error) {
                 (node->handle.kind != ResourceKind::Texture2D &&
                  node->handle.kind != ResourceKind::DepthStencil &&
                  node->handle.kind != ResourceKind::Buffer)) continue;
+            // All resources are initialized before pass execution. Reusing a
+            // physical allocation for distinct initial payloads would make
+            // later passes read the first resource's constants/texture data.
+            // Aliasing initialized resources requires a first-use upload,
+            // which is deliberately not part of this allocator's contract.
+            if (const auto* buffer=std::get_if<BufferDesc>(&node->description); buffer && !buffer->initialData.empty()) continue;
+            if (const auto* texture=std::get_if<TextureDesc>(&node->description); texture &&
+                (!texture->initialData.empty() || !texture->initialSubresources.empty())) continue;
             const auto found = aliasRequestIndices.find(node->handle.id);
             if (found == aliasRequestIndices.end()) {
                 TransientResourceRequest request;
@@ -680,7 +698,8 @@ bool RenderGraph::compile(std::string* error) {
             if (node == resources_.end() || !requires_physical_state(node->handle.kind)) continue;
             const auto physicalId = node == resources_.end() ? access.resource.id : node->physicalHandle.id;
             const auto previous = previousUsage.find(physicalId);
-            if (previous == previousUsage.end() || previous->second != access.usage) {
+            const bool orderedStorageWrite=access.usage==ResourceUsage::StorageWrite || access.usage==ResourceUsage::ShaderWrite;
+            if (previous == previousUsage.end() || previous->second != access.usage || orderedStorageWrite) {
                 ++diagnostics_.plannedTransitionCount;
                 transitions_.push_back({access.resource,
                     previous == previousUsage.end() ? ResourceUsage::Unknown : previous->second,
@@ -724,6 +743,27 @@ bool RenderGraph::compile(std::string* error) {
     return true;
 }
 
+bool RenderGraph::set_depth_clear(std::size_t passIndex,bool clearDepth) {
+    if (passIndex>=passes_.size()) return false;
+    passes_[passIndex].clearDepthAttachments=clearDepth;
+    return true;
+}
+
+bool RenderGraph::set_command_recorder(std::size_t passIndex,RecordCallback recorder) {
+    if (passIndex>=passes_.size()) return false;
+    passes_[passIndex].recordCommands=std::move(recorder);
+    return true;
+}
+
+bool RenderGraph::add_dependency(std::size_t producer,std::size_t consumer) {
+    if (producer>=passes_.size() || consumer>=passes_.size() || producer==consumer) return false;
+    if (std::none_of(explicitDependencies_.begin(),explicitDependencies_.end(),[&](const auto& dependency) {
+        return dependency.producer==producer && dependency.consumer==consumer;
+    })) explicitDependencies_.push_back({producer,consumer});
+    compiled_=false;
+    return true;
+}
+
 void RenderGraph::execute(IRenderBackend& backend, std::string* error,
                           const std::function<void(IRenderBackend&)>& beforePresent) {
     const auto executeStart = std::chrono::steady_clock::now();
@@ -737,6 +777,7 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
     backend.clear_error();
     diagnostics_.executionFailed = false;
     diagnostics_.executedPassCount = 0;
+    diagnostics_.recordedPassCount = diagnostics_.recordedCommandCount = 0;
     diagnostics_.failedPassIndex = static_cast<std::size_t>(-1);
     diagnostics_.failedQueueBatch = static_cast<std::uint32_t>(-1);
     diagnostics_.lastError.clear();
@@ -754,15 +795,56 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
         return;
     }
     passTimings_.clear();
+    std::vector<std::shared_ptr<const RenderCommandList>> recorded(passes_.size());
+    if (std::any_of(passes_.begin(),passes_.end(),[](const auto& pass){return bool(pass.recordCommands);})) {
+        FunctionCommandRecordingExecutor executor([&](const CommandRecordingTask& task) {
+            const auto& pass=passes_[task.passIndex];
+            if (!pass.recordCommands) return CommandRecordingResult{CommandRecordingStatus::Recorded,{},{}};
+            auto commands=std::make_shared<RenderCommandList>();
+            pass.recordCommands(*commands,task.pass_context());
+            std::string failure;
+            if (!commands->validate(task.pass_context(),failure))
+                return CommandRecordingResult{CommandRecordingStatus::Failed,std::move(failure),{}};
+            return CommandRecordingResult{CommandRecordingStatus::Recorded,{},std::move(commands)};
+        });
+        const auto preparation=RenderGraphScheduler{}.prepare(*this,executor);
+        for (std::size_t i=0;i<preparation.tasks.size();++i) {
+            const auto& result=preparation.results[i];
+            const auto passIndex=preparation.tasks[i].passIndex;
+            if (result.status!=CommandRecordingStatus::Recorded) {
+                diagnostics_.executionFailed=true;
+                diagnostics_.failedPassIndex=passIndex;
+                diagnostics_.lastError="render pass '"+passes_[passIndex].name+"' recording failed: "+result.diagnostic;
+                if (error) *error=diagnostics_.lastError;
+                finish_execution_diagnostics();
+                return;
+            }
+            if (result.payload) {
+                recorded[passIndex]=std::static_pointer_cast<const RenderCommandList>(result.payload);
+                ++diagnostics_.recordedPassCount;
+                diagnostics_.recordedCommandCount+=recorded[passIndex]->size();
+            }
+        }
+        if (!preparation.valid) {
+            diagnostics_.executionFailed=true;
+            diagnostics_.lastError=preparation.error;
+            if (error) *error=diagnostics_.lastError;
+            finish_execution_diagnostics();
+            return;
+        }
+    }
     for (const auto& resource : resources_) {
         if (!resource.external && resource.physicalHandle.id == resource.handle.id) {
-            if (!backend.create_resource(resource.handle, resource.description)) {
+            if (!backend.create_transient_resource(resource.handle, resource.description)) {
                 if (error) *error = backend.last_error().empty() ?
                     "render graph transient resource creation failed" : backend.last_error();
+                if (error) *error += " (resource "+std::to_string(resource.handle.id)+", kind "+std::to_string(static_cast<unsigned>(resource.handle.kind))+")";
+                if (error) if (const auto* buffer=std::get_if<BufferDesc>(&resource.description))
+                    *error += " size="+std::to_string(buffer->size)+" stride="+std::to_string(buffer->stride);
                 diagnostics_.lastError = error ? *error : "render graph transient resource creation failed";
                 diagnostics_.executionFailed = true;
                 for (const auto& cleanup : resources_) {
-                    if (!cleanup.external) backend.retire_resource(cleanup.handle);
+                    if (!cleanup.external) backend.retire_transient_resource(cleanup.handle,false);
                 }
                 finish_execution_diagnostics();
                 return;
@@ -778,7 +860,7 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
             diagnostics_.lastError = error ? *error : "backend could not alias transient resource";
             diagnostics_.executionFailed = true;
             for (const auto& cleanup : resources_) {
-                if (!cleanup.external) backend.retire_resource(cleanup.handle);
+                if (!cleanup.external) backend.retire_transient_resource(cleanup.handle,false);
             }
             finish_execution_diagnostics();
             return;
@@ -789,12 +871,12 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
         // before the physical allocation they point at.
         for (const auto& resource : resources_) {
             if (!resource.external && resource.physicalHandle.id != resource.handle.id) {
-                backend.retire_resource(resource.handle);
+                backend.retire_transient_resource(resource.handle,!diagnostics_.executionFailed);
             }
         }
         for (const auto& resource : resources_) {
             if (!resource.external && resource.physicalHandle.id == resource.handle.id) {
-                backend.retire_resource(resource.handle);
+                backend.retire_transient_resource(resource.handle,!diagnostics_.executionFailed);
             }
         }
     };
@@ -882,7 +964,16 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
         if (pass.queue == RenderQueue::Graphics) {
             while (!colorTargets.empty() && !colorTargets.back()) colorTargets.pop_back();
             if (!colorTargets.empty() || depthTarget) {
-                backend.set_render_targets(colorTargets, depthTarget, pass.clearAttachments);
+                const bool clearDepth=pass.clearDepthAttachments.value_or(pass.clearAttachments);
+                const bool independentClear=clearDepth!=pass.clearAttachments;
+                backend.set_render_targets(colorTargets, depthTarget, independentClear ? false : pass.clearAttachments);
+                if (independentClear && !backend.clear_render_attachments(colorTargets,depthTarget,pass.clearAttachments,clearDepth)) {
+                    diagnostics_.lastError="backend cannot independently clear color and depth attachments";
+                    if (error) *error=diagnostics_.lastError;
+                    diagnostics_.executionFailed=true;
+                    diagnostics_.failedPassIndex=index;
+                    break;
+                }
             }
         }
         backend.begin_debug_label(pass.name);
@@ -890,12 +981,18 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
         const auto beforeStats = backend.stats();
         RenderPassContext context{pass.name, pass.reads, pass.writes, pass.accesses, pass.queue};
         backend.execute(context);
-        if (pass.callback) pass.callback(backend, context);
+        std::string commandError;
+        try {
+            if (recorded[index]) recorded[index]->replay(backend,commandError);
+            else if (pass.callback) pass.callback(backend, context);
+        } catch (const std::exception& exception) { commandError=exception.what(); }
+        catch (...) { commandError="pass callback threw an unknown exception"; }
         backend.end_pass();
         backend.end_debug_label();
-        if (!backend.last_error().empty()) {
-            if (error) *error = "render pass '" + pass.name + "' failed: " + backend.last_error();
-            diagnostics_.lastError = error ? *error : backend.last_error();
+        if (!backend.last_error().empty() || !commandError.empty()) {
+            diagnostics_.lastError = "render pass '" + pass.name + "' failed: " +
+                (commandError.empty()?backend.last_error():commandError);
+            if (error) *error = diagnostics_.lastError;
             diagnostics_.executionFailed = true;
             diagnostics_.failedPassIndex = index;
             diagnostics_.failedQueueBatch = batch.index;
@@ -967,7 +1064,9 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
 }
 
 void RenderGraph::reset() {
+    ++generation_;
     passes_.clear();
+    explicitDependencies_.clear();
     resources_.clear();
     executionOrder_.clear();
     transitions_.clear();

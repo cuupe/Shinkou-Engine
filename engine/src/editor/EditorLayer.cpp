@@ -1,4 +1,5 @@
 #include "shinkou/editor/EditorLayer.h"
+#include "EditorImGuiView.h"
 #include "shinkou/editor/EditorGltfPreview.h"
 #include "shinkou/editor/EditorLocalization.h"
 
@@ -109,11 +110,17 @@ enum NativeEditorMenuId : UINT {
 };
 
 void append_native_item(HMENU menu, UINT id, const char* label, bool enabled = true) {
-    AppendMenuA(menu, MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED), id, label);
+    const int count=MultiByteToWideChar(CP_UTF8,0,label,-1,nullptr,0);
+    std::wstring text(static_cast<std::size_t>(std::max(1,count)),L'\0');
+    MultiByteToWideChar(CP_UTF8,0,label,-1,text.data(),count);
+    AppendMenuW(menu, MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED), id, text.c_str());
 }
 
 void append_native_submenu(HMENU menu, HMENU submenu, const char* label) {
-    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), label);
+    const int count=MultiByteToWideChar(CP_UTF8,0,label,-1,nullptr,0);
+    std::wstring text(static_cast<std::size_t>(std::max(1,count)),L'\0');
+    MultiByteToWideChar(CP_UTF8,0,label,-1,text.data(),count);
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), text.c_str());
 }
 #endif
 
@@ -195,64 +202,10 @@ std::string hex_color(ui::ThemeColor color) {
     return output.str();
 }
 
-#if defined(SHINKOU_WITH_IMGUI)
-void apply_vec2_property(const PropertyDescriptor& property, const math::Vec2& value) {
-    float values[2]{value.x, value.y};
-    if (ImGui::DragFloat2(property.displayName.c_str(), values, static_cast<float>(property.step))) {
-        property.set(PropertyValue{math::Vec2{values[0], values[1]}});
-    }
-}
-
-void apply_vec3_property(const PropertyDescriptor& property, const math::Vec3& value) {
-    float values[3]{value.x, value.y, value.z};
-    if (ImGui::DragFloat3(property.displayName.c_str(), values, static_cast<float>(property.step))) {
-        property.set(PropertyValue{math::Vec3{values[0], values[1], values[2]}});
-    }
-}
-
-void draw_property(const PropertyDescriptor& property) {
-    const auto value = property.get ? property.get() : PropertyValue{};
-    const bool disabled = !property.editable();
-    if (disabled) ImGui::BeginDisabled();
-    if (const auto* boolean = std::get_if<bool>(&value)) {
-        bool next = *boolean;
-        if (ImGui::Checkbox(property.displayName.c_str(), &next) && property.editable()) property.set(PropertyValue{next});
-    } else if (const auto* number = std::get_if<double>(&value)) {
-        double next = *number;
-        if (ImGui::DragScalar(property.displayName.c_str(), ImGuiDataType_Double, &next,
-                              property.step > 0.0 ? static_cast<float>(property.step) : 0.01f,
-                              property.minimum < property.maximum ? &property.minimum : nullptr,
-                              property.minimum < property.maximum ? &property.maximum : nullptr) && property.editable()) {
-            property.set(PropertyValue{next});
-        }
-    } else if (const auto* integer = std::get_if<std::int64_t>(&value)) {
-        std::int64_t next = *integer;
-        if (ImGui::InputScalar(property.displayName.c_str(), ImGuiDataType_S64, &next) && property.editable()) property.set(PropertyValue{next});
-    } else if (const auto* unsignedInteger = std::get_if<std::uint64_t>(&value)) {
-        std::uint64_t next = *unsignedInteger;
-        if (ImGui::InputScalar(property.displayName.c_str(), ImGuiDataType_U64, &next) && property.editable()) property.set(PropertyValue{next});
-    } else if (const auto* string = std::get_if<std::string>(&value)) {
-        std::array<char, 256> buffer{};
-        std::strncpy(buffer.data(), string->c_str(), buffer.size() - 1);
-        if (ImGui::InputText(property.displayName.c_str(), buffer.data(), buffer.size()) && property.editable()) {
-            property.set(PropertyValue{std::string(buffer.data())});
-        }
-    } else if (const auto* vec2 = std::get_if<math::Vec2>(&value)) {
-        apply_vec2_property(property, *vec2);
-    } else if (const auto* vec3 = std::get_if<math::Vec3>(&value)) {
-        apply_vec3_property(property, *vec3);
-    } else if (const auto* quat = std::get_if<math::Quat>(&value)) {
-        float values[4]{quat->x, quat->y, quat->z, quat->w};
-        if (ImGui::DragFloat4(property.displayName.c_str(), values, 0.01f) && property.editable())
-            property.set(PropertyValue{math::Quat{values[0], values[1], values[2], values[3]}});
-    } else {
-        ImGui::TextDisabled("%s: unsupported property", property.displayName.c_str());
-    }
-    if (disabled) ImGui::EndDisabled();
-}
-#endif
-
 } // namespace
+
+EditorLayer::EditorLayer() = default;
+EditorLayer::~EditorLayer() = default;
 
 bool EditorLayer::initialize(bool enableImGui) {
     (void)enableImGui;
@@ -347,6 +300,8 @@ bool EditorLayer::initialize(bool enableImGui) {
 #if defined(SHINKOU_WITH_IMGUI)
     imguiEnabled_ = enableImGui;
     if (imguiEnabled_) {
+        uninstall_native_menu();
+        editorUi_.set_native_main_menu_available(false);
         if (!ImGui::GetCurrentContext()) {
             ImGui::CreateContext();
             uiContextOwned_ = true;
@@ -356,7 +311,8 @@ bool EditorLayer::initialize(bool enableImGui) {
 #if defined(IMGUI_HAS_DOCK)
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
-        if (io.Fonts && !io.Fonts->IsBuilt()) io.Fonts->Build();
+        imguiView_ = std::make_unique<EditorImGuiView>();
+        imguiView_->initialize(*this);
 #if defined(SHINKOU_PLATFORM_WINDOWS)
         if (nativeWindow_) {
             imguiPlatformInitialized_ = ImGui_ImplWin32_Init(nativeWindow_);
@@ -384,6 +340,7 @@ void EditorLayer::process_input(const input::InputSystem& input, World& world) {
     // compatibility runtime was laid out and dispatched every event even
     // though it had no editor host, doubling input work on the frame thread.
     uiInputStats_ = {};
+    if (imguiEnabled_) return; // Official Win32 backend owns native widget input.
     editorUi_.set_display_size(displayWidth_, displayHeight_, effective_editor_ui_scale(displayDpiScale_, layout_.uiScale));
     editorUi_.process_input(input);
 }
@@ -395,29 +352,9 @@ void EditorLayer::navigate_viewport(ViewportNavigation action, math::Vec2 delta)
         [&](Entity, auto& camera, auto& transform) {
             if (moved || !camera.active || !transform.visible) return;
             moved = true;
-            auto& view = transform.local;
-            const auto forward = math::Rotate(view.rotation, {0,0,1});
-            const auto right = math::Rotate(view.rotation, {1,0,0});
-            const auto up = math::Rotate(view.rotation, {0,1,0});
-            if (action == ViewportNavigation::Zoom) {
-                const float factor = std::exp(-std::clamp(delta.y, -10.0f, 10.0f) * 0.15f);
-                if (camera.orthographic) camera.orthographicSize = std::clamp(camera.orthographicSize * factor, 0.05f, 10000.0f);
-                else {
-                    const auto distance = std::clamp(orbitDistance_ * factor, 0.1f, 10000.0f);
-                    view.position = view.position + forward * (orbitDistance_ - distance);
-                    orbitDistance_ = distance;
-                }
-            } else if (action == ViewportNavigation::Pan || camera.orthographic) {
-                const auto height = std::max(1.0f, editorUi_.viewport_rect().height);
-                const float units = (camera.orthographic ? camera.orthographicSize : 2.0f * orbitDistance_ * std::tan(camera.verticalFieldOfView * 0.5f)) / height;
-                view.position = view.position + (right * -delta.x + up * delta.y) * units;
-            } else {
-                const auto pivot = view.position + forward * orbitDistance_;
-                const auto yaw = math::FromAxisAngle({0,1,0}, delta.x * 0.006f);
-                const auto pitch = math::FromAxisAngle(right, delta.y * 0.006f);
-                view.rotation = math::Normalize(math::Multiply(yaw, math::Multiply(pitch, view.rotation)));
-                view.position = pivot - math::Rotate(view.rotation, {0,0,1}) * orbitDistance_;
-            }
+            const float dpi=imguiEnabled_ ? ui_dpi_scale() : 1.0f;
+            const float height=std::max(1.0f,ui_viewport_rect().height*dpi);
+            navigate_editor_camera(camera,transform.local,action,delta,height,dpi,orbitDistance_);
         });
     if (!moved) lastStatus_ = "No active scene camera";
 }
@@ -456,6 +393,13 @@ void EditorLayer::prepare_frame(render::Renderer& renderer, World& world) {
     if (!initialized_) return;
     activeWorld_ = &world;
     const float uiScale = effective_editor_ui_scale(displayDpiScale_, layout_.uiScale);
+    if (imguiEnabled_ && imguiView_) {
+        render::EditorViewportSeam seam;
+        seam.viewport = {0,0,displayWidth_,displayHeight_};
+        seam.scissor=seam.viewport; seam.enabled=true; seam.strictTarget=false;
+        renderer.set_editor_viewport(seam);
+        return;
+    }
     editorUi_.set_display_size(displayWidth_, displayHeight_, uiScale);
     editorUi_.prepare_layout(layout_, dockWorkspace_);
 
@@ -595,21 +539,38 @@ void EditorLayer::handle_native_menu_command(std::uint32_t command, World& world
         if (const char* path = std::getenv("SHINKOU_UI_QA_SNAPSHOT")) {
             std::ofstream out(path);
             const char* view = editorUi_.asset_view()==EditorAssetView::Tree ? "tree" : editorUi_.asset_view()==EditorAssetView::LargeIcons ? "large" : "small";
-            out << "state " << editorUi_.dpi_scale() << ' ' << std::quoted(editorUi_.selected_asset()) << ' ' << std::quoted(lastStatus_)
-                << " view=" << view << " scroll=" << editorUi_.asset_scroll_offset() << " theme=" << layout_.theme
+            out << "state " << ui_dpi_scale() << ' ' << std::quoted(selectedAsset_) << ' ' << std::quoted(lastStatus_)
+                << " view=" << view << " scroll=" << (imguiView_ ? imguiView_->asset_scroll() : editorUi_.asset_scroll_offset()) << " theme=" << layout_.theme
                 << " playing=" << uiModel_.playing() << " paused=" << uiModel_.paused()
-                << " dir=" << editorUi_.asset_directory().generic_string()
-                << " focus=" << std::quoted(editorUi_.focused_region())
-                << " filter=" << std::quoted(editorUi_.asset_filter())
-                << " edit=" << std::quoted(editorUi_.asset_edit_target()) << '\n';
+                << " dir=" << assetDirectory_.generic_string()
+                << " focus=" << std::quoted(imguiView_ ? imguiView_->focused() : editorUi_.focused_region())
+                << " filter=" << std::quoted(imguiView_ ? std::string(imguiView_->asset_filter()) : editorUi_.asset_filter())
+                << " assettab=" << std::quoted(imguiView_ ? imguiView_->asset_tab() : "retained")
+                << " edit=" << std::quoted(editorUi_.asset_edit_target())
+                << " preview=" << std::quoted(assetPreviewState_.status)
+                << " textlines=" << (assetPreviewState_.textPreview ? assetPreviewState_.textPreview->lines.size() : 0)
+                << " media=" << std::quoted(uiModel_.media_state().playbackState)
+                << " cursor=" << uiModel_.media_state().currentTime
+                << " videoframe=" << (videoPreviewSnapshot_ ? videoPreviewSnapshot_->frameTime : -1)
+                << " settings=" << std::quoted(assetSettingsStatus_)
+                << " pitch=" << assetSettings_.pitch << " pan=" << assetSettings_.pan
+                << " videorate=" << assetSettings_.videoRate
+                << " wrap=" << assetSettings_.wordWrap << " rotate=" << assetSettings_.modelAutoRotate
+                << " fontpixels=" << (imguiView_ ? imguiView_->font_pixels() : 0)
+                << " framebuffer=" << (imguiView_ ? imguiView_->framebuffer_size() : "retained") << '\n';
             world.ecs().each<render::CameraComponent, render::TransformComponent>([&](Entity, const auto& camera, const auto& pose) {
                 if(camera.active) out << "camera " << property_text(pose.local.position) << ' ' << property_text(pose.local.rotation) << ' ' << camera.orthographicSize << '\n';
             });
-            for (const auto& pair : editorUi_.interaction_regions())
+            for (const auto& pair : ui_interaction_regions())
                 out << "region " << std::quoted(pair.first) << ' ' << pair.second.x << ' ' << pair.second.y << ' ' << pair.second.width << ' ' << pair.second.height << '\n';
+            if(imguiView_)for(const auto& [id,surface]:imguiView_->region_surfaces())
+                out<<"surface "<<std::quoted(id)<<' '<<surface.window<<' '<<surface.pixels.x<<' '<<surface.pixels.y<<' '<<surface.pixels.width<<' '<<surface.pixels.height<<'\n';
             if (auto* object = world.find_object(layout_.selectedObject)) {
                 out << "object " << std::quoted(std::string(object->name())) << '\n';
-                for (const auto& field : uiModel_.inspector_fields()) out << "field " << std::quoted(field.label) << ' ' << std::quoted(field.value) << '\n';
+                for (const auto& field : uiModel_.inspector_fields()) {
+                    out << "field " << std::quoted(field.label) << ' ' << std::quoted(field.value) << '\n';
+                    out << "typed " << std::quoted(field.componentName+":"+field.label) << ' ' << std::quoted(property_text(field.data)) << '\n';
+                }
             }
             out << "end\n";
         }
@@ -770,6 +731,7 @@ bool EditorLayer::unregister_panel(std::string_view id) {
 bool EditorLayer::set_panel_visible(std::string_view id, bool visible) {
     const auto it = panelVisibility_.find(std::string(id));
     if (it == panelVisibility_.end()) return false;
+    if(id=="inspector"&&!visible)finish_inspector_edit();
     it->second = visible;
     if (id == "hierarchy") layout_.showHierarchy = visible;
     else if (id == "inspector") layout_.showInspector = visible;
@@ -1191,6 +1153,7 @@ bool EditorLayer::load_layout() {
 }
 
 void EditorLayer::reset_layout() {
+    if (imguiView_) imguiView_->reset_docking();
     clear_media_preview();
     const auto layoutPath = layout_.layoutFile;
     const auto dockPath = layout_.dockLayoutFile;
@@ -1279,13 +1242,7 @@ void EditorLayer::push_console(std::string message) {
 bool EditorLayer::checkpoint(World& world) {
     EditorDocument document; std::string error;
     if (!EditorDocument::capture(world, layout_.selectedObject, document, error)) { lastStatus_ = error; return false; }
-    undo_.push_back(std::move(document));
-    undoHistory_.push_back(EditHistoryKind::Scene);
-    if (undo_.size() > 64) {
-        undo_.erase(undo_.begin());
-        const auto marker = std::find(undoHistory_.begin(), undoHistory_.end(), EditHistoryKind::Scene);
-        if (marker != undoHistory_.end()) undoHistory_.erase(marker);
-    }
+    record_scene_checkpoint(std::move(document));
     return true;
 }
 
@@ -1320,6 +1277,7 @@ void EditorLayer::reset_edit_history_for_file_operation() {
     }
     undo_.clear();
     redo_.clear();
+    propertyUndo_.clear();propertyRedo_.clear();
     fileUndo_.clear();
     fileRedo_.clear();
     undoHistory_.clear();
@@ -1584,6 +1542,7 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
         expect_editor_file_change(from, true);
         expect_editor_file_change(to, true);
         if (fileSystem_.rename(from, to, &error)) {
+            remap_asset_settings(from,to);
             const auto fromPath = normalized_project_path(from);
             const auto toPath = normalized_project_path(to);
             remap_live_asset_references(fromPath, toPath);
@@ -1638,6 +1597,7 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
 void EditorLayer::document_changed(bool preserveRedo) {
     if (!preserveRedo) {
         redo_.clear();
+        propertyRedo_.clear();
         for (const auto& operation : fileRedo_) {
             if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty()) {
                 expect_editor_file_change(operation.recyclePath, true);
@@ -1807,6 +1767,7 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
 }
 
 void EditorLayer::dispatch_command(EditorCommand command, std::string_view target, World& world) {
+    finish_inspector_edit();
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     std::string selectedPath;
     if (nativeWindow_ && target.empty() && (command == EditorCommand::OpenScene || command == EditorCommand::SaveSceneAs)) {
@@ -2011,6 +1972,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         break;
     case EditorCommand::MediaToggleLoop: {
         mediaPanel_.playback().loop = !mediaPanel_.playback().loop;
+        assetSettings_.loop = mediaPanel_.playback().loop;
         if (audioSystem_ && audioPreviewVoice_ != 0)
             audioSystem_->set_loop(audioPreviewVoice_, mediaPanel_.playback().loop);
         const bool video = mediaPanel_.description().kind == ui::MediaKind::Video;
@@ -2047,6 +2009,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
             const auto value = std::stod(std::string(target));
             if (!std::isfinite(value) || value < 0.0 || value > 1.0) throw std::invalid_argument("volume");
             mediaPanel_.playback().volume = value;
+            assetSettings_.volume = static_cast<float>(value);
             if (audioSystem_ && audioPreviewVoice_ != 0) audioSystem_->set_volume(audioPreviewVoice_, static_cast<float>(value));
             sync_media_preview_state();
         } catch (...) {
@@ -2069,7 +2032,12 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         auto& destinationHistory = undo ? redoHistory_ : undoHistory_;
         if (sourceHistory.empty()) { lastStatus_ = "No edit history"; break; }
         const auto kind = sourceHistory.back();
-        if (kind == EditHistoryKind::Scene) {
+        if(kind==EditHistoryKind::Property) {
+            if(replay_property_edit(undo)) {
+                sourceHistory.pop_back();destinationHistory.push_back(kind);
+                lastStatus_=undo?"Edit undone":"Edit redone";
+            }
+        } else if (kind == EditHistoryKind::Scene) {
             auto& source = undo ? undo_ : redo_;
             auto& destination = undo ? redo_ : undo_;
             if (source.empty()) { lastStatus_ = "Scene edit history is unavailable"; break; }
@@ -2080,6 +2048,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
                 break;
             }
             destination.push_back(std::move(current));
+            rebind_property_history(world);
             source.pop_back();
             sourceHistory.pop_back();
             destinationHistory.push_back(EditHistoryKind::Scene);
@@ -2109,7 +2078,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::NewScene: {
         if (!checkpoint(world)) break;
         EditorDocument empty; std::string error;
-        if (empty.restore(world, layout_.selectedObject, error)) { document_changed(); lastStatus_ = "New scene (Undo to restore)"; }
+        if (empty.restore(world, layout_.selectedObject, error)) { rebind_property_history(world);document_changed(); lastStatus_ = "New scene (Undo to restore)"; }
         else lastStatus_ = error;
         break;
     }
@@ -2125,6 +2094,7 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
             break;
         }
         scenePath_ = path;
+        rebind_property_history(world);
         document_changed();
         sceneDirty_ = false;
         const auto rebound = rebind_asset_references_from_manifest();
@@ -2333,6 +2303,8 @@ void EditorLayer::request_file_scan() {
             const auto scan = scanner.scan(directory, !directory.empty(), 32768);
             result.entries = scan.entries;
             result.changes = scan.changes;
+            result.complete = scan.complete;
+            result.error = scan.truncated ? "File scan entry limit reached" : scan.error;
             result.index = EditorAssetIndex::build(result.entries, generation);
             result.service = std::move(scanner);
             return result;
@@ -2792,6 +2764,7 @@ void EditorLayer::set_selected_asset(std::string path) {
 }
 
 void EditorLayer::request_asset_preview() {
+    load_asset_settings();
     request_asset_system_preview();
     if (selectedAsset_.empty()) {
         if (!assetPreviewState_.path.empty()) {
@@ -2833,7 +2806,10 @@ void EditorLayer::request_asset_preview() {
         return;
     }
     const auto& descriptor = indexed->descriptor;
-    if (descriptor.kind != AssetPreviewKind::Text) {
+    const bool textLike = descriptor.kind == AssetPreviewKind::Text || descriptor.kind == AssetPreviewKind::Document ||
+        descriptor.kind == AssetPreviewKind::Shader || descriptor.kind == AssetPreviewKind::Scene ||
+        descriptor.kind == AssetPreviewKind::Material || (descriptor.kind == AssetPreviewKind::Archive && descriptor.extension == ".zip");
+    if (!textLike) {
         const auto mediaKind = descriptor.kind == AssetPreviewKind::Audio ? ui::MediaKind::Audio :
             descriptor.kind == AssetPreviewKind::Video ? ui::MediaKind::Video : ui::MediaKind::Image;
         const bool mediaResource = descriptor.kind == AssetPreviewKind::Audio ||
@@ -2849,9 +2825,13 @@ void EditorLayer::request_asset_preview() {
             description.showVolume = descriptor.kind == AssetPreviewKind::Audio;
             mediaPanel_.set_description(std::move(description));
             mediaPanel_.playback() = {};
+            mediaPanel_.playback().loop = assetSettings_.loop;
+            mediaPanel_.playback().volume = assetSettings_.volume;
             if (descriptor.kind == AssetPreviewKind::Audio || descriptor.kind == AssetPreviewKind::Video) {
-                set_panel_visible("media", true);
-                dockWorkspace_.activate_tab("media");
+                if (!imguiEnabled_) {
+                    set_panel_visible("media", true);
+                    dockWorkspace_.activate_tab("media");
+                }
             }
         } else if (!mediaResource && !currentUri.empty()) {
             clear_media_preview();
@@ -2860,16 +2840,26 @@ void EditorLayer::request_asset_preview() {
             assetPreviewState_.path == selectedAsset_ &&
             imagePreviewStamp_ == indexed->writeStamp && assetPreviewState_.imageSnapshot &&
             !assetPreviewState_.loading;
-        if (!imageReady) {
+        const bool modelReady = descriptor.kind == AssetPreviewKind::Model &&
+            assetPreviewState_.path == selectedAsset_ &&
+            modelPreviewStamp_ == indexed->writeStamp && modelPreviewSnapshot_ &&
+            modelPreviewSnapshot_->valid() && assetPreviewState_.modelPreview &&
+            !assetPreviewState_.loading;
+        // Re-indexing and reselecting an unchanged model must preserve its
+        // decoded preview, selected material and texture. Clearing this state
+        // before a cache hit left the inspector stuck at metadata-only status.
+        if (!imageReady && !modelReady) {
             assetPreviewStamp_ = indexed->writeStamp;
             assetPreviewState_.path = selectedAsset_;
             assetPreviewState_.kind = std::string(AssetPreviewCatalog::kind_name(descriptor.kind));
             assetPreviewState_.title = descriptor.previewTitle;
-            assetPreviewState_.status = descriptor.statusMessage;
+            assetPreviewState_.status = descriptor.kind==AssetPreviewKind::Audio ? audioPreviewStatus_ :
+                descriptor.kind==AssetPreviewKind::Video ? videoPreviewStatus_ : descriptor.statusMessage;
             assetPreviewState_.loading = descriptor.kind == AssetPreviewKind::Image ||
                 descriptor.kind == AssetPreviewKind::Model;
             assetPreviewState_.truncated = false;
             assetPreviewState_.textLines.clear();
+            assetPreviewState_.textPreview.reset();
             assetPreviewState_.imageWidth = 0;
             assetPreviewState_.imageHeight = 0;
             assetPreviewState_.imageSnapshot.reset();
@@ -2902,12 +2892,13 @@ void EditorLayer::request_asset_preview() {
     if (assetPreviewFuture_.valid()) return;
 
     assetPreviewState_.path = selectedAsset_;
-    assetPreviewState_.kind = "Text";
-    assetPreviewState_.title = "Text Resource";
+    assetPreviewState_.kind = std::string(AssetPreviewCatalog::kind_name(descriptor.kind));
+    assetPreviewState_.title = descriptor.previewTitle;
     assetPreviewState_.status = "Loading text preview...";
     assetPreviewState_.loading = true;
     assetPreviewState_.truncated = false;
     assetPreviewState_.textLines.clear();
+    assetPreviewState_.textPreview.reset();
     assetPreviewState_.imageWidth = 0;
     assetPreviewState_.imageHeight = 0;
     assetPreviewState_.imageSnapshot.reset();
@@ -2929,14 +2920,7 @@ void EditorLayer::request_asset_preview() {
     auto scanner = fileSystem_;
     assetPreviewFuture_ = std::async(std::launch::async,
         [generation, sourceStamp, path, scanner = std::move(scanner)]() mutable {
-            AsyncAssetPreview result;
-            result.generation = generation;
-            result.sourceStamp = sourceStamp;
-            result.path = path;
-            bool truncated = false;
-            if (!scanner.read_text_limited(path, 64u * 1024u, result.content, &truncated, &result.error)) return result;
-            result.truncated = truncated;
-            return result;
+            return load_editor_text_preview(scanner, path, generation, sourceStamp);
         });
 }
 
@@ -3117,6 +3101,8 @@ void EditorLayer::request_image_preview(const EditorAssetIndexEntry& indexed) {
 
 void EditorLayer::stop_audio_preview() {
     if (audioPreviewVoice_ != 0 && audioSystem_) audioSystem_->stop(audioPreviewVoice_);
+    if (audioPreviewTrack_ && audioSystem_) audioSystem_->destroy_track(audioPreviewTrack_);
+    audioPreviewTrack_ = 0;
     // Path-only preview loads are editor-owned temporary clips. Manifest
     // backed clips stay cached for the current editor session and are
     // released by clear_audio_asset_bindings or an AssetSystem reconnect.
@@ -3201,11 +3187,13 @@ void EditorLayer::start_audio_preview() {
         if (cached != audioAssetBindings_.end() && audioSystem_->is_loaded(cached->second)) {
             audioAsset = cached->second;
         } else {
-            audioAsset = audioSystem_->load(path, true);
+            // The audition voice owns its streaming flag. Keep the cached
+            // descriptor neutral so streaming can also be switched off live.
+            audioAsset = audioSystem_->load(path, false);
             if (audioAsset != 0) audioAssetBindings_[manifestAssetId] = audioAsset;
         }
     } else {
-        audioAsset = audioSystem_->load(path, true);
+        audioAsset = audioSystem_->load(path, false);
     }
     if (audioAsset == 0) {
         mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
@@ -3213,13 +3201,15 @@ void EditorLayer::start_audio_preview() {
         sync_media_preview_state();
         return;
     }
-    audio::AudioPlayParams params;
-    params.bus = audio::AudioBus::UI;
+    audioPreviewTrack_ = audioSystem_->create_track({"Editor asset audition",static_cast<audio::AudioBus>(assetSettings_.bus),1,false});
+    if (audioPreviewTrack_) audioSystem_->set_track_effects(audioPreviewTrack_,assetSettings_.audio_effects());
+    auto params = assetSettings_.audio_params(audioPreviewTrack_);
     params.loop = mediaPanel_.playback().loop;
-    params.streaming = true;
-    params.volume = static_cast<float>(std::clamp(mediaPanel_.playback().volume, 0.0, 1.0));
+    params.volume = static_cast<float>(mediaPanel_.playback().volume);
     audioPreviewVoice_ = audioSystem_->play(audioAsset, params);
     if (audioPreviewVoice_ == 0) {
+        audioSystem_->destroy_track(audioPreviewTrack_);
+        audioPreviewTrack_ = 0;
         if (manifestAssetId == 0 && audioSystem_->is_loaded(audioAsset)) audioSystem_->unload(audioAsset);
         mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
         lastStatus_ = "Audio preview failed: " + audioSystem_->last_error();
@@ -3231,6 +3221,8 @@ void EditorLayer::start_audio_preview() {
     audioPreviewPath_ = selectedAsset_;
     mediaPanel_.playback().state = ui::MediaPlaybackState::Playing;
     lastStatus_ = "Playing " + selectedAsset_;
+    if (!audioPreviewTrack_ && (assetSettings_.lowPass || assetSettings_.reverb))
+        lastStatus_ += " (audition effects unavailable: no audio track)";
     sync_media_preview_state();
 }
 
@@ -3297,6 +3289,8 @@ void EditorLayer::sync_media_preview_state() {
                     audioSystem_->unload(audioPreviewAsset_);
                 }
                 audioPreviewVoice_ = 0;
+                if (audioPreviewTrack_) audioSystem_->destroy_track(audioPreviewTrack_);
+                audioPreviewTrack_ = 0;
                 audioPreviewAsset_ = 0;
                 audioPreviewAssetId_ = 0;
                 audioPreviewPath_.clear();
@@ -3304,6 +3298,11 @@ void EditorLayer::sync_media_preview_state() {
                 state.playbackState = "stopped";
             }
         }
+    }
+    if (!state.path.empty() && state.path==selectedAsset_ && assetPreviewState_.path==selectedAsset_) {
+        assetPreviewState_.status=state.previewStatus;
+        assetPreviewState_.loading=state.previewLoading;
+        uiModel_.set_asset_preview(assetPreviewState_);
     }
     uiModel_.set_media_state(std::move(state));
 }
@@ -3317,28 +3316,20 @@ void EditorLayer::poll_asset_preview() {
         return;
     }
     assetPreviewState_.path = result.path;
-    assetPreviewState_.kind = "Text";
-    assetPreviewState_.title = "Text Resource";
     assetPreviewState_.loading = false;
     assetPreviewState_.textLines.clear();
     assetPreviewStamp_ = result.sourceStamp;
     if (!result.error.empty()) {
         assetPreviewState_.status = "Preview failed: " + result.error;
         assetPreviewState_.truncated = false;
-    } else {
-        std::size_t cursor = 0;
-        while (cursor <= result.content.size() && assetPreviewState_.textLines.size() < 24) {
-            const auto end = result.content.find('\n', cursor);
-            std::string line = result.content.substr(cursor,
-                end == std::string::npos ? result.content.size() - cursor : end - cursor);
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            assetPreviewState_.textLines.push_back(std::move(line));
-            if (end == std::string::npos) break;
-            cursor = end + 1;
-        }
-        const bool lineLimit = cursor < result.content.size();
-        assetPreviewState_.truncated = result.truncated || lineLimit;
-        assetPreviewState_.status = assetPreviewState_.truncated ? "Text preview (truncated)" : "Text preview";
+    } else if (result.snapshot) {
+        assetPreviewState_.textPreview = result.snapshot;
+        // The legacy retained inspector has a small static text area. Native
+        // source/document viewers share all lines through the immutable snapshot.
+        assetPreviewState_.textLines.assign(result.snapshot->lines.begin(),
+            result.snapshot->lines.begin()+std::min<std::size_t>(24,result.snapshot->lines.size()));
+        assetPreviewState_.truncated = result.snapshot->truncated;
+        assetPreviewState_.status = result.snapshot->format + " preview" + (result.snapshot->truncated ? " (truncated)" : "");
     }
     uiModel_.set_asset_preview(assetPreviewState_);
     request_asset_preview();
@@ -3589,8 +3580,9 @@ void EditorLayer::poll_video_frame() {
     if (result.snapshot && result.snapshot->valid()) {
         videoPreviewSnapshot_ = std::move(result.snapshot);
         videoPreviewStatus_ = "Video frame ready";
-        mediaPanel_.playback().currentTime = std::clamp(videoPreviewSnapshot_->frameTime,
-            0.0, videoPreviewSnapshot_->duration);
+        if(mediaPanel_.playback().state!=ui::MediaPlaybackState::Playing)
+            mediaPanel_.playback().currentTime = std::clamp(videoPreviewSnapshot_->frameTime,
+                0.0, videoPreviewSnapshot_->duration);
     } else {
         videoPreviewStatus_ = result.error.empty() ?
             "Video seek unavailable" : "Video seek unavailable: " + result.error;
@@ -3772,7 +3764,7 @@ void EditorLayer::sync_model_scene_assets(const World& world) {
         return value;
     };
 
-    world.each_object([&](const GameObject& object) {
+    world.each_game_object([&](const GameObject& object) {
         const auto* reference = object.get_component<AssetReferenceComponent>();
         if (!reference || reference->asset_id() == 0 || reference->path().empty()) return;
         const auto* manifest = manifest_for(reference->asset_id());
@@ -4120,6 +4112,7 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         }
         const auto oldPath = normalized_project_path(path);
         const auto newPath = normalized_project_path(target.generic_string());
+        remap_asset_settings(oldPath,newPath);
         FileOperation operation;
         operation.kind = FileOperation::Kind::Rename;
         operation.sourcePath = oldPath;
@@ -4294,7 +4287,7 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
             return false;
         }
     }
-    const auto viewport = editorUi_.viewport_rect();
+    const auto viewport = ui_viewport_rect();
     if (!std::isfinite(point.x) || !std::isfinite(point.y) || viewport.width <= 0.0f ||
         viewport.height <= 0.0f || !viewport.contains(point)) {
         lastStatus_ = "Drop rejected: viewport position is invalid";
@@ -4360,14 +4353,22 @@ void EditorLayer::consume_file_scan() {
     }
 
     fileSystem_ = std::move(result.service);
+    if (!result.complete) {
+        lastStatus_ = "File scan incomplete: " + result.error;
+        assetsDirty_ = false;
+        // Preserve the last complete visible index when it describes this
+        // directory. A first bounded scan may still display its partial list.
+        if (fileScanBaselineReady_ && result.scope == fileScanBaselineScope_) return;
+    }
     projectFiles_ = std::move(result.entries);
     assetIndex_ = std::move(result.index);
-    if (!result.changes.empty()) ++projectFilesRevision_;
-    if (!fileScanBaselineReady_ || result.scope != fileScanBaselineScope_) {
+    if (!result.changes.empty() || !result.complete || !fileScanBaselineReady_ ||
+        result.scope != fileScanBaselineScope_) ++projectFilesRevision_;
+    if (result.complete && (!fileScanBaselineReady_ || result.scope != fileScanBaselineScope_)) {
         fileScanBaselineReady_ = true;
         fileScanBaselineScope_ = result.scope;
         expectedFileChanges_.clear();
-    } else {
+    } else if (result.complete) {
         collect_external_file_changes(result.changes);
     }
     assetEntries_.clear();
@@ -5146,7 +5147,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                                         audioTransportDurationKnown);
     uiModel_.set_audio_transport_preview(std::move(audioTransportPreview));
     { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
-    mediaPanel_.update(dt);
+    mediaPanel_.update(dt * (mediaPanel_.description().kind == ui::MediaKind::Video ? assetSettings_.videoRate : 1.0f));
     // Asset enumeration is asynchronous and on-demand. Never recursively
     // walk the project root from the render/input thread.
     poll_asset_manifest_scan();
@@ -5171,6 +5172,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     sync_model_scene_assets(world);
     poll_model_texture_preview();
     if (modelPreviewSnapshot_ && modelPreviewSnapshot_->valid()) {
+        if (assetSettings_.modelAutoRotate) modelPreviewScene_.orbit({dt * 30.0f,0});
         modelPreviewScene_.advance_animation(dt);
         assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
     }
@@ -5198,7 +5200,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                     : EditorModelPreviewTextureRole::BaseColor;
             const auto renderState = modelPreviewRenderer_.render(
                 renderer, *modelPreviewSnapshot_, *sceneState, modelMaterialSelection_,
-                assetPreviewState_.modelTextureSnapshot, textureRole);
+                assetPreviewState_.modelTextureSnapshot, textureRole, !imguiEnabled_,assetSettings_.modelWireframe);
             assetPreviewState_.modelGpuPreviewReady = renderState.rendererReady;
             assetPreviewState_.modelGpuMaterialApplied = renderState.materialApplied;
             assetPreviewState_.modelGpuMaterialFactorsApplied = renderState.materialFactorsApplied;
@@ -5247,7 +5249,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     std::vector<EditorModelSceneInstance> modelSceneInstances;
     std::vector<assets::AssetId> activeModelAssets;
     std::vector<std::uint64_t> activeModelObjects;
-    world.each_object([&](const GameObject& object) {
+    world.each_game_object([&](const GameObject& object) {
         const auto* reference = object.get_component<AssetReferenceComponent>();
         if (!reference || reference->asset_id() == 0 || !object.active_in_hierarchy()) return;
         const auto record = modelSceneAssets_.find(reference->asset_id());
@@ -5264,7 +5266,7 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     const auto viewport = renderer.editor_viewport().viewport;
     const float aspect = std::max(1.0e-4f, viewport.width / std::max(1.0f, viewport.height));
     editorScene.extract(world, renderer, aspect);
-    modelSceneRenderState_ = modelSceneRenderer_.render(
+    if (!imguiEnabled_) modelSceneRenderState_ = modelSceneRenderer_.render(
         renderer, modelSceneInstances, editorScene.view().viewProjection,
         editorScene.view().transform.position);
     modelSceneRenderer_.prune(renderer, activeModelAssets, activeModelObjects);
@@ -5272,6 +5274,10 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     layout_.selectedObject = uiModel_.selected_object();
     frameTimes_.push_back(std::max(dt, 0.0f) * 1000.0f);
     if (frameTimes_.size() > 120) frameTimes_.erase(frameTimes_.begin());
+    if (imguiEnabled_ && imguiView_) {
+        imguiView_->draw(*this,renderer,world,dt,frame);
+        return;
+    }
     editorUi_.set_display_size(displayWidth_, displayHeight_, effective_editor_ui_scale(displayDpiScale_, layout_.uiScale));
     editorUi_.set_asset_revision(projectFilesRevision_);
     editorUi_.build(uiModel_, projectFiles_, renderer, mediaPanel_, layout_, consoleEntries_,
@@ -5287,452 +5293,6 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
 }
 
 #if defined(SHINKOU_WITH_IMGUI)
-void EditorLayer::draw_toolbar(render::Renderer& renderer, World& world) {
-#if defined(SHINKOU_PLATFORM_WINDOWS)
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_FirstUseEver);
-#else
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 20.0f), ImGuiCond_FirstUseEver);
-#endif
-    ImGui::SetNextWindowSize(ImVec2(displayWidth_, 42.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
-    ImGui::TextColored(ImVec4(0.42f, 0.72f, 1.0f, 1.0f), "SHINKOU");
-    ImGui::SameLine();
-    ImGui::TextDisabled("/ Editor");
-    ImGui::SameLine();
-    const auto button = [this, &world](const char* id, EditorCommand command) {
-        auto* control = dynamic_cast<ui::Button*>(uiComponents_.find(id));
-        if (!control) return;
-        if (ImGui::Button(control->label().data())) { control->click(); dispatch_command(command, {}, world); }
-    };
-    button("play", EditorCommand::Play);
-    ImGui::SameLine();
-    button("pause", EditorCommand::Pause);
-    ImGui::SameLine();
-    button("step", EditorCommand::Step);
-    ImGui::SameLine();
-    ImGui::Separator();
-    ImGui::SameLine();
-    button("save", EditorCommand::SaveLayout);
-    ImGui::SameLine();
-    button("reset", EditorCommand::ResetLayout);
-    ImGui::SameLine();
-    const auto capabilities = renderer.capabilities();
-    ImGui::TextDisabled("Backend %s  ·  Device %s", backend_name(capabilities.api), device_state_name(capabilities.deviceState));
-    ImGui::End();
-}
-
-void EditorLayer::draw_main_menu(render::Renderer& renderer, World& world) {
-    if (!ImGui::BeginMainMenuBar()) return;
-    if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Save Workspace", "Ctrl+S")) dispatch_command(EditorCommand::SaveLayout, {}, world);
-        if (ImGui::MenuItem("Reload Workspace")) dispatch_command(EditorCommand::ReloadLayout, {}, world);
-        if (ImGui::MenuItem("Reset Workspace")) dispatch_command(EditorCommand::ResetLayout, {}, world);
-        ImGui::Separator();
-        if (ImGui::MenuItem("Exit")) push_console("Close the editor window to exit");
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Create")) {
-        if (ImGui::MenuItem("Empty Object")) dispatch_command(EditorCommand::CreateEmpty, {}, world);
-        if (ImGui::MenuItem("3D Object")) dispatch_command(EditorCommand::Create3DObject, {}, world);
-        if (ImGui::MenuItem("2D Object")) dispatch_command(EditorCommand::Create2DObject, {}, world);
-        if (ImGui::MenuItem("UI Object")) dispatch_command(EditorCommand::CreateUiObject, {}, world);
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Build")) {
-        if (ImGui::MenuItem("Build Project", "Ctrl+B")) dispatch_command(EditorCommand::BuildProject, {}, world);
-        if (ImGui::MenuItem("Cancel Build")) dispatch_command(EditorCommand::CancelBuild, {}, world);
-        if (ImGui::MenuItem("Refresh Toolchains")) dispatch_command(EditorCommand::RefreshBuildTools, {}, world);
-        if (ImGui::MenuItem("Import compile_commands.json")) dispatch_command(EditorCommand::ImportCompileCommands, {}, world);
-        if (ImGui::MenuItem("Export compile_commands.json")) dispatch_command(EditorCommand::ExportCompileCommands, {}, world);
-        if (ImGui::MenuItem("Open in Visual Studio")) dispatch_command(EditorCommand::OpenProjectInIde, "visual-studio", world);
-        if (ImGui::MenuItem("Open in Rider")) dispatch_command(EditorCommand::OpenProjectInIde, "rider", world);
-        if (ImGui::MenuItem("Open in VS Code")) dispatch_command(EditorCommand::OpenProjectInIde, "vscode", world);
-        if (ImGui::MenuItem("Save Build Profile")) dispatch_command(EditorCommand::SaveBuildProfile, {}, world);
-        if (ImGui::MenuItem("Reload Build Profile")) dispatch_command(EditorCommand::ReloadBuildProfile, {}, world);
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Window")) {
-        const auto menu = [this](const char* label, const char* id) {
-            bool visible = panel_visible(id);
-            if (ImGui::MenuItem(label, nullptr, &visible)) set_panel_visible(id, visible);
-        };
-        menu("Scene", "viewport"); menu("Game", "game"); menu("Hierarchy", "hierarchy");
-        menu("Inspector", "inspector"); menu("Assets", "assets"); menu("Console", "console");
-        menu("Profiler", "profiler"); menu("Render Graph", "render-graph"); menu("Build", "build"); menu("Settings", "settings");
-        menu("Media Preview", "media"); menu("File Recovery", "recovery");
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Theme")) {
-        for (const auto& id : themeRegistry_.ids()) {
-            bool active = id == layout_.theme;
-            if (ImGui::MenuItem(id.c_str(), nullptr, &active)) set_theme(id);
-        }
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Help")) {
-        ImGui::TextDisabled("F1  Toggle Settings");
-        ImGui::TextDisabled("Ctrl+S  Save workspace");
-        ImGui::TextDisabled("UI input events: %zu handled", uiInputStats_.handled);
-        ImGui::EndMenu();
-    }
-    ImGui::SameLine(ImGui::GetWindowWidth() - 235.0f);
-    ImGui::TextDisabled("%s  |  %.0fx%.0f", layout_.workspace.c_str(), displayWidth_, displayHeight_);
-    (void)renderer;
-    ImGui::EndMainMenuBar();
-}
-
-void EditorLayer::draw_hierarchy(World& world) {
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 64.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(280.0f, displayHeight_ - 194.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Hierarchy", &layout_.showHierarchy);
-    std::array<char, 128> filter{};
-    std::strncpy(filter.data(), uiModel_.object_filter().c_str(), filter.size() - 1);
-    if (ImGui::InputTextWithHint("##hierarchy-filter", "Filter objects...", filter.data(), filter.size())) {
-        uiModel_.set_object_filter(filter.data());
-    uiModel_.sync(world);
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("+")) {
-        auto& object = world.create_object("GameObject");
-        layout_.selectedObject = object.id();
-        uiModel_.select_object(object.id());
-    }
-    ImGui::Separator();
-    for (const auto& object : uiModel_.object_roots()) draw_hierarchy_object(object);
-    ImGui::End();
-}
-
-void EditorLayer::draw_hierarchy_object(const EditorObjectTreeNode& object) {
-    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow;
-    if (object.children.empty()) flags |= ImGuiTreeNodeFlags_Leaf;
-    if (object.selected) flags |= ImGuiTreeNodeFlags_Selected;
-    if (!object.active) flags |= ImGuiTreeNodeFlags_Bullet;
-    const auto expanded = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<std::uintptr_t>(object.id)), flags, "%s", object.name.c_str());
-    if (ImGui::IsItemClicked()) {
-        layout_.selectedObject = object.id;
-        uiModel_.select_object(object.id);
-    }
-    if (expanded) {
-        for (const auto& child : object.children) draw_hierarchy_object(child);
-        ImGui::TreePop();
-    }
-}
-
-void EditorLayer::draw_inspector(World& world) {
-    ImGui::SetNextWindowPos(ImVec2(displayWidth_ - 300.0f, 64.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300.0f, displayHeight_ - 194.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Inspector", &layout_.showInspector);
-    auto* object = world.find_object(layout_.selectedObject);
-    if (!object) {
-        ImGui::TextDisabled("Select an object to inspect it.");
-        ImGui::End();
-        return;
-    }
-    std::array<char, 256> name{};
-    std::strncpy(name.data(), std::string(object->name()).c_str(), name.size() - 1);
-    if (ImGui::InputText("Name", name.data(), name.size())) object->set_name(name.data());
-    bool active = object->active_self();
-    if (ImGui::Checkbox("Active", &active)) object->set_active(active);
-    ImGui::Text("Object ID: %llu", static_cast<unsigned long long>(object->id()));
-    ImGui::Separator();
-    object->each_component([](Component& component) {
-        const std::string label = std::string(component.registered_type_name()) + "##component" + std::to_string(component.id());
-        if (ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-            bool enabled = component.enabled();
-            if (ImGui::Checkbox("Enabled", &enabled)) component.set_enabled(enabled);
-            for (const auto& property : component.properties()) if (!has_flag(property.flags, PropertyFlags::Hidden)) draw_property(property);
-        }
-    });
-    if (ImGui::Button("Add Component")) ImGui::OpenPopup("add-component");
-    if (ImGui::BeginPopup("add-component")) {
-        for (const auto& type : world.component_types()) if (ImGui::MenuItem(type.c_str())) object->add_component(type);
-        ImGui::EndPopup();
-    }
-    ImGui::End();
-}
-
-void EditorLayer::draw_viewport(render::Renderer& renderer) {
-    ImGui::SetNextWindowPos(ImVec2(280.0f, 64.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(std::max(displayWidth_ - 580.0f, 360.0f), displayHeight_ - 194.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Viewport", &layout_.showViewport);
-    const auto size = ImGui::GetContentRegionAvail();
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Scene");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%ux%u  ·  %s", static_cast<unsigned>(std::max(size.x, 0.0f)),
-                       static_cast<unsigned>(std::max(size.y, 0.0f)), uiModel_.playing() ? "Play mode" : "Edit mode");
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 130.0f);
-    ImGui::SmallButton("Perspective");
-    ImGui::SameLine();
-    ImGui::SmallButton("Grid");
-    ImGui::Separator();
-    const auto surfaceSize = ImGui::GetContentRegionAvail();
-    ImGui::BeginChild("viewport-surface", surfaceSize, true, ImGuiWindowFlags_NoScrollbar);
-    const auto drawList = ImGui::GetWindowDrawList();
-    const auto origin = ImGui::GetCursorScreenPos();
-    const auto background = parse_hex_color(layout_.backgroundColor, {0.055f, 0.067f, 0.09f, 1.0f});
-    const auto to_u8 = [](float value) { return static_cast<int>(std::round(std::clamp(value, 0.0f, 1.0f) * 255.0f)); };
-    if (styleConfig_.background.mode == ui::BackgroundMode::Gradient) {
-        constexpr int strips = 32;
-        for (int index = 0; index < strips; ++index) {
-            const float t = static_cast<float>(index) / static_cast<float>(strips - 1);
-            const auto mix = [t](float first, float second) { return first + (second - first) * t; };
-            drawList->AddRectFilled(ImVec2(origin.x, origin.y + surfaceSize.y * t),
-                ImVec2(origin.x + surfaceSize.x, origin.y + surfaceSize.y * (t + 1.0f / strips)),
-                IM_COL32(to_u8(mix(styleConfig_.background.primary.r, styleConfig_.background.secondary.r)),
-                         to_u8(mix(styleConfig_.background.primary.g, styleConfig_.background.secondary.g)),
-                         to_u8(mix(styleConfig_.background.primary.b, styleConfig_.background.secondary.b)), 255));
-        }
-    } else {
-        drawList->AddRectFilled(origin, ImVec2(origin.x + surfaceSize.x, origin.y + surfaceSize.y),
-                                IM_COL32(to_u8(background.r), to_u8(background.g), to_u8(background.b), 255));
-    }
-    const auto gridColor = IM_COL32(255, 255, 255, 16);
-    const float grid = std::max(16.0f, 24.0f * layout_.uiScale);
-    for (float x = origin.x; x < origin.x + surfaceSize.x; x += grid) drawList->AddLine(ImVec2(x, origin.y), ImVec2(x, origin.y + surfaceSize.y), gridColor);
-    for (float y = origin.y; y < origin.y + surfaceSize.y; y += grid) drawList->AddLine(ImVec2(origin.x, y), ImVec2(origin.x + surfaceSize.x, y), gridColor);
-    drawList->AddLine(ImVec2(origin.x + surfaceSize.x * 0.5f, origin.y), ImVec2(origin.x + surfaceSize.x * 0.5f, origin.y + surfaceSize.y), IM_COL32(100, 180, 255, 60));
-    drawList->AddLine(ImVec2(origin.x, origin.y + surfaceSize.y * 0.5f), ImVec2(origin.x + surfaceSize.x, origin.y + surfaceSize.y * 0.5f), IM_COL32(100, 180, 255, 60));
-    drawList->AddText(ImVec2(origin.x + 16.0f, origin.y + 16.0f), IM_COL32(200, 210, 225, 220), "Render target preview");
-    drawList->AddText(ImVec2(origin.x + 16.0f, origin.y + 36.0f), IM_COL32(145, 160, 180, 200), "Drag panels from their title bars to customize this workspace");
-    ImGui::Dummy(surfaceSize);
-    ImGui::EndChild();
-    (void)renderer;
-    ImGui::End();
-}
-
-void EditorLayer::draw_game_view(render::Renderer& renderer) {
-    ImGui::SetNextWindowPos(ImVec2(320.0f, 110.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(std::max(displayWidth_ - 640.0f, 360.0f), displayHeight_ - 260.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Game", &layout_.showGame);
-    ImGui::Text("Game view");
-    ImGui::SameLine();
-    ImGui::TextDisabled(uiModel_.playing() ? (uiModel_.paused() ? "Paused" : "Playing") : "Edit mode");
-    ImGui::Separator();
-    const auto size = ImGui::GetContentRegionAvail();
-    ImGui::BeginChild("game-surface", size, true, ImGuiWindowFlags_NoScrollbar);
-    const auto drawList = ImGui::GetWindowDrawList();
-    const auto origin = ImGui::GetCursorScreenPos();
-    drawList->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(12, 16, 20, 255));
-    drawList->AddText(ImVec2(origin.x + 16.0f, origin.y + 16.0f), IM_COL32(160, 174, 190, 255), "Runtime game output");
-    ImGui::Dummy(size);
-    ImGui::EndChild();
-    (void)renderer;
-    ImGui::End();
-}
-
-void EditorLayer::draw_assets() {
-    ImGui::SetNextWindowPos(ImVec2(0.0f, displayHeight_ - 130.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(displayWidth_ * 0.42f, 130.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Asset Browser", &layout_.showAssets);
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Project");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", fileSystem_.root().string().c_str());
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 78.0f);
-    if (ImGui::SmallButton("Refresh")) assetsDirty_ = true;
-    std::array<char, 256> filter{};
-    std::strncpy(filter.data(), assetFilter_.c_str(), filter.size() - 1);
-    if (ImGui::InputTextWithHint("##asset-filter", "Filter assets...", filter.data(), filter.size())) assetFilter_ = filter.data();
-    if (assetsDirty_) refresh_asset_cache();
-    ImGui::Separator();
-    ImGui::BeginChild("asset-list", ImVec2(0.0f, 0.0f), false);
-    for (const auto& entry : projectFiles_) {
-        const auto path = entry.relativePath.generic_string();
-        if (!assetFilter_.empty() && path.find(assetFilter_) == std::string::npos) continue;
-        const std::string label = entry.directory ? "▸  " + path : "    " + path;
-        const bool selected = selectedAsset_ == path;
-        if (ImGui::Selectable(label.c_str(), selected)) selectedAsset_ = path;
-        if (selected) {
-            ImGui::SameLine();
-            ImGui::TextDisabled(entry.directory ? "folder" : "%llu B", static_cast<unsigned long long>(entry.size));
-        }
-    }
-    ImGui::EndChild();
-    ImGui::End();
-}
-
-void EditorLayer::draw_console(const render::Renderer& renderer) {
-    ImGui::SetNextWindowPos(ImVec2(displayWidth_ * 0.42f, displayHeight_ - 130.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(displayWidth_ * 0.38f, 130.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Console", &layout_.showConsole);
-    if (ImGui::SmallButton("Clear")) consoleEntries_.clear();
-    ImGui::Separator();
-    for (const auto& entry : consoleEntries_) ImGui::TextUnformatted(entry.c_str());
-    if (!renderer.last_error().empty()) ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%s", renderer.last_error().c_str());
-    const auto stats = renderer.stats();
-    for (const auto& diagnostic : stats.validationDiagnostics) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "%s", diagnostic.c_str());
-    ImGui::End();
-}
-
-void EditorLayer::draw_profiler(const render::Renderer& renderer) {
-    ImGui::SetNextWindowPos(ImVec2(280.0f, 64.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(520.0f, 260.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Profiler", &layout_.showProfiler);
-    const auto stats = renderer.stats();
-    ImGui::Text("Frame time: %.2f ms", frameTimes_.empty() ? 0.0f : frameTimes_.back());
-    if (!frameTimes_.empty()) ImGui::PlotLines("##frame-time", frameTimes_.data(), static_cast<int>(frameTimes_.size()), 0, nullptr, 0.0f, 50.0f, ImVec2(-1.0f, 80.0f));
-    ImGui::Text("Frames: %llu | Draws: %llu | Passes: %llu", static_cast<unsigned long long>(stats.frames),
-        static_cast<unsigned long long>(stats.drawCalls), static_cast<unsigned long long>(stats.passes));
-    ImGui::Text("Resources: +%llu / -%llu | Barriers: %llu", static_cast<unsigned long long>(stats.resourceCreates),
-        static_cast<unsigned long long>(stats.resourceDestroys), static_cast<unsigned long long>(stats.barriers));
-    ImGui::End();
-}
-
-void EditorLayer::draw_render_graph(render::Renderer& renderer) {
-    ImGui::SetNextWindowPos(ImVec2(280.0f, 330.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(520.0f, 260.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Render Graph", &layout_.showRenderGraph);
-    const auto& graph = renderer.graph();
-    ImGui::Text("Passes: %zu | Resources: %zu | Transitions: %zu", graph.passes().size(), graph.resources().size(), graph.transitions().size());
-    for (const auto& pass : graph.passes()) ImGui::BulletText("%s", pass.name.c_str());
-    const auto& diagnostics = graph.diagnostics();
-    if (diagnostics.executionFailed) ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%s", diagnostics.lastError.c_str());
-    ImGui::End();
-}
-
-void EditorLayer::draw_settings() {
-    ImGui::SetNextWindowPos(ImVec2(420.0f, 160.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(480.0f, 360.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Editor Settings", &layout_.showSettings);
-    ImGui::TextDisabled("Editor configuration is persisted as layout + style files");
-    if (!ImGui::BeginTabBar("settings-tabs")) { ImGui::End(); return; }
-    if (ImGui::BeginTabItem("Appearance")) {
-        ImGui::Text("Theme");
-        if (ImGui::BeginCombo("##theme", layout_.theme.c_str())) {
-            for (const auto& id : themeRegistry_.ids()) {
-                const bool selected = id == layout_.theme;
-                if (ImGui::Selectable(id.c_str(), selected)) set_theme(id);
-                if (selected) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-        float uiScale = styleConfig_.uiScale;
-        if (ImGui::SliderFloat("UI scale", &uiScale, 0.5f, 3.0f, "%.2fx")) {
-            styleConfig_.uiScale = uiScale;
-            sync_style_to_layout();
-            apply_theme();
-        }
-        float fontSize = styleConfig_.fontSize;
-        if (ImGui::SliderFloat("Font size", &fontSize, 8.0f, 32.0f, "%.0f px")) {
-            styleConfig_.fontSize = fontSize;
-            sync_style_to_layout();
-            apply_theme();
-        }
-        std::array<char, 512> fontPath{};
-        std::strncpy(fontPath.data(), styleConfig_.fontPath.c_str(), fontPath.size() - 1);
-        if (ImGui::InputTextWithHint("Font file", "Fonts/Editor.ttf", fontPath.data(), fontPath.size())) styleConfig_.fontPath = fontPath.data();
-        bool compact = styleConfig_.compactControls;
-        if (ImGui::Checkbox("Compact controls", &compact)) { styleConfig_.compactControls = compact; sync_style_to_layout(); apply_theme(); }
-        bool reduceMotion = styleConfig_.reduceMotion;
-        if (ImGui::Checkbox("Reduce motion", &reduceMotion)) styleConfig_.reduceMotion = reduceMotion;
-        ImGui::SeparatorText("Background");
-        int mode = static_cast<int>(styleConfig_.background.mode);
-        const char* modes[] = {"Solid", "Gradient", "Image"};
-        if (ImGui::Combo("Mode", &mode, modes, 3)) styleConfig_.background.mode = static_cast<ui::BackgroundMode>(mode);
-        float primary[4]{styleConfig_.background.primary.r, styleConfig_.background.primary.g, styleConfig_.background.primary.b, styleConfig_.background.primary.a};
-        if (ImGui::ColorEdit4("Primary", primary, ImGuiColorEditFlags_NoInputs)) {
-            styleConfig_.background.primary = {primary[0], primary[1], primary[2], primary[3]};
-            sync_style_to_layout();
-        }
-        float secondary[4]{styleConfig_.background.secondary.r, styleConfig_.background.secondary.g, styleConfig_.background.secondary.b, styleConfig_.background.secondary.a};
-        if (ImGui::ColorEdit4("Secondary", secondary, ImGuiColorEditFlags_NoInputs)) styleConfig_.background.secondary = {secondary[0], secondary[1], secondary[2], secondary[3]};
-        std::array<char, 512> backgroundPath{};
-        std::strncpy(backgroundPath.data(), styleConfig_.background.imagePath.c_str(), backgroundPath.size() - 1);
-        if (ImGui::InputText("Background image", backgroundPath.data(), backgroundPath.size())) {
-            styleConfig_.background.imagePath = backgroundPath.data();
-            sync_style_to_layout();
-        }
-        if (ImGui::Button("Apply appearance")) { sync_style_to_layout(); apply_theme(); }
-        ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Workspace")) {
-        ImGui::Text("Workspace");
-        std::array<char, 128> workspace{};
-        std::strncpy(workspace.data(), layout_.workspace.c_str(), workspace.size() - 1);
-        if (ImGui::InputText("Name", workspace.data(), workspace.size())) layout_.workspace = workspace.data();
-        ImGui::Text("Layout file: %s", layout_.layoutFile.c_str());
-        ImGui::Text("Dock file: %s", layout_.dockLayoutFile.c_str());
-        ImGui::Text("Style file: %s", layout_.styleFile.c_str());
-        bool allowDocking = layout_.allowDocking;
-        if (ImGui::Checkbox("Allow docking", &allowDocking)) layout_.allowDocking = allowDocking;
-        bool showToolbar = layout_.showToolbar;
-        if (ImGui::Checkbox("Show toolbar", &showToolbar)) layout_.showToolbar = showToolbar;
-        bool showStatusBar = layout_.showStatusBar;
-        if (ImGui::Checkbox("Show status bar", &showStatusBar)) layout_.showStatusBar = showStatusBar;
-        ImGui::SeparatorText("Panels");
-        const char* panelNames[] = {"Hierarchy", "Inspector", "Scene", "Game", "Assets", "Console", "Profiler", "Render Graph", "Build"};
-        const char* panelIds[] = {"hierarchy", "inspector", "viewport", "game", "assets", "console", "profiler", "render-graph", "build"};
-        for (int index = 0; index < 9; ++index) {
-            bool visible = panel_visible(panelIds[index]);
-            if (ImGui::Checkbox(panelNames[index], &visible)) set_panel_visible(panelIds[index], visible);
-            if ((index & 1) == 0) ImGui::SameLine(180.0f);
-        }
-        ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Files")) {
-        ImGui::TextWrapped("The editor reads and writes only inside the configured project root.");
-        std::array<char, 512> root{};
-        std::strncpy(root.data(), layout_.projectRoot.c_str(), root.size() - 1);
-        if (ImGui::InputText("Project root", root.data(), root.size())) set_project_root(root.data());
-        ImGui::Text("Resolved root: %s", fileSystem_.root().string().c_str());
-        ImGui::TextDisabled("Changes are polled and style files are hot-reloaded at frame boundaries.");
-        ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
-    ImGui::Separator();
-    if (ImGui::Button("Save all configuration")) save_layout();
-    ImGui::SameLine();
-    if (ImGui::Button("Reset workspace")) reset_layout();
-    ImGui::End();
-}
-
-void EditorLayer::draw_media() {
-    ImGui::SetNextWindowSize(ImVec2(440.0f, 300.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Media Preview", &layout_.showMedia);
-    auto& description = mediaPanel_.description();
-    auto& playback = mediaPanel_.playback();
-    std::array<char, 512> uri{};
-    std::strncpy(uri.data(), description.resource.uri.c_str(), uri.size() - 1);
-    if (ImGui::InputTextWithHint("Source URI", "asset://...", uri.data(), uri.size())) description.resource.uri = uri.data();
-    ImGui::TextDisabled("Backend-neutral media seam: decoder and GPU texture adapters attach here.");
-    int kind = static_cast<int>(description.kind);
-    const char* kinds[] = {"Image", "Video", "Audio"};
-    if (ImGui::Combo("Type", &kind, kinds, 3)) description.kind = static_cast<ui::MediaKind>(kind);
-    ImGui::Separator();
-    if (description.kind == ui::MediaKind::Image) {
-        ImGui::BeginChild("image-preview", ImVec2(0.0f, 120.0f), true);
-        ImGui::Text("Image surface");
-        ImGui::TextDisabled("%s", description.resource.uri.c_str());
-        ImGui::EndChild();
-    } else {
-        if (ImGui::Button(playback.state == ui::MediaPlaybackState::Playing ? "Pause" : "Play"))
-            mediaPanel_.apply(playback.state == ui::MediaPlaybackState::Playing ? ui::MediaCommand::pause() : ui::MediaCommand::play());
-        ImGui::SameLine();
-        if (ImGui::Button("Stop")) mediaPanel_.apply(ui::MediaCommand::stop());
-        ImGui::SameLine();
-        bool loop = playback.loop;
-        if (ImGui::Checkbox("Loop", &loop)) {
-            mediaPanel_.apply(ui::MediaCommand::set_loop(loop));
-            if (audioSystem_ && audioPreviewVoice_ != 0) audioSystem_->set_loop(audioPreviewVoice_, loop);
-            sync_media_preview_state();
-        }
-        if (description.showTimeline) {
-            float duration = static_cast<float>(playback.duration);
-            if (duration > 0.0f) {
-                float current = static_cast<float>(playback.currentTime);
-                if (ImGui::SliderFloat("Timeline", &current, 0.0f, duration, "%.2f s")) mediaPanel_.apply(ui::MediaCommand::seek(current));
-            } else ImGui::TextDisabled("Timeline unavailable until the decoder reports duration");
-        }
-        if (description.showVolume) {
-            float volume = static_cast<float>(playback.volume);
-            if (ImGui::SliderFloat("Volume", &volume, 0.0f, 1.0f, "%.0f%%")) mediaPanel_.apply(ui::MediaCommand::set_volume(volume));
-        }
-        ImGui::TextDisabled("State: %s  |  URI: %s", ui::media_playback_state_name(playback.state), description.resource.uri.c_str());
-    }
-    ImGui::End();
-}
-
 void EditorLayer::draw_registered_panels(render::Renderer& renderer, World& world, FrameIndex frame, Seconds dt) {
     EditorPanelContext context{renderer, world, uiModel_, layout_, frame, dt};
     for (auto& panel : panels_) {
@@ -5748,57 +5308,15 @@ void EditorLayer::draw_registered_panels(render::Renderer& renderer, World& worl
     }
 }
 
-void EditorLayer::draw_status_bar(const render::Renderer& renderer) {
-    ImGui::SetNextWindowPos(ImVec2(0.0f, displayHeight_ - 28.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(displayWidth_, 28.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Status", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
-    const auto stats = renderer.stats();
-    ImGui::Text("%s | %s | Frame %llu | %s", layout_.workspace.c_str(), backend_name(renderer.capabilities().api),
-        static_cast<unsigned long long>(stats.frames), lastStatus_.empty() ? "Ready" : lastStatus_.c_str());
-    ImGui::End();
-}
-
 void EditorLayer::apply_theme() {
-    if (!imguiEnabled_ || !ImGui::GetCurrentContext()) return;
-    sync_layout_to_style();
-    ui::ImGuiApplyOptions options;
-    options.projectRoot = fileSystem_.root();
-    options.applyFont = false;
-    const auto result = ui::ImGuiAdapter::apply(themeRegistry_, styleConfig_, options);
-    const float requestedScale = result.scale;
-    if (std::abs(requestedScale - appliedUiScale_) > 0.001f) {
-        ImGui::GetStyle().ScaleAllSizes(requestedScale / appliedUiScale_);
-        appliedUiScale_ = requestedScale;
-    }
-    auto& io = ImGui::GetIO();
-    io.FontGlobalScale = requestedScale;
-    if (io.Fonts && (styleConfig_.fontPath != appliedFontPath_ || std::abs(styleConfig_.fontSize - appliedFontSize_) > 0.01f)) {
-        io.Fonts->Clear();
-        bool loaded = false;
-        std::vector<std::filesystem::path> fontCandidates;
-        const auto resolvedFont = ui::ImGuiAdapter::resolve_font_path(styleConfig_, options);
-        const auto resolvedFallback = ui::ImGuiAdapter::resolve_fallback_font_path(styleConfig_, options);
-        if (!resolvedFont.empty()) fontCandidates.emplace_back(resolvedFont);
-        if (!resolvedFallback.empty() && resolvedFallback != resolvedFont)
-            fontCandidates.emplace_back(resolvedFallback);
-        for (auto fontPath : fontCandidates) {
-            if (std::filesystem::exists(fontPath)) {
-                loaded = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), styleConfig_.fontSize) != nullptr;
-                if (loaded) break;
-            }
-        }
-        if (!loaded) io.Fonts->AddFontDefault();
-        io.Fonts->Build();
-        appliedFontPath_ = styleConfig_.fontPath;
-        appliedFontSize_ = styleConfig_.fontSize;
-        push_console(loaded ? "Custom editor font loaded" : "Using default editor font");
-    }
+    // EditorImGuiView applies library themes before NewFrame.
 }
 #endif
 
 void EditorLayer::shutdown(render::Renderer* renderer) {
     if (const char* path = std::getenv("SHINKOU_UI_METRICS_PATH")) ui::ui_performance().write_csv(path);
     if (!initialized_) return;
+    finish_inspector_edit();
     if (fileScanFuture_.valid()) fileScanFuture_.wait();
     if (assetManifestFuture_.valid()) {
         assetManifestFuture_.wait();
@@ -5853,6 +5371,10 @@ void EditorLayer::shutdown(render::Renderer* renderer) {
     save_layout();
     uninstall_native_menu();
     editorUi_.shutdown();
+    if (imguiView_) {
+        imguiView_->shutdown(renderer);
+        imguiView_.reset();
+    }
 #if defined(SHINKOU_WITH_IMGUI)
     if (imguiPlatformInitialized_) {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
@@ -5882,14 +5404,32 @@ std::size_t EditorLayer::model_scene_loaded_asset_count() const noexcept {
 }
 
 std::size_t EditorLayer::ui_command_count() const noexcept {
+    if (imguiView_) return imguiView_->draw_commands();
     return editorUi_.render_list().commands().size();
 }
 
 std::size_t EditorLayer::ui_text_command_count() const noexcept {
+    if (imguiView_) return imguiView_->draw_commands();
     return static_cast<std::size_t>(std::count_if(editorUi_.render_list().commands().begin(),
         editorUi_.render_list().commands().end(), [](const ui::UiDrawCommand& command) {
             return command.type == ui::DrawCommandType::Text;
         }));
+}
+
+std::size_t EditorLayer::ui_visible_asset_file_count() const noexcept {
+    return imguiView_ ? imguiView_->visible_assets() : editorUi_.visible_asset_count();
+}
+DockRect EditorLayer::ui_viewport_rect() const noexcept {
+    if (!imguiView_) return editorUi_.viewport_rect();
+    const float scale=effective_editor_ui_scale(displayDpiScale_,layout_.uiScale);
+    const auto r=imguiView_->viewport();
+    return {r.x/scale,r.y/scale,r.width/scale,r.height/scale};
+}
+float EditorLayer::ui_dpi_scale() const noexcept {
+    return imguiView_ ? effective_editor_ui_scale(displayDpiScale_,layout_.uiScale) : editorUi_.dpi_scale();
+}
+const std::unordered_map<std::string,ui::Rect>& EditorLayer::ui_interaction_regions() const noexcept {
+    return imguiView_ ? imguiView_->regions() : editorUi_.interaction_regions();
 }
 
 } // namespace shinkou::editor

@@ -110,10 +110,58 @@ void Component::notify_active_state(bool active) noexcept {
 }
 
 void components::TransformComponent::update_world(const math::Mat4& parentWorld) noexcept {
-    if (dirty_) {
+    const auto changed=[](math::Vec3 a,math::Vec3 b){return a.x!=b.x || a.y!=b.y || a.z!=b.z;};
+    const auto& a=local.rotation;const auto& b=evaluatedLocal_.rotation;
+    if (changed(local.position,evaluatedLocal_.position) || changed(local.scale,evaluatedLocal_.scale) ||
+        a.x!=b.x || a.y!=b.y || a.z!=b.z || a.w!=b.w) dirty_=true;
+    if (dirty_ || !std::equal(parentWorld.m,parentWorld.m+16,parentWorld_.m)) {
+        if (!set_local_transform(local)) local=evaluatedLocal_;
         worldMatrix_ = math::Multiply(parentWorld, math::TransformMatrix(local));
+        parentWorld_=parentWorld;
+        evaluatedLocal_=local;
         dirty_ = false;
     }
+}
+
+namespace {
+bool finite_transform_vector(math::Vec3 value) {return math::IsFinite(value.x) && math::IsFinite(value.y) && math::IsFinite(value.z);}
+}
+bool components::TransformComponent::set_position(math::Vec3 value) noexcept {
+    if (!finite_transform_vector(value)) return false;
+    local.position=value;mark_dirty();return true;
+}
+bool components::TransformComponent::set_rotation(math::Quat value) noexcept {
+    if (!math::IsFinite(value.x) || !math::IsFinite(value.y) || !math::IsFinite(value.z) || !math::IsFinite(value.w) ||
+        !math::IsFinite(math::LengthSquared(value)) || math::LengthSquared(value)<=math::Epsilon*math::Epsilon) return false;
+    local.rotation=math::Normalize(value);mark_dirty();return true;
+}
+bool components::TransformComponent::set_scale(math::Vec3 value) noexcept {
+    if (!finite_transform_vector(value)) return false;
+    local.scale=value;mark_dirty();return true; // Negative scale intentionally supports mirroring.
+}
+bool components::TransformComponent::set_local_transform(const math::Transform& value) noexcept {
+    if (!finite_transform_vector(value.position) || !finite_transform_vector(value.scale) ||
+        !math::IsFinite(value.rotation.x) || !math::IsFinite(value.rotation.y) || !math::IsFinite(value.rotation.z) ||
+        !math::IsFinite(value.rotation.w) || !math::IsFinite(math::LengthSquared(value.rotation)) ||
+        math::LengthSquared(value.rotation)<=math::Epsilon*math::Epsilon) return false;
+    local=value;local.rotation=math::Normalize(value.rotation);mark_dirty();return true;
+}
+math::Vec3 components::TransformComponent::euler_degrees() const noexcept {
+    const auto q=math::Normalize(local.rotation);
+    const float direct=std::abs(q.x-editorRotation_.x)+std::abs(q.y-editorRotation_.y)+std::abs(q.z-editorRotation_.z)+std::abs(q.w-editorRotation_.w);
+    const float opposite=std::abs(q.x+editorRotation_.x)+std::abs(q.y+editorRotation_.y)+std::abs(q.z+editorRotation_.z)+std::abs(q.w+editorRotation_.w);
+    if (std::min(direct,opposite)>1e-6f) {
+        const auto r=math::ToEulerXYZ(q);
+        editorEuler_={math::Degrees(r.x),math::Degrees(r.y),math::Degrees(r.z)};editorRotation_=q;
+    }
+    return editorEuler_;
+}
+bool components::TransformComponent::set_euler_degrees(math::Vec3 value) noexcept {
+    if (!finite_transform_vector(value)) return false;
+    const auto q=math::FromEulerXYZ({math::Radians(std::remainder(value.x,360.0f)),
+        math::Radians(std::remainder(value.y,360.0f)),math::Radians(std::remainder(value.z,360.0f))});
+    if (!set_rotation(q)) return false;
+    editorRotation_=local.rotation;editorEuler_=value;return true;
 }
 
 bool components::TagComponent::has(std::string_view tag) const noexcept {

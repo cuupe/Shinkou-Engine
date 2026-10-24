@@ -5,6 +5,8 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -112,6 +114,7 @@ bool parse_size(const std::wstring& value, Size& size) {
 
 bool resize_client(HWND window, Size requested) {
     if (requested.width <= 0 || requested.height <= 0) return false;
+    if (IsZoomed(window)) ShowWindow(window,SW_RESTORE);
     const auto style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE));
     const auto exStyle = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE));
     RECT frame{0, 0, requested.width, requested.height};
@@ -247,6 +250,8 @@ int run_capture(int argc, wchar_t** argv) {
     const auto metricsPath = std::filesystem::path(output).concat(".timings.csv");
     std::optional<Size> requestedClientSize;
     bool forceGdi = false;
+    bool nativeKeyboard = false;
+    bool queuedKeyboard = false;
     bool requireGpu = false;
     std::vector<std::wstring> childArguments;
     for (int index = firstArgument; index < argc; ++index) {
@@ -254,6 +259,10 @@ int run_capture(int argc, wchar_t** argv) {
             scriptPath = argv[++index];
         } else if (std::wstring(argv[index]) == L"--force-gdi") {
             forceGdi = true;
+        } else if (std::wstring(argv[index]) == L"--native-keyboard") {
+            nativeKeyboard = true;
+        } else if (std::wstring(argv[index]) == L"--queued-keyboard") {
+            queuedKeyboard = true;
         } else if (std::wstring(argv[index]) == L"--require-gpu") {
             requireGpu = true;
         } else if (std::wstring(argv[index]) == L"--client-size" && index + 1 < argc) {
@@ -284,8 +293,12 @@ int run_capture(int argc, wchar_t** argv) {
     const auto kindPath = std::filesystem::path(output).concat(".kind");
     DeleteFileW(kindPath.wstring().c_str());
     if (!forceGdi) SetEnvironmentVariableW(L"SHINKOU_UI_CAPTURE_PATH", output.wstring().c_str());
+    const auto captureTarget=std::filesystem::path(output).concat(".target");
+    {std::ofstream file(captureTarget);file<<0;}
+    SetEnvironmentVariableW(L"SHINKOU_UI_CAPTURE_TARGET_PATH",captureTarget.wstring().c_str());
 
     if (!scriptPath.empty()) SetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT", snapshotPath.wstring().c_str());
+    if (!scriptPath.empty() && queuedKeyboard) SetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE",L"1");
     SetEnvironmentVariableW(L"SHINKOU_UI_METRICS_PATH",metricsPath.wstring().c_str());
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
@@ -293,13 +306,15 @@ int run_capture(int argc, wchar_t** argv) {
     const auto workingDirectory = executable.parent_path().empty() ? std::filesystem::current_path() : executable.parent_path();
     if (!CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE, 0, nullptr,
                         workingDirectory.wstring().c_str(), &startup, &process)) {
+        SetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE",nullptr);
         if (!forceGdi) SetEnvironmentVariableW(L"SHINKOU_UI_CAPTURE_PATH", nullptr);
         std::wcerr << L"CreateProcess failed: " << GetLastError() << L"\n";
         return 3;
     }
     if (!forceGdi) SetEnvironmentVariableW(L"SHINKOU_UI_CAPTURE_PATH", nullptr);
-
+    SetEnvironmentVariableW(L"SHINKOU_UI_CAPTURE_TARGET_PATH",nullptr);
     SetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT",nullptr);
+    SetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE",nullptr);
     SetEnvironmentVariableW(L"SHINKOU_UI_METRICS_PATH",nullptr);
     HWND window = wait_for_process_window(process.dwProcessId, waitMs);
     if (!window) {
@@ -350,7 +365,7 @@ int run_capture(int argc, wchar_t** argv) {
             if (read_bitmap_dimensions(output,surfaceWidth,surfaceHeight)) {engineCapture=true;break;}
         }
     }
-    bool interactionsPassed = scriptPath.empty() || run_interaction_script(window,scriptPath,output,snapshotPath);
+    bool interactionsPassed = scriptPath.empty() || run_interaction_script(window,scriptPath,output,snapshotPath,nativeKeyboard,queuedKeyboard);
     if (!scriptPath.empty()) read_bitmap_dimensions(output,surfaceWidth,surfaceHeight);
     DwmFlush();
     std::string mode;

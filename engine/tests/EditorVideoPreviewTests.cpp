@@ -130,6 +130,20 @@ int main() {
     assert(seekResult.generation == 17 && seekResult.sourceStamp == 21);
 #if defined(_WIN32)
     assert(seekResult.snapshot && seekResult.snapshot->valid() && seekResult.snapshot->frameTime >= 0.0);
+    // Same source stamp, different decoded frame: the GPU image cache must refresh.
+    assert(seekResult.snapshot->firstFrame->revision!=result.snapshot->firstFrame->revision);
+    assert(seekResult.snapshot->firstFrame->bgraPremultiplied!=result.snapshot->firstFrame->bgraPremultiplied);
+    std::filesystem::copy_file(std::filesystem::path(SHINKOU_EDITOR_TEST_FIXTURE_DIR)/"preview-h264.mp4",root/"assets/preview.mp4");
+    const auto mp4=shinkou::editor::load_editor_video_preview(files,"assets/preview.mp4",1,1,64);
+    if(!mp4.snapshot) std::cerr<<mp4.error<<'\n';
+    assert(mp4.snapshot && mp4.snapshot->valid() && mp4.snapshot->width==64 && mp4.snapshot->height==48);
+    assert(mp4.snapshot->audioStreamCount==0 && mp4.snapshot->frameRate==4);
+    const auto mp4Seek=shinkou::editor::load_editor_video_frame(files,"assets/preview.mp4",2,1,0.75,64);
+    assert(mp4Seek.snapshot && mp4Seek.snapshot->valid() && mp4Seek.snapshot->frameTime>=0.74);
+    assert(mp4Seek.snapshot->firstFrame->revision!=mp4.snapshot->firstFrame->revision);
+    assert(mp4Seek.snapshot->firstFrame->bgraPremultiplied!=mp4.snapshot->firstFrame->bgraPremultiplied);
+    const auto mp4End=shinkou::editor::load_editor_video_frame(files,"assets/preview.mp4",3,1,mp4.snapshot->duration,64);
+    assert(mp4End.snapshot && mp4End.snapshot->valid());
 #else
     assert(!seekResult.snapshot && seekResult.error.find("unavailable") != std::string::npos);
 #endif

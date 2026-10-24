@@ -111,12 +111,7 @@ struct GpuDrawArguments {
     std::uint32_t firstInstance{0};
 };
 
-struct GpuLightData {
-    float position[4]{};
-    float direction[4]{};
-    float colorIntensity[4]{};
-    float parameters[4]{};
-};
+
 
 std::uint64_t gpu_batch_key(const MeshRenderItem& mesh) {
     std::uint64_t key = 1469598103934665603ull;
@@ -131,12 +126,47 @@ std::uint64_t gpu_batch_key(const MeshRenderItem& mesh) {
 }
 }
 
+std::vector<GpuLightData> make_gpu_light_data(const std::vector<LightRenderItem>& source) {
+    std::vector<GpuLightData> lights;
+    lights.reserve(source.size());
+    for (const auto& item : source) {
+        GpuLightData data;
+        data.position[0] = item.transform.position.x;
+        data.position[1] = item.transform.position.y;
+        data.position[2] = item.transform.position.z;
+        data.position[3] = static_cast<float>(item.light.type);
+        const auto forward = math::TransformPoint(transform_matrix(item.transform), {0.0f, 0.0f, 1.0f}) - item.transform.position;
+        const auto direction = math::Normalize(forward);
+        data.direction[0] = direction.x;
+        data.direction[1] = direction.y;
+        data.direction[2] = direction.z;
+        data.direction[3] = item.light.outerCone;
+        data.colorIntensity[0] = item.light.color.x;
+        data.colorIntensity[1] = item.light.color.y;
+        data.colorIntensity[2] = item.light.color.z;
+        data.colorIntensity[3] = item.light.intensity;
+        data.parameters[0] = item.light.range;
+        data.parameters[1] = item.light.innerCone;
+        data.parameters[2] = item.light.castsShadow ? 1.0f : 0.0f;
+        data.parameters[3] = static_cast<float>(item.entity.id);
+        lights.push_back(data);
+    }
+    return lights;
+}
+
 void RenderScene::extract(const World& world, const Renderer& renderer, float aspectRatio) {
     meshes_.clear();
+    shadowMeshes_.clear();
     sprites_.clear();
     lights_.clear();
     view_ = {};
     stats_ = {};
+    // GameObject transforms are authoritative for ECS-backed editor meshes.
+    // Resolve the hierarchy while editing even when simulation is paused.
+    std::unordered_map<Entity,const GameObject*,EntityHash> owners;
+    world.each_game_object([&](const GameObject& object) {
+        if (object.has_ecs_entity()) owners.emplace(object.ecs_entity(),&object);
+    });
 
     world.ecs().each<CameraComponent, TransformComponent>([&](Entity entity, const CameraComponent& camera,
                                                                const TransformComponent& transform) {
@@ -158,7 +188,9 @@ void RenderScene::extract(const World& world, const Renderer& renderer, float as
                                                                       const MeshRendererComponent& mesh,
                                                                       const TransformComponent& transform) {
         ++stats_.extractedMeshes;
-        if (!mesh.visible || !transform.visible || mesh.indexCount == 0) {
+        const auto owner=owners.find(entity);
+        if (!mesh.visible || !transform.visible || mesh.indexCount == 0 ||
+            (owner!=owners.end() && !owner->second->active_in_hierarchy())) {
             ++stats_.culledMeshes;
             return;
         }
@@ -171,24 +203,31 @@ void RenderScene::extract(const World& world, const Renderer& renderer, float as
         item.firstIndex = mesh.firstIndex;
         item.vertexOffset = mesh.vertexOffset;
         item.transform = transform_matrix(transform.local);
+        if (owner!=owners.end()) if (const auto* spatial=owner->second->get_component<components::TransformComponent>())
+            item.transform=spatial->world_matrix();
+        if (!resource_matches(renderer, item.vertexBuffer, ResourceKind::Buffer, &item.vertexDescription) ||
+            !resource_matches(renderer, item.indexBuffer, ResourceKind::Buffer, &item.indexDescription) ||
+            !resource_matches(renderer, item.material, ResourceKind::Material, &item.materialDescription) ||
+            !index_range_matches(item.indexDescription, item.firstIndex, item.indexCount)) return;
+        // Camera visibility cannot cull shadow casters: an off-screen object
+        // can still cast a shadow into the visible camera frustum.
+        shadowMeshes_.push_back({item.vertexBuffer,item.indexBuffer,item.indexCount,item.transform,
+            item.firstIndex,item.vertexOffset});
         if (view_.camera && view_.projection.farPlane > 0.0f) {
-            const auto distance = math::Length(transform.local.position - view_.transform.position);
+            const auto distance = math::Length(math::TransformPoint(item.transform,{0,0,0}) - view_.transform.position);
             if (distance > view_.projection.farPlane + mesh.boundsRadius) {
                 ++stats_.culledMeshes;
                 return;
             }
             const auto worldCenter = math::TransformPoint(item.transform, mesh.boundsCenter);
-            const auto scale = transform.local.scale;
-            const auto worldRadius = mesh.boundsRadius * std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z), 0.001f});
+            const auto scale=math::Vec3{math::Length(math::TransformVector(item.transform,{1,0,0})),
+                math::Length(math::TransformVector(item.transform,{0,1,0})),math::Length(math::TransformVector(item.transform,{0,0,1}))};
+            const auto worldRadius = mesh.boundsRadius * std::max({scale.x,scale.y,scale.z,0.001f});
             if (!sphere_in_view(view_.viewProjection, worldCenter, worldRadius)) {
                 ++stats_.culledMeshes;
                 return;
             }
         }
-        if (!resource_matches(renderer, item.vertexBuffer, ResourceKind::Buffer, &item.vertexDescription) ||
-            !resource_matches(renderer, item.indexBuffer, ResourceKind::Buffer, &item.indexDescription) ||
-            !resource_matches(renderer, item.material, ResourceKind::Material, &item.materialDescription) ||
-            !index_range_matches(item.indexDescription, item.firstIndex, item.indexCount)) return;
         item.gpuDriven = mesh.gpuDriven && has_structured_instance_binding(item);
         item.boundsCenter = mesh.boundsCenter;
         item.boundsRadius = std::max(0.001f, mesh.boundsRadius);
@@ -228,13 +267,18 @@ void RenderScene::extract(const World& world, const Renderer& renderer, float as
 void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
                             ResourceHandle colorTarget, const TextureDesc& colorDescription,
                             ResourceHandle depthTarget, const TextureDesc& depthDescription,
-                            const GpuDrivenSettings& gpuDriven) {
+                            const GpuDrivenSettings& gpuDriven,RenderGraph* graphOverride,
+                            const RenderView* viewOverride,bool preserveDepth) {
+    auto& graph=graphOverride?*graphOverride:renderer.graph();
+    const auto firstPass=graph.passes().size();
+    const auto& view=viewOverride?*viewOverride:scene.view();
     SceneFrameData frameData;
-    frameData.viewProjection = scene.view().viewProjection;
-    frameData.cameraPositionAndFlags[0] = scene.view().transform.position.x;
-    frameData.cameraPositionAndFlags[1] = scene.view().transform.position.y;
-    frameData.cameraPositionAndFlags[2] = scene.view().transform.position.z;
-    frameData.cameraPositionAndFlags[3] = scene.view().camera ? 1.0f : 0.0f;
+    frameData.viewProjection = view.viewProjection;
+    frameData.lightingParameters[0]=static_cast<float>(scene.lights().size());
+    frameData.cameraPositionAndFlags[0] = view.transform.position.x;
+    frameData.cameraPositionAndFlags[1] = view.transform.position.y;
+    frameData.cameraPositionAndFlags[2] = view.transform.position.z;
+    frameData.cameraPositionAndFlags[3] = view.camera ? 1.0f : 0.0f;
     std::vector<std::uint8_t> frameBytes(sizeof(frameData));
     std::memcpy(frameBytes.data(), &frameData, frameBytes.size());
     if (!sceneBuffer_) {
@@ -245,30 +289,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
         return;
     }
 
-    std::vector<GpuLightData> lights;
-    lights.reserve(scene.lights().size());
-    for (const auto& item : scene.lights()) {
-        GpuLightData data;
-        data.position[0] = item.transform.position.x;
-        data.position[1] = item.transform.position.y;
-        data.position[2] = item.transform.position.z;
-        data.position[3] = static_cast<float>(item.light.type == LightType::Directional ? 0 : 1);
-        const auto forward = math::TransformPoint(transform_matrix(item.transform), {0.0f, 0.0f, 1.0f}) - item.transform.position;
-        const auto direction = math::Normalize(forward);
-        data.direction[0] = direction.x;
-        data.direction[1] = direction.y;
-        data.direction[2] = direction.z;
-        data.direction[3] = item.light.outerCone;
-        data.colorIntensity[0] = item.light.color.x;
-        data.colorIntensity[1] = item.light.color.y;
-        data.colorIntensity[2] = item.light.color.z;
-        data.colorIntensity[3] = item.light.intensity;
-        data.parameters[0] = item.light.range;
-        data.parameters[1] = item.light.innerCone;
-        data.parameters[2] = item.light.castsShadow ? 1.0f : 0.0f;
-        data.parameters[3] = static_cast<float>(item.entity.id);
-        lights.push_back(data);
-    }
+    const auto lights=make_gpu_light_data(scene.lights());
     // Keep one deterministic zero light record when the scene has no lights.
     // Materials can therefore retain a stable structured-buffer binding and
     // never observe the previous frame's light data.
@@ -289,7 +310,6 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
         if (!renderer.update_buffer({lightBuffer_, 0, lightBytes})) return;
     }
 
-    auto& graph = renderer.graph();
     graph.import_texture(colorTarget, colorDescription);
     graph.import_resource(sceneBuffer_, sceneBufferDescription_);
     if (lightBuffer_) graph.import_resource(lightBuffer_, lightBufferDescription_);
@@ -303,6 +323,33 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
     }
     graph.import_resource(identityObjectBuffer_, identityObjectDescription_);
     if (depthTarget) graph.import_resource(depthTarget, depthDescription);
+
+    const bool currentShadows=shadowGeneration_==graph.generation() && graph.contains_resource(shadowFrame_);
+    const auto bindShadows=[&](MaterialDesc& material) {
+        if (!currentShadows) return;
+        for (auto& binding:material.bindings) {
+            if (binding.name=="ShadowAtlas" && binding.type==DescriptorType::Texture) binding.resource=shadowAtlas_;
+            if (binding.name=="ShadowFrame" && binding.type==DescriptorType::UniformBuffer) binding.resource=shadowFrame_;
+        }
+    };
+
+    const auto append_material_dependencies=[&](const MaterialDesc& material,std::vector<ResourceAccess>& accesses) {
+        const auto append=[&](ResourceHandle handle,ResourceUsage usage) {
+            if (!handle) return;
+            if (!graph.contains_resource(handle)) {
+                const auto* description=renderer.resource_description(handle);
+                if (description) graph.import_resource(handle,*description);
+            }
+            if (std::none_of(accesses.begin(),accesses.end(),[&](const auto& existing){return existing.resource.id==handle.id;}))
+                accesses.push_back({handle,usage});
+        };
+        append(material.pipeline,ResourceUsage::ShaderRead);
+        for (const auto& binding:material.bindings) {
+            const auto usage=binding.type==DescriptorType::UniformBuffer?ResourceUsage::UniformBuffer:ResourceUsage::ShaderRead;
+            if (binding.resources.empty()) append(binding.resource,usage);
+            else for (const auto handle:binding.resources) append(handle,usage);
+        }
+    };
 
     std::unordered_set<Entity, EntityHash> seenObjects;
     const auto objectBufferFor = [&](const MeshRenderItem& mesh) {
@@ -418,6 +465,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
                     }, RenderQueue::Compute);
             }
             auto batchMaterial = std::get<MaterialDesc>(batch.front().item.materialDescription);
+            bindShadows(batchMaterial);
             for (auto& binding : batchMaterial.bindings) {
                 if (is_instance_binding(binding)) binding.resource = gpuIt->second.instanceBuffer;
                 if (lightBuffer_ && binding.type == DescriptorType::StructuredBuffer &&
@@ -428,7 +476,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
                     return binding.type == DescriptorType::StructuredBuffer &&
                         (binding.name == "lights" || binding.name == "lightBuffer");
                 });
-            const auto gpuMaterial = graph.create_material(std::move(batchMaterial));
+            const auto gpuMaterial = graph.create_material(batchMaterial);
             std::vector<ResourceAccess> accesses{
                 {colorTarget, ResourceUsage::ColorAttachment},
                 {gpuMaterial, ResourceUsage::ShaderRead},
@@ -440,6 +488,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
             };
             if (lightBuffer_ && hasLightsBinding) accesses.push_back({lightBuffer_, ResourceUsage::ShaderRead});
             if (depthTarget) accesses.push_back({depthTarget, ResourceUsage::DepthStencil});
+            append_material_dependencies(batchMaterial,accesses);
             graph.add_pass("gpu_mesh_batch_" + std::to_string(key), std::move(accesses),
                 [gpuMaterial, sceneBuffer = sceneBuffer_, draw = IndirectMeshDraw{vertexBuffer, indexBuffer,
                     gpuIt->second.argumentBuffer, static_cast<std::uint32_t>(batch.size()), sizeof(GpuDrawArguments), 0}](auto& backend, const auto&) {
@@ -451,6 +500,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
             continue;
         }
         auto batchMaterialDescription = std::get<MaterialDesc>(batch.front().item.materialDescription);
+        bindShadows(batchMaterialDescription);
         for (auto& binding : batchMaterialDescription.bindings) {
             if (lightBuffer_ && binding.type == DescriptorType::StructuredBuffer &&
                 (binding.name == "lights" || binding.name == "lightBuffer")) binding.resource = lightBuffer_;
@@ -460,7 +510,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
                 return binding.type == DescriptorType::StructuredBuffer &&
                     (binding.name == "lights" || binding.name == "lightBuffer");
             });
-        const auto graphMaterial = graph.create_material(std::move(batchMaterialDescription));
+        const auto graphMaterial = graph.create_material(batchMaterialDescription);
         std::vector<ResourceAccess> accesses{
             {colorTarget, ResourceUsage::ColorAttachment},
             {graphMaterial, ResourceUsage::ShaderRead},
@@ -483,6 +533,7 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
             accesses.push_back({mesh.objectBuffer, ResourceUsage::ShaderRead});
         }
         if (depthTarget) accesses.push_back({depthTarget, ResourceUsage::DepthStencil});
+        append_material_dependencies(batchMaterialDescription,accesses);
         graph.add_pass("mesh_batch_" + std::to_string(material.id), std::move(accesses),
             [batch = std::move(batch), graphMaterial, sceneBuffer = sceneBuffer_](auto& backend, const auto&) {
                 backend.bind_material(graphMaterial);
@@ -549,18 +600,71 @@ void ForwardRenderer::build(Renderer& renderer, const RenderScene& scene,
         }, RenderQueue::Graphics, true, !colorTargetCleared);
         colorTargetCleared = true;
     }
+    if (!colorTargetCleared) {
+        std::vector<ResourceAccess> clear{{colorTarget,ResourceUsage::ColorAttachment}};
+        if (depthTarget) clear.push_back({depthTarget,ResourceUsage::DepthStencil});
+        graph.add_pass("empty_scene_clear",std::move(clear),[](auto&,const auto&){});
+    }
+    if (preserveDepth) for (auto i=firstPass;i<graph.passes().size();++i)
+        graph.set_depth_clear(i,false);
+}
+
+void ForwardRenderer::build_depth(Renderer& renderer,RenderGraph& graph,const RenderScene& scene,
+                                  const RenderView& view,ResourceHandle pipeline,ResourceHandle depth,
+                                  const TextureDesc& description) {
+    graph.import_resource(depth,description);
+    if (const auto* resource=renderer.resource_description(pipeline)) graph.import_resource(pipeline,*resource);
+    const auto uniform=[&](const auto& value) {
+        BufferDesc desc;
+        desc.size=sizeof(value);desc.stride=16;desc.uniformBuffer=true;desc.initialData.resize(sizeof(value));
+        std::memcpy(desc.initialData.data(),&value,sizeof(value));return graph.create_buffer(desc);
+    };
+    SceneFrameData frame;frame.viewProjection=view.viewProjection;
+    const auto camera=uniform(frame);
+    struct Draw {MeshDraw mesh;ResourceHandle material;};
+    std::vector<Draw> draws;
+    std::vector<ResourceAccess> accesses{{depth,ResourceUsage::DepthStencil},{camera,ResourceUsage::UniformBuffer},
+        {pipeline,ResourceUsage::ShaderRead}};
+    const auto append=[&](ResourceHandle handle,ResourceUsage usage) {
+        if (std::none_of(accesses.begin(),accesses.end(),[&](const auto& item){return item.resource.id==handle.id;}))
+            accesses.push_back({handle,usage});
+    };
+    for (const auto& mesh:scene.meshes()) {
+        graph.import_resource(mesh.vertexBuffer,mesh.vertexDescription);graph.import_resource(mesh.indexBuffer,mesh.indexDescription);
+        const auto object=uniform(ObjectFrameData{mesh.transform});
+        const auto material=graph.create_material({"depth_object",pipeline,
+            {{"SceneFrame",camera,DescriptorType::UniformBuffer,2},{"ObjectFrame",object,DescriptorType::UniformBuffer,3}},false});
+        append(object,ResourceUsage::UniformBuffer);append(material,ResourceUsage::ShaderRead);
+        append(mesh.vertexBuffer,ResourceUsage::VertexBuffer);append(mesh.indexBuffer,ResourceUsage::IndexBuffer);
+        draws.push_back({{mesh.vertexBuffer,mesh.indexBuffer,mesh.indexCount,mesh.transform,mesh.firstIndex,mesh.vertexOffset},material});
+    }
+    const auto index=graph.add_pass("scene_depth_prepass",std::move(accesses),{},RenderQueue::Graphics,true,true);
+    graph.set_command_recorder(index,[draws=std::move(draws)](auto& commands,const auto&) {
+        for (const auto& draw:draws) {commands.bind_material(draw.material);commands.draw_mesh(draw.mesh);}
+    });
+}
+
+void ForwardRenderer::release(Renderer& renderer) {
+    for (const auto handle:{sceneBuffer_,identityObjectBuffer_,lightBuffer_}) if (handle) renderer.destroy_resource(handle);
+    for (const auto& entry:objectBuffers_) if (entry.second) renderer.destroy_resource(entry.second);
+    for (const auto& entry:gpuBatches_) {
+        renderer.destroy_resource(entry.second.instanceBuffer);renderer.destroy_resource(entry.second.argumentBuffer);
+    }
+    objectBuffers_.clear();gpuBatches_.clear();shadowCascades_.clear();
+    sceneBuffer_=identityObjectBuffer_=lightBuffer_=shadowFrame_=shadowAtlas_={};shadowGeneration_=0;
 }
 
 void ForwardRenderer::build_shadows(Renderer& renderer, const RenderScene& scene, const ShadowSettings& settings,
                                     ResourceHandle shadowPipeline, ResourceHandle shadowTarget,
-                                    const TextureDesc& shadowDescription) {
+                                    const TextureDesc& shadowDescription,RenderGraph* graphOverride) {
     shadowCascades_.clear();
+    shadowFrame_=shadowAtlas_={};shadowGeneration_=0;
     if (!settings.enabled || !shadowPipeline || !shadowTarget || scene.lights().empty()) return;
     const auto cascadeCount = std::clamp(settings.cascadeCount, 1u, 8u);
     const auto nearPlane = std::max(0.001f, scene.view().projection.nearPlane);
     const auto farPlane = std::max(nearPlane + 0.001f, std::min(scene.view().projection.farPlane, settings.maxDistance));
     const auto directional = std::find_if(scene.lights().begin(), scene.lights().end(),
-        [](const LightRenderItem& item) { return item.light.type == LightType::Directional; });
+        [](const LightRenderItem& item) { return item.light.type == LightType::Directional && item.light.castsShadow; });
     if (directional == scene.lights().end()) return;
     const auto direction = math::Normalize(light_direction(*directional));
     shadowCascades_.reserve(cascadeCount);
@@ -572,7 +676,7 @@ void ForwardRenderer::build_shadows(Renderer& renderer, const RenderScene& scene
         cascade.nearDistance = nearPlane * std::pow(farPlane / nearPlane, previousRatio);
         cascade.farDistance = nearPlane * std::pow(farPlane / nearPlane, ratio);
         const auto tileCount = static_cast<std::uint32_t>(std::ceil(std::sqrt(static_cast<float>(cascadeCount))));
-        cascade.atlasSize = std::max(1u, settings.atlasSize / tileCount);
+        cascade.atlasSize = std::max(1u, std::min(shadowDescription.width,shadowDescription.height) / tileCount);
         cascade.atlasX = (index % tileCount) * cascade.atlasSize;
         cascade.atlasY = (index / tileCount) * cascade.atlasSize;
         const auto corners = cascade_corners(scene.view(), cascade.nearDistance, cascade.farDistance);
@@ -613,26 +717,79 @@ void ForwardRenderer::build_shadows(Renderer& renderer, const RenderScene& scene
             minimum.z, maximum.z), lightView);
         shadowCascades_.push_back(cascade);
     }
-    auto& graph = renderer.graph();
+    auto& graph=graphOverride?*graphOverride:renderer.graph();
     graph.import_resource(shadowTarget, shadowDescription);
     if (const auto* pipelineDescription = renderer.resource_description(shadowPipeline)) {
         graph.import_resource(shadowPipeline, *pipelineDescription);
     }
-    const auto shadowMaterial = graph.create_material({"shadow_material", shadowPipeline, {}, false});
-    for (const auto& cascade : shadowCascades_) {
-        std::vector<ResourceAccess> accesses{{shadowTarget, ResourceUsage::DepthStencil},
-            {shadowMaterial, ResourceUsage::ShaderRead}};
-        graph.add_pass("shadow_cascade_" + std::to_string(cascade.index), std::move(accesses),
-        [shadowMaterial, &scene, cascade](auto& backend, const auto&) {
-            backend.bind_material(shadowMaterial);
-            backend.set_viewport(static_cast<float>(cascade.atlasX), static_cast<float>(cascade.atlasY),
-                static_cast<float>(cascade.atlasSize), static_cast<float>(cascade.atlasSize));
-            for (const auto& mesh : scene.meshes()) {
-                backend.draw_mesh({mesh.vertexBuffer, mesh.indexBuffer, mesh.indexCount, mesh.transform,
-                    mesh.firstIndex, mesh.vertexOffset});
-            }
-        }, RenderQueue::Graphics, true, cascade.index == 0);
+    const auto make_uniform = [&](const auto& value) {
+        BufferDesc description;
+        description.size = sizeof(value);
+        description.stride = 16;
+        description.uniformBuffer = true;
+        description.initialData.resize(sizeof(value));
+        std::memcpy(description.initialData.data(),&value,sizeof(value));
+        return graph.create_buffer(description);
+    };
+    ShadowFrameData shadowData;
+    const auto forward=math::Normalize(math::TransformPoint(transform_matrix(scene.view().transform),{0,0,1})-scene.view().transform.position);
+    const auto position=scene.view().transform.position;
+    shadowData.cameraPosition={position.x,position.y,position.z,1};
+    shadowData.cameraForward={forward.x,forward.y,forward.z,0};
+    shadowData.settings={static_cast<float>(cascadeCount),settings.bias,1.0f/std::max(1u,shadowDescription.width),
+        static_cast<float>(std::distance(scene.lights().begin(),directional))};
+    for (const auto& cascade:shadowCascades_) {
+        shadowData.viewProjection[cascade.index]=cascade.viewProjection;
+        shadowData.distances[cascade.index]={cascade.nearDistance,cascade.farDistance,0,0};
+        shadowData.atlasRect[cascade.index]={static_cast<float>(cascade.atlasX)/std::max(1u,shadowDescription.width),
+            static_cast<float>(cascade.atlasY)/std::max(1u,shadowDescription.height),
+            static_cast<float>(cascade.atlasSize)/std::max(1u,shadowDescription.width),
+            static_cast<float>(cascade.atlasSize)/std::max(1u,shadowDescription.height)};
     }
+    shadowFrame_=make_uniform(shadowData);shadowAtlas_=shadowTarget;shadowGeneration_=graph.generation();
+    struct ShadowDraw { MeshDraw draw; ResourceHandle object; };
+    std::vector<ShadowDraw> draws;
+    for (const auto& draw : scene.shadow_meshes()) {
+        const auto* vertex = renderer.resource_description(draw.vertexBuffer);
+        const auto* index = renderer.resource_description(draw.indexBuffer);
+        if (!vertex || !index) continue;
+        graph.import_resource(draw.vertexBuffer,*vertex);
+        graph.import_resource(draw.indexBuffer,*index);
+        draws.push_back({draw,make_uniform(ObjectFrameData{draw.transform})});
+    }
+    for (const auto& cascade : shadowCascades_) {
+        SceneFrameData frame;
+        frame.viewProjection = cascade.viewProjection;
+        const auto frameBuffer = make_uniform(frame);
+        struct BoundDraw { MeshDraw draw; ResourceHandle material; };
+        std::vector<BoundDraw> boundDraws;
+        std::vector<ResourceAccess> accesses{{shadowTarget,ResourceUsage::DepthStencil},
+            {frameBuffer,ResourceUsage::UniformBuffer}};
+        const auto add_access = [&](ResourceHandle handle, ResourceUsage usage) {
+            if (std::none_of(accesses.begin(),accesses.end(),[&](const auto& value) { return value.resource.id == handle.id; }))
+                accesses.push_back({handle,usage});
+        };
+        for (const auto& draw : draws) {
+            const auto material = graph.create_material({"shadow_cascade_material",shadowPipeline,
+                {{"SceneFrame",frameBuffer,DescriptorType::UniformBuffer,2},
+                 {"ObjectFrame",draw.object,DescriptorType::UniformBuffer,3}},false});
+            boundDraws.push_back({draw.draw,material});
+            add_access(draw.draw.vertexBuffer,ResourceUsage::VertexBuffer);
+            add_access(draw.draw.indexBuffer,ResourceUsage::IndexBuffer);
+            add_access(draw.object,ResourceUsage::UniformBuffer);
+            add_access(material,ResourceUsage::ShaderRead);
+        }
+        graph.add_pass("shadow_cascade_" + std::to_string(cascade.index),std::move(accesses),
+            [draws=std::move(boundDraws),cascade](auto& backend,const auto&) {
+                backend.set_viewport(static_cast<float>(cascade.atlasX),static_cast<float>(cascade.atlasY),
+                    static_cast<float>(cascade.atlasSize),static_cast<float>(cascade.atlasSize));
+                for (const auto& draw : draws) {
+                    backend.bind_material(draw.material);
+                    backend.draw_mesh(draw.draw);
+                }
+            },RenderQueue::Graphics,true,cascade.index == 0);
+    }
+
 }
 
 ResourceHandle ForwardRenderer::prepare_present(Renderer& renderer) {

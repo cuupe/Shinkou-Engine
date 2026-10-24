@@ -1,6 +1,7 @@
 #include "shinkou/editor/EditorModelSceneRenderer.h"
 
 #include "shinkou/render/Renderer.h"
+#include "shinkou/render/BuiltinShaders.h"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,8 @@ struct SceneFrame {
 
 struct ObjectFrame {
     math::Mat4 model{math::Mat4::Identity()};
+    math::Vec4 baseColor{0.24f,0.62f,0.95f,1.0f};
+    math::Vec4 surface{0.0f,0.5f,0.0f,0.0f};
 };
 
 struct DrawItem {
@@ -46,6 +49,8 @@ cbuffer SceneFrame : register(b2)
 cbuffer ObjectFrame : register(b3)
 {
     float4x4 model;
+    float4 baseColor;
+    float4 surface;
 };
 
 struct VertexInput
@@ -69,6 +74,8 @@ VertexOutput main(VertexInput input)
 )hlsl";
 
 constexpr std::string_view kSceneFragmentShader = R"hlsl(
+cbuffer SceneFrame : register(b2) { float4x4 viewProjection; float4 cameraPositionAndFlags; };
+cbuffer ObjectFrame : register(b3) { float4x4 model; float4 baseColor; float4 surface; };
 struct FragmentInput
 {
     float4 position : SV_Position;
@@ -81,9 +88,9 @@ float4 main(FragmentInput input) : SV_Target
     float3 dy = ddy(input.worldPosition);
     float3 normal = normalize(cross(dx, dy));
     const float3 lightDirection = normalize(float3(0.35f, 0.65f, 0.75f));
-    const float diffuse = 0.2f + 0.8f * saturate(dot(normal, lightDirection));
-    const float3 baseColor = float3(0.24f, 0.62f, 0.95f);
-    return float4(baseColor * diffuse, 1.0f);
+    const float3 viewDirection = normalize(cameraPositionAndFlags.xyz-input.worldPosition);
+    const float3 direct = shinkou_pbr_direct(baseColor.rgb,surface.x,surface.y,normal,viewDirection,lightDirection,3.0.xxx);
+    return float4(shinkou_linear_to_srgb(shinkou_tone_map(direct+baseColor.rgb*0.03*(1.0-surface.x))),baseColor.a);
 }
 )hlsl";
 
@@ -155,7 +162,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
     render::Renderer& renderer,
     const std::vector<EditorModelSceneInstance>& instances,
     const math::Mat4& viewProjection,
-    math::Vec3 cameraPosition) {
+    math::Vec3 cameraPosition, render::ResourceHandle colorTarget, render::ResourceHandle depthTarget) {
     EditorModelSceneRenderState state;
     const auto capabilities = renderer.capabilities();
     state.backend = capabilities.api;
@@ -186,7 +193,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
     }
 
     const std::string colorFormat = "bgra8";
-    if (!pipeline_ || pipelineColorFormat_ != colorFormat) {
+    if (!pipeline_ || pipelineColorFormat_ != colorFormat || pipelineDepth_ != static_cast<bool>(depthTarget)) {
         clear_pipeline(renderer);
         render::ShaderDesc vertexDescription;
         vertexDescription.stage = render::ShaderStage::Vertex;
@@ -199,7 +206,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         render::ShaderDesc fragmentDescription;
         fragmentDescription.stage = render::ShaderStage::Fragment;
         fragmentDescription.name = "editor_model_scene_fragment";
-        fragmentDescription.source = std::string(kSceneFragmentShader);
+        fragmentDescription.source = std::string(render::pbr_shader_library()) + std::string(kSceneFragmentShader);
         fragmentDescription.profile = "ps_5_0";
         fragmentDescription.revision = 1;
         fragmentShader_ = renderer.create_shader(fragmentDescription);
@@ -210,11 +217,11 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         }
 
         render::PipelineDesc pipelineDescription;
-        pipelineDescription.name = "editor_model_scene_pipeline_" + colorFormat;
+        pipelineDescription.name = "editor_model_scene_pipeline_" + colorFormat + (depthTarget ? "_depth" : "_overlay");
         pipelineDescription.vertexShader = vertexShader_.id;
         pipelineDescription.fragmentShader = fragmentShader_.id;
-        pipelineDescription.depthTest = false;
-        pipelineDescription.depthWrite = false;
+        pipelineDescription.depthTest = static_cast<bool>(depthTarget);
+        pipelineDescription.depthWrite = static_cast<bool>(depthTarget);
         pipelineDescription.vertexInput = true;
         pipelineDescription.vertexTextureCoordinates = false;
         pipelineDescription.vertexNormals = false;
@@ -222,7 +229,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         pipelineDescription.fillMode = "solid";
         pipelineDescription.topology = "triangle";
         pipelineDescription.colorFormat = colorFormat;
-        pipelineDescription.depthFormat = "none";
+        pipelineDescription.depthFormat = depthTarget ? "d24s8" : "none";
         pipeline_ = renderer.create_pipeline(pipelineDescription);
         if (!pipeline_) {
             state.status = "GPU model scene pipeline creation failed: " + renderer.last_error();
@@ -230,6 +237,7 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
             return state;
         }
         pipelineColorFormat_ = colorFormat;
+        pipelineDepth_ = static_cast<bool>(depthTarget);
     }
     state.pipelineReady = true;
 
@@ -339,6 +347,11 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
 
         ObjectFrame objectFrame;
         objectFrame.model = instance.model;
+        if (snapshot.materials && !snapshot.materials->empty()) {
+            const auto& material = snapshot.materials->front();
+            objectFrame.baseColor = {material.baseColorFactor[0],material.baseColorFactor[1],material.baseColorFactor[2],material.baseColorFactor[3]};
+            objectFrame.surface = {material.metallicFactor,std::max(0.04f,material.roughnessFactor),0,0};
+        }
         auto objectIt = objectBuffers_.find(instance.objectId);
         if (objectIt == objectBuffers_.end()) objectIt = objectBuffers_.emplace(instance.objectId, render::ResourceHandle{}).first;
         auto& objectBuffer = objectIt->second;
@@ -386,15 +399,25 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         return state;
     }
     std::vector<render::ResourceAccess> accesses{{sceneBuffer_, render::ResourceUsage::UniformBuffer}};
+    for (const auto target : {colorTarget,depthTarget}) {
+        if (target) if (const auto* description=renderer.resource_description(target))
+            renderer.graph().import_resource(target,*description);
+    }
+    if (colorTarget) accesses.push_back({colorTarget,render::ResourceUsage::ColorAttachment});
+    if (depthTarget) accesses.push_back({depthTarget,render::ResourceUsage::DepthStencil});
+    std::unordered_set<std::uint32_t> accessed{sceneBuffer_.id};
+    const auto append_access=[&](render::ResourceHandle resource,render::ResourceUsage usage) {
+        if (accessed.insert(resource.id).second) accesses.push_back({resource,usage});
+    };
     for (const auto& draw : draws) {
-        accesses.push_back({draw.material, render::ResourceUsage::ShaderRead});
-        accesses.push_back({draw.vertexBuffer, render::ResourceUsage::VertexBuffer});
-        accesses.push_back({draw.indexBuffer, render::ResourceUsage::IndexBuffer});
-        accesses.push_back({draw.objectBuffer, render::ResourceUsage::UniformBuffer});
+        append_access(draw.material, render::ResourceUsage::ShaderRead);
+        append_access(draw.vertexBuffer, render::ResourceUsage::VertexBuffer);
+        append_access(draw.indexBuffer, render::ResourceUsage::IndexBuffer);
+        append_access(draw.objectBuffer, render::ResourceUsage::UniformBuffer);
     }
     renderer.graph().add_pass("editor_model_scene", std::move(accesses),
-        [draws = std::move(draws), scene = sceneBuffer_](auto& backend, const auto&) {
-            if (!backend.bind_editor_render_target({}, {}, false)) return;
+        [draws = std::move(draws), scene = sceneBuffer_, colorTarget, depthTarget](auto& backend, const auto&) {
+            if (!backend.bind_editor_render_target(colorTarget, depthTarget, false)) return;
             for (const auto& draw : draws) {
                 backend.bind_material(draw.material);
                 backend.bind_uniform_buffer(scene, 2, 0);

@@ -17,6 +17,7 @@ struct ShaderBinding {
     std::string type;
     std::uint32_t count{1};
     bool unbounded{false};
+    bool separateImage{false};
 };
 
 struct CompiledShader {

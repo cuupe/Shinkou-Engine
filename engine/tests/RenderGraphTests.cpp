@@ -836,7 +836,9 @@ int main() {
     shinkou::render::TransformComponent lightTransform;
     lightTransform.local.position = {0.0f, 2.0f, 0.0f};
     sceneWorld.ecs().emplace<shinkou::render::TransformComponent>(lightEntity, lightTransform);
-    sceneWorld.ecs().emplace<shinkou::render::LightComponent>(lightEntity, shinkou::render::LightComponent{});
+    shinkou::render::LightComponent sceneLight;
+    sceneLight.castsShadow=true;
+    sceneWorld.ecs().emplace<shinkou::render::LightComponent>(lightEntity,sceneLight);
     for (int index = 0; index < 2; ++index) {
         const auto entity = sceneWorld.ecs().create();
         shinkou::render::TransformComponent objectTransform;

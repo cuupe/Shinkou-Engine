@@ -26,7 +26,7 @@ struct UiStyleConfig {
     std::uint32_t version{kStyleSchemaVersion};
     std::string activeTheme{"dark"};
     float uiScale{1.0f};
-    float fontSize{14.0f};
+    float fontSize{17.0f};
     std::string fontPath{};
     std::string fallbackFontPath{};
     bool compactControls{false};

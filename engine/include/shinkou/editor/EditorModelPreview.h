@@ -143,6 +143,9 @@ EditorModelPreviewResult load_editor_model_preview(
     std::uint64_t sourceStamp,
     const std::atomic_bool* cancel = nullptr);
 
+EditorModelPreviewResult load_editor_fbx_preview(const FileSystemService&, std::string_view,
+    std::uint64_t generation, std::uint64_t sourceStamp, const std::atomic_bool* cancel = nullptr);
+
 // AssetSystem can supply the immutable typed source payload directly. The
 // GLTF/GLB overload still resolves project-relative external buffers/images
 // through FileSystemService, while the model container itself is not reopened.

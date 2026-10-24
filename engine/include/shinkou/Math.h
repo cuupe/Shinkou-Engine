@@ -220,13 +220,13 @@ inline Quat FromEulerXYZ(Vec3 radians) noexcept {
 }
 inline Vec3 ToEulerXYZ(Quat value) noexcept {
     value = Normalize(value);
-    const float sinPitch = 2.0f * (value.w * value.x - value.y * value.z);
-    const float pitch = std::abs(sinPitch) >= 1.0f ? std::copysign(Pi * 0.5f, sinPitch) : std::asin(sinPitch);
-    const float yaw = std::atan2(2.0f * (value.w * value.y + value.z * value.x),
-                                 1.0f - 2.0f * (value.x * value.x + value.y * value.y));
-    const float roll = std::atan2(2.0f * (value.w * value.z + value.x * value.y),
-                                  1.0f - 2.0f * (value.x * value.x + value.z * value.z));
-    return {pitch, yaw, roll};
+    // Inverse of Rx * Ry * Rz, matching FromEulerXYZ and column vectors.
+    const float sinY = std::clamp(2.0f * (value.x * value.z + value.w * value.y), -1.0f, 1.0f);
+    if (std::abs(sinY) >= 1.0f - 1.0e-7f)
+        return {std::atan2(2.0f*(value.y*value.z+value.w*value.x),
+            1.0f-2.0f*(value.x*value.x+value.z*value.z)),std::copysign(HalfPi,sinY),0};
+    return {std::atan2(2.0f*(value.w*value.x-value.y*value.z),1.0f-2.0f*(value.x*value.x+value.y*value.y)),
+        std::asin(sinY),std::atan2(2.0f*(value.w*value.z-value.x*value.y),1.0f-2.0f*(value.y*value.y+value.z*value.z))};
 }
 
 struct Mat2 {

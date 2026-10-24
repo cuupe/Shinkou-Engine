@@ -62,15 +62,18 @@ bool EditorUi::handle_text(ui::UiEvent& event) {
     if (focused.empty()) {
         const auto filter = regionRects_.find("assets.filter");
         if (filter != regionRects_.end() && filter->second.contains(event.position)) focused = "assets.filter";
+        const auto inspectorFilter = regionRects_.find("inspector.filter");
+        if (inspectorFilter != regionRects_.end() && inspectorFilter->second.contains(event.position)) focused = "inspector.filter";
     }
     std::string* text = nullptr;
     bool* all = &editSelectAll_;
     if (!editFieldId_.empty() && focused == editFieldId_) text = &editText_;
     else if (focused == "assets.filter") text = &assetFilter_;
     else if (focused == "hierarchy.filter") text = &filterText_;
+    else if (focused == "inspector.filter") text = &inspectorFilter_;
     else if (focused == "asset.rename") { text = &assetEditText_; all = &assetSelectAll_; }
     if (!text) return false;
-    if ((focused == "assets.filter" || focused == "asset.rename") &&
+    if ((focused == "assets.filter" || focused == "inspector.filter" || focused == "asset.rename") &&
         keyTextFallback_.size() == 1 && event.text.size() == 1 &&
         std::tolower(static_cast<unsigned char>(keyTextFallback_.front())) ==
             std::tolower(static_cast<unsigned char>(event.text.front()))) {
@@ -81,7 +84,31 @@ bool EditorUi::handle_text(ui::UiEvent& event) {
     if (text->size() + event.text.size() <= 4096) text->append(event.text);
     if (focused == "hierarchy.filter" && callbacks_.setObjectFilter) callbacks_.setObjectFilter(*text);
     if (focused == "assets.filter") assetScrollOffset_ = 0;
-    editError_.clear(); mark_full_repaint(); paintCacheValid_ = false;
+    if (focused == "inspector.filter") inspectorScroll_ = 0;
+    const auto repaint_input = [&] {
+        if (focused == "assets.filter") {
+            mark_region_repaint("assets.filter");
+            mark_region_repaint("assets.background");
+            mark_region_repaint("assets.scrollbar");
+        } else if (focused == "hierarchy.filter") {
+            mark_region_repaint("hierarchy.filter");
+            mark_region_repaint("hierarchy.background");
+        } else if (focused == "inspector.filter") {
+            mark_region_repaint("inspector.filter");
+            mark_region_repaint("inspector.background");
+        } else if (focused == "asset.rename") {
+            mark_region_repaint("assets.background");
+            mark_region_repaint("asset.rename");
+        } else if (!editFieldId_.empty() && focused == editFieldId_) {
+            mark_region_repaint("inspector.background");
+            mark_region_repaint(focused);
+        } else {
+            mark_full_repaint();
+        }
+        paintCacheValid_ = false;
+    };
+    editError_.clear();
+    repaint_input();
     return true;
 }
 
@@ -97,16 +124,41 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
     if (focused.empty()) {
         const auto filter = regionRects_.find("assets.filter");
         if (filter != regionRects_.end() && filter->second.contains(event.position)) focused = "assets.filter";
+        const auto inspectorFilter = regionRects_.find("inspector.filter");
+        if (inspectorFilter != regionRects_.end() && inspectorFilter->second.contains(event.position)) focused = "inspector.filter";
     }
     const bool enter = key == "enter" || key == "return";
-    const auto repaint = [&] { mark_full_repaint(); paintCacheValid_ = false; };
-    const auto command = [&](EditorCommand cmd, std::string_view target = {}) { if (callbacks_.command) callbacks_.command(cmd, target); repaint(); };
+    const auto repaint = [&] {
+        if (focused == "assets.filter") {
+            mark_region_repaint("assets.filter");
+            mark_region_repaint("assets.background");
+            mark_region_repaint("assets.scrollbar");
+        } else if (focused == "hierarchy.filter") {
+            mark_region_repaint("hierarchy.filter");
+            mark_region_repaint("hierarchy.background");
+        } else if (focused == "inspector.filter") {
+            mark_region_repaint("inspector.filter");
+            mark_region_repaint("inspector.background");
+        } else if (focused == "asset.rename") {
+            mark_region_repaint("assets.background");
+            mark_region_repaint("asset.rename");
+        } else if (!editFieldId_.empty() && focused == editFieldId_) {
+            mark_region_repaint("inspector.background");
+            mark_region_repaint(focused);
+        } else {
+            mark_full_repaint();
+        }
+        paintCacheValid_ = false;
+    };
+    const auto full_repaint = [&] { mark_full_repaint(); paintCacheValid_ = false; };
+    const auto command = [&](EditorCommand cmd, std::string_view target = {}) { if (callbacks_.command) callbacks_.command(cmd, target); full_repaint(); };
     if (key == "escape") {
+        if (focused == "inspector.filter") inspectorFilter_.clear();
         assetDeletePath_.clear(); assetContextOpen_ = false; assetContextActions_.clear();
         assetEditActive_ = false; assetEditText_.clear(); openMenuId_.clear();
         editFieldId_.clear(); editText_.clear(); editError_.clear();
         viewportDragging_ = false; modelPreviewDragging_ = false;
-        activeRegion_.clear(); runtime_.release_pointer(); runtime_.clear_focus(); repaint(); return true;
+        activeRegion_.clear(); runtime_.release_pointer(); runtime_.clear_focus(); full_repaint(); return true;
     }
     // Deletion confirmation consumes keyboard events until cancelled/confirmed.
     if (!assetDeletePath_.empty()) {
@@ -137,6 +189,7 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
     if (!editFieldId_.empty() && focused == editFieldId_) text = &editText_;
     else if (focused == "assets.filter") text = &assetFilter_;
     else if (focused == "hierarchy.filter") text = &filterText_;
+    else if (focused == "inspector.filter") text = &inspectorFilter_;
     else if (focused == "asset.rename") { text = &assetEditText_; all = &assetSelectAll_; }
     if (text) {
         if (controlDown_ && key == "a") { *all = true; repaint(); return true; }
@@ -145,6 +198,7 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
             else if (key == "backspace") backspace(*text);
             if (focused == "hierarchy.filter" && callbacks_.setObjectFilter) callbacks_.setObjectFilter(*text);
             if (focused == "assets.filter") assetScrollOffset_ = 0;
+            if (focused == "inspector.filter") inspectorScroll_ = 0;
             editError_.clear(); repaint(); return true;
         }
         if (enter) {
@@ -172,6 +226,7 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
             text->push_back(character);
             keyTextFallback_ = key;
             if (focused == "assets.filter") assetScrollOffset_ = 0;
+            if (focused == "inspector.filter") inspectorScroll_ = 0;
             editError_.clear(); repaint(); return true;
         }
         if (key == "space") {
@@ -179,6 +234,7 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
             text->push_back(' ');
             keyTextFallback_ = " ";
             if (focused == "assets.filter") assetScrollOffset_ = 0;
+            if (focused == "inspector.filter") inspectorScroll_ = 0;
             editError_.clear(); repaint(); return true;
         }
         if (key != "tab") return true;
@@ -269,13 +325,17 @@ bool EditorUi::handle_key(ui::UiEvent& event) {
 void EditorUi::draw_input(ui::Rect bounds, std::string id, std::string_view text, const EditorLayoutState& layout) {
     set_region(id, bounds, true);
     const bool focused = runtime_.focused() == regions_.at(id);
-    const auto foreground = color(layout.theme == "light" ? "#30353C" : "#E1E5EB");
-    renderList_.rect(bounds, color(layout.theme == "light" ? "#F1F2F4" : "#1E2024"), 4);
-    renderList_.border(bounds, color(focused ? "#78A9E8" : hotRegion_ == id ? "#697A90" : layout.theme == "high-contrast" ? "#FFFFFF" : "#41464F"), focused ? 2.0f : 1.0f, 4);
+    const auto tokens = visual_tokens(layout);
+    const auto foreground = tokens.text;
+    renderList_.rect(bounds, tokens.surfaceInset, 5.0f);
+    const auto border = id == editFieldId_ && !editError_.empty() ? tokens.danger :
+        focused ? tokens.accent : hotRegion_ == id ? tokens.borderStrong : tokens.border;
+    renderList_.border(bounds, border,
+                       focused ? 1.5f : 1.0f, 5.0f);
     const bool editing = id == editFieldId_;
     const std::string label = editing ? editText_ : std::string(text);
     if (focused && (id == "asset.rename" ? assetSelectAll_ : editSelectAll_))
-        renderList_.rect({bounds.x+5, bounds.y+3, std::max(0.0f, bounds.width-10), bounds.height-6}, color("#35557D"), 2);
-    renderList_.text({bounds.x+7, bounds.y+3, std::max(0.0f,bounds.width-14), bounds.height-6}, label + (focused ? "|" : ""), foreground, 12, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+        renderList_.rect({bounds.x+5, bounds.y+3, std::max(0.0f, bounds.width-10), bounds.height-6}, tokens.selection, 3);
+    renderList_.text({bounds.x+8, bounds.y+4, std::max(0.0f,bounds.width-16), bounds.height-8}, label + (focused ? "|" : ""), foreground, 11, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
 }
 } // namespace shinkou::editor

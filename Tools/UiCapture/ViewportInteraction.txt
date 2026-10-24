@@ -1,0 +1,53 @@
+# Native physical-pixel world integration, picking, and camera-plane gestures.
+wait 700
+framebuffer-native
+click "world-object:Companion Mesh"
+object-name "Companion Mesh"
+click "world-object:Demo Mesh"
+object-name "Demo Mesh"
+capture world-selected
+click-at "viewport.surface" 0.96 0.06
+object-name ""
+remember-camera
+look 65 25
+wait 200
+camera-look
+capture mouse-look
+remember-camera
+pan 70 -35
+wait 200
+camera-pan-plane
+click "world-object:Companion Mesh"
+object-name "Companion Mesh"
+resize 3840x2160
+wait 700
+framebuffer-native
+click "world-object:Demo Mesh"
+object-name "Demo Mesh"
+capture world-4k
+resize 1024x768
+wait 400
+framebuffer-native
+click "world-object:Companion Mesh"
+object-name "Companion Mesh"
+capture world-narrow
+resize 2560x1440
+wait 400
+click "toolbar.panels"
+click "window:settings"
+slide "settings.ui-scale" 0.62 0.5
+wait 600
+capture scaled-fonts
+click "tab:inspector"
+click "world-object:Demo Mesh"
+object-name "Demo Mesh"
+framebuffer-native
+capture world-scaled
+click "toolbar.panels"
+click "window:settings"
+click "settings.reset-scale"
+wait 400
+resize 1440x900
+wait 400
+framebuffer-native
+capture final

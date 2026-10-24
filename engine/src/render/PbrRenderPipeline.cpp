@@ -1,5 +1,6 @@
 #include "shinkou/render/PbrRenderPipeline.h"
 #include "shinkou/render/RenderBackend.h"
+#include "shinkou/render/LightingPipeline.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -9,7 +10,7 @@ namespace shinkou::render {
 namespace {
 bool finite(float value) noexcept { return std::isfinite(value) != 0; }
 
-void add_error(RenderDescriptorValidationResult& result, const char* message) {
+void add_error(RenderDescriptorValidationResult& result, const std::string& message) {
     result.errors.emplace_back(message);
 }
 
@@ -41,7 +42,7 @@ RenderDescriptorValidationResult validate_pbr_material(const PbrMaterialDesc& ma
     non_negative(material.emissiveFactor.y, "emissiveFactor.g");
     non_negative(material.emissiveFactor.z, "emissiveFactor.b");
     if (!finite(material.metallic) || material.metallic < 0.0f || material.metallic > 1.0f) add_error(result, "metallic must be in [0, 1]");
-    if (!finite(material.roughness) || material.roughness <= 0.0f || material.roughness > 1.0f) add_error(result, "roughness must be in (0, 1]");
+    if (!finite(material.roughness) || material.roughness < 0.0f || material.roughness > 1.0f) add_error(result, "roughness must be in [0, 1]");
     if (!finite(material.normalScale) || material.normalScale < 0.0f) add_error(result, "normalScale must be finite and non-negative");
     if (!finite(material.occlusionStrength) || material.occlusionStrength < 0.0f || material.occlusionStrength > 1.0f) add_error(result, "occlusionStrength must be in [0, 1]");
     if (!finite(material.emissiveStrength) || material.emissiveStrength < 0.0f) add_error(result, "emissiveStrength must be finite and non-negative");
@@ -106,69 +107,36 @@ LightClusterBuildResult build_light_clusters(const LightClusterDesc& description
     result.validation = validate_light_cluster_desc(description);
     if (!result.validation.valid()) return result;
     result.grid = make_light_cluster_grid(description);
-    result.clusterLightCounts.assign(static_cast<std::size_t>(result.grid.clusterCount), 0u);
-    std::vector<std::vector<std::uint32_t>> perCluster(result.clusterLightCounts.size());
-    const auto append_local_light = [&](std::uint32_t lightIndex, const LightRenderItem& item) {
-        const auto viewPosition = math::TransformPoint(view.viewMatrix, item.transform.position);
-        if (!finite(viewPosition.z) || viewPosition.z < description.nearPlane || viewPosition.z > description.farPlane) {
-            ++result.rejectedLightCount;
-            return;
+    LightBinningDesc binning;
+    binning.viewportWidth = description.viewportWidth;
+    binning.viewportHeight = description.viewportHeight;
+    binning.tileSize = description.tileSize;
+    binning.depthSlices = description.depthSlices;
+    binning.maxLightsPerBin = description.maxLightsPerCluster;
+    binning.nearPlane = description.nearPlane;
+    binning.farPlane = description.farPlane;
+    binning.logarithmicDepth = description.logarithmicDepth;
+    binning.includeDirectionalLights = false;
+    std::string binningError;
+    const auto built = build_light_binning(view,make_lighting_lights(lights),binning,&binningError);
+    if (!built.valid) { add_error(result.validation,"light binning failed: "+binningError); return result; }
+    result.clusterLightIndices = built.lightIndices;
+    result.clusterLightCounts.reserve(built.bins.size());
+    for (const auto& bin : built.bins) result.clusterLightCounts.push_back(bin.count);
+    result.overflowLightCount = built.droppedLightCount;
+    std::vector<bool> included(lights.size(),false);
+    for (const auto index : built.lightIndices) if (index < included.size()) included[index] = true;
+    for (std::size_t index = 0; index < lights.size(); ++index) {
+        const auto& light = lights[index].light;
+        const auto validation = validate_light_component(light);
+        merge(result.validation,validation);
+        if (light.type == LightType::Directional && light.visible && validation.valid())
+            result.directionalLightIndices.push_back(static_cast<std::uint32_t>(index));
+        else {
+            if (light.type == LightType::Point) ++result.pointLightCount;
+            if (light.type == LightType::Spot) ++result.spotLightCount;
+            if (!included[index]) ++result.rejectedLightCount;
         }
-        const auto clip = math::TransformVector4(view.viewProjection,
-            {item.transform.position.x, item.transform.position.y, item.transform.position.z, 1.0f});
-        if (!finite(clip.w) || clip.w <= math::Epsilon) {
-            ++result.rejectedLightCount;
-            return;
-        }
-        const float ndcX = clip.x / clip.w;
-        const float ndcY = clip.y / clip.w;
-        if (!finite(ndcX) || !finite(ndcY) || ndcX < -1.0f || ndcX > 1.0f || ndcY < -1.0f || ndcY > 1.0f) {
-            ++result.rejectedLightCount;
-            return;
-        }
-        const auto tileX = std::min(result.grid.tilesX - 1u,
-            static_cast<std::uint32_t>((ndcX * 0.5f + 0.5f) * description.viewportWidth / description.tileSize));
-        const auto tileY = std::min(result.grid.tilesY - 1u,
-            static_cast<std::uint32_t>((ndcY * 0.5f + 0.5f) * description.viewportHeight / description.tileSize));
-        float slicePosition = (viewPosition.z - description.nearPlane) / (description.farPlane - description.nearPlane);
-        if (description.logarithmicDepth) {
-            slicePosition = std::log(std::max(viewPosition.z, description.nearPlane) / description.nearPlane) /
-                std::log(description.farPlane / description.nearPlane);
-        }
-        const auto slice = std::min(result.grid.slices - 1u,
-            static_cast<std::uint32_t>(math::Clamp01(slicePosition) * result.grid.slices));
-        const auto cluster = (static_cast<std::uint64_t>(slice) * result.grid.tilesY + tileY) * result.grid.tilesX + tileX;
-        auto& entries = perCluster[static_cast<std::size_t>(cluster)];
-        if (entries.size() >= description.maxLightsPerCluster) {
-            ++result.overflowLightCount;
-            return;
-        }
-        entries.push_back(lightIndex);
-    };
-
-    for (std::uint32_t index = 0; index < lights.size(); ++index) {
-        const auto& item = lights[index];
-        const auto lightValidation = validate_light_component(item.light);
-        if (!lightValidation.valid()) {
-            merge(result.validation, lightValidation);
-            ++result.rejectedLightCount;
-            continue;
-        }
-        if (item.light.type == LightType::Directional) {
-            result.directionalLightIndices.push_back(index);
-        } else if (item.light.type == LightType::Point) {
-            ++result.pointLightCount;
-            append_local_light(index, item);
-        } else if (item.light.type == LightType::Spot) {
-            ++result.spotLightCount;
-            append_local_light(index, item);
-        } else {
-            ++result.rejectedLightCount;
-        }
-    }
-    for (std::size_t cluster = 0; cluster < perCluster.size(); ++cluster) {
-        result.clusterLightCounts[cluster] = static_cast<std::uint32_t>(perCluster[cluster].size());
-        result.clusterLightIndices.insert(result.clusterLightIndices.end(), perCluster[cluster].begin(), perCluster[cluster].end());
     }
     return result;
 }
@@ -190,10 +158,14 @@ ClusteredLightingPlan ClusteredForwardScheduler::schedule(RenderGraph& graph, co
     if (!plan.validation.valid()) return plan;
 
     const auto clusterCount = static_cast<std::size_t>(plan.build.grid.clusterCount);
+    constexpr std::size_t maxGpuIndexBytes=256u*1024u*1024u;
+    if (clusterCount>maxGpuIndexBytes/sizeof(std::uint32_t)/description.grid.maxLightsPerCluster) {
+        add_error(plan.validation,"cluster GPU index buffer exceeds the 256 MiB budget");return plan;
+    }
     plan.clusterBuffer = graph.create_buffer({clusterCount * sizeof(std::uint32_t) * 2u, sizeof(std::uint32_t) * 2u,
         false, false, {}, false, true, true});
     plan.clusterIndexBuffer = graph.create_buffer({std::max<std::size_t>(sizeof(std::uint32_t),
-        plan.build.clusterLightIndices.size() * sizeof(std::uint32_t)), sizeof(std::uint32_t), false, false,
+        clusterCount * description.grid.maxLightsPerCluster * sizeof(std::uint32_t)), sizeof(std::uint32_t), false, false,
         {}, false, true, true});
     struct GridParameters {
         std::uint32_t tilesX;
@@ -220,8 +192,8 @@ ClusteredLightingPlan ClusteredForwardScheduler::schedule(RenderGraph& graph, co
 
     std::vector<DescriptorBinding> bindings{
         {"lights", description.lightBuffer, DescriptorType::StructuredBuffer, description.lightSlot, 0, 1, false, {}},
-        {"clusters", plan.clusterBuffer, DescriptorType::StructuredBuffer, description.clusterSlot, 0, 1, false, {}},
-        {"clusterLightIndices", plan.clusterIndexBuffer, DescriptorType::StructuredBuffer, description.indexSlot, 0, 1, false, {}},
+        {"clusters", plan.clusterBuffer, DescriptorType::StorageBuffer, description.clusterSlot, 0, 1, false, {}},
+        {"clusterLightIndices", plan.clusterIndexBuffer, DescriptorType::StorageBuffer, description.indexSlot, 0, 1, false, {}},
         {"clusterParameters", plan.parameterBuffer, DescriptorType::UniformBuffer, description.parameterSlot, 0, 1, false, {}}
     };
     if (description.depthTexture) bindings.push_back({"depth", description.depthTexture, DescriptorType::Texture, description.depthSlot, 0, 1, false, {}});
@@ -240,9 +212,9 @@ ClusteredLightingPlan ClusteredForwardScheduler::schedule(RenderGraph& graph, co
     if (description.depthTexture) accesses.push_back({description.depthTexture, ResourceUsage::ShaderRead});
     const auto dispatchCount = static_cast<std::uint32_t>((plan.build.grid.clusterCount + 63u) / 64u);
     plan.passIndex = graph.add_pass("clustered_light_culling", std::move(accesses),
-        [material, plan, dispatchCount](auto& backend, const auto&) {
+        [material, parameters = plan.parameterBuffer, slot = description.parameterSlot, dispatchCount](auto& backend, const auto&) {
             backend.bind_material(material);
-            backend.bind_uniform_buffer(plan.parameterBuffer, 4, 0);
+            backend.bind_uniform_buffer(parameters, slot, 0);
             backend.dispatch({std::max(1u, dispatchCount), 1, 1});
         }, RenderQueue::Compute);
     plan.scheduled = true;

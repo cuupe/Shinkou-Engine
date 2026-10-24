@@ -227,6 +227,10 @@ EditorModelPreviewResult load_editor_model_preview(
                    [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     if (extension == ".gltf" || extension == ".glb")
         return load_editor_gltf_preview(files, relativePath, generation, sourceStamp, cancel);
+    if (extension == ".fbx")
+        return load_editor_fbx_preview(files, relativePath, generation, sourceStamp, cancel);
+    if (extension != ".obj") return failed(path, generation, sourceStamp,
+        "Unsupported model format; use FBX, OBJ, glTF or GLB");
     const auto absolute = files.resolve_existing(path);
     if (absolute.empty()) return failed(path, generation, sourceStamp,
         "model path is outside the project or no longer exists");

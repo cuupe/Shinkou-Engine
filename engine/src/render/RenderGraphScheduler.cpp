@@ -41,7 +41,7 @@ CommandResourceAccessMode default_policy(ResourceHandle, ResourceUsage usage) {
 
 std::size_t default_concurrency() {
     const auto hardware = std::thread::hardware_concurrency();
-    return hardware == 0 ? 1u : static_cast<std::size_t>(hardware);
+    return hardware == 0 ? 1u : std::min<std::size_t>(8,hardware);
 }
 
 void set_plan_error(CommandRecordingPlan& plan, std::string* error, std::string message) {
@@ -148,6 +148,9 @@ CommandRecordingPlan RenderGraphScheduler::build(const RenderGraph& graph, std::
         }
     }
 
+    for (const auto& dependency:graph.explicit_dependencies())
+        if (active.count(dependency.producer) && active.count(dependency.consumer))
+            addEdge(dependency.producer,dependency.consumer);
     std::vector<std::size_t> level(passes.size(), 0);
     for (const auto passIndex : executionOrder) {
         for (const auto next : edges[passIndex]) level[next] = std::max(level[next], level[passIndex] + 1);
@@ -259,7 +262,7 @@ CommandRecordingPlan RenderGraphScheduler::prepare(const RenderGraph& graph,
             std::vector<std::thread> workers;
             workers.reserve(end - offset);
             for (std::size_t position = offset; position < end; ++position) {
-                workers.emplace_back([&, position] {
+                const auto record = [&, position] {
                     const auto taskIndex = pending[position];
                     const auto& task = plan.tasks[taskIndex];
                     try {
@@ -298,7 +301,9 @@ CommandRecordingPlan RenderGraphScheduler::prepare(const RenderGraph& graph,
                         results[position - offset] = {CommandRecordingStatus::Failed,
                             "recording executor threw an unknown exception", {}};
                     }
-                });
+                };
+                if (end-offset==1) record();
+                else workers.emplace_back(record);
             }
             for (auto& worker : workers) worker.join();
             for (std::size_t index = 0; index < results.size(); ++index) {

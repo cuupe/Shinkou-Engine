@@ -171,6 +171,11 @@ int main() {
     const auto asset = audio.load("ui/click.wav");
     assert(asset != 0);
     assert(audio.load("ui/click.wav") == asset);
+    const auto streamedVariant = audio.load("ui/click.wav", true);
+    assert(streamedVariant != 0 && streamedVariant != asset);
+    assert(audio.asset_info(streamedVariant).streaming);
+    assert(audio.load("ui/click.wav", true) == streamedVariant);
+    audio.unload(streamedVariant);
     assert(audio.asset_count() == 1);
     const auto assetInfo = audio.asset_info(asset);
     assert(assetInfo.durationKnown && std::abs(assetInfo.durationSeconds - 30.0) < 0.00001);

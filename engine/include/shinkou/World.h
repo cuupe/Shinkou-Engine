@@ -205,6 +205,8 @@ public:
     void clear_ecs_systems() noexcept;
     std::size_t ecs_system_count() const noexcept { return ecsSystems_.size(); }
     void update(Seconds dt);
+    // Flush spatial edits without advancing game logic (editor pause mode).
+    void refresh_transforms() noexcept { update_transform_pipeline(); }
 };
 
 template<class T, class... Args>

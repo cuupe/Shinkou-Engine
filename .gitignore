@@ -8,3 +8,10 @@
 /.cache/
 *.user
 *.suo
+**/node_modules/
+/.shinkou/cache/
+/CMakeUserPresets.json
+/compile_commands.json
+
+# 独立仓库/外部学习资料，不随本仓库提交
+/Tools/Games101Lab/

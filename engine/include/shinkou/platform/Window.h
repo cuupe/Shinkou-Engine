@@ -11,6 +11,7 @@ struct WindowConfig {
     std::uint32_t width{1280};
     std::uint32_t height{720};
     bool visible{true};
+    bool maximized{false};
 };
 
 class Window final {

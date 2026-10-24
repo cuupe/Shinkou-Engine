@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shinkou/Types.h"
+#include "shinkou/GameObject.h"
 #include "shinkou/ui/Render.h"
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,7 @@ struct EditorAudioPreviewSnapshot;
 struct EditorVideoPreviewSnapshot;
 struct EditorModelPreviewSnapshot;
 struct EditorModelPreviewSceneState;
+struct EditorTextPreviewSnapshot;
 
 enum class EditorCommand : std::uint8_t {
     None,
@@ -128,6 +130,14 @@ struct EditorInspectorField {
     bool editable{false};
     bool boolean{false};
     std::shared_ptr<const std::vector<EditorInspectorChoice>> choices{};
+    // Native editors consume typed data. value remains a text projection for
+    // the retained adapter, diagnostics, and existing serialized contracts.
+    PropertyType type{PropertyType::String};
+    PropertyValue data{};
+    PropertyPresentation presentation{PropertyPresentation::Default};
+    ComponentId componentId{0};
+    std::string componentName{};
+    double minimum{0},maximum{0},step{0};
 };
 
 struct EditorBuildToolModel {
@@ -159,6 +169,7 @@ struct EditorAssetPreviewUiState {
     bool loading{false};
     bool truncated{false};
     std::vector<std::string> textLines;
+    std::shared_ptr<const EditorTextPreviewSnapshot> textPreview;
     std::uint32_t imageWidth{0};
       std::uint32_t imageHeight{0};
       std::shared_ptr<const ui::UiImageSnapshot> imageSnapshot{};

@@ -8,6 +8,11 @@
 #if defined(SHINKOU_PLATFORM_WINDOWS)
 #include <windows.h>
 #include <shellapi.h>
+#if defined(SHINKOU_WITH_IMGUI)
+#include <imgui.h>
+#include <backends/imgui_impl_win32.h>
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
+#endif
 
 namespace {
 std::string utf8_from_wide(const std::wstring& value) {
@@ -22,8 +27,21 @@ std::string utf8_from_wide(const std::wstring& value) {
 }
 
 LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+#if defined(SHINKOU_WITH_IMGUI)
+    // A background QA window receives explicitly targeted mouse coordinates.
+    // Native leave notifications describe the foreground desktop in that mode,
+    // so they must not erase the synthetic hover between scripted clicks.
+    static const bool targetedQaMouse=[] {
+        wchar_t value[2]{};
+        return GetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE",value,2)==1 && value[0]==L'1' &&
+            GetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT",nullptr,0)>1;
+    }();
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData &&
+        !(targetedQaMouse && (message==WM_MOUSELEAVE || message==WM_NCMOUSELEAVE)))
+        ImGui_ImplWin32_WndProcHandler(window,message,wParam,lParam);
+#endif
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTA*>(lParam);
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
         SetWindowLongPtrA(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
     }
     if (message == WM_COMMAND && HIWORD(wParam) == 0) {
@@ -58,6 +76,14 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         return 0;
     }
     if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_GETMINMAXINFO) {
+        const auto result=DefWindowProcW(window,message,wParam,lParam);
+        // A render surface may exceed the current monitor (remote/4K QA or
+        // a large desktop). Keep maximize bounds native, lift tracking limits.
+        auto* limits=reinterpret_cast<MINMAXINFO*>(lParam);
+        limits->ptMaxTrackSize={16384,16384};
+        return result;
+    }
     if (message == WM_DPICHANGED) {
         const auto* rect = reinterpret_cast<const RECT*>(lParam);
         SetWindowPos(window,nullptr,rect->left,rect->top,rect->right-rect->left,rect->bottom-rect->top,SWP_NOACTIVATE|SWP_NOZORDER);
@@ -71,7 +97,7 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProcA(window, message, wParam, lParam);
+    return DefWindowProcW(window, message, wParam, lParam);
 }
 }
 #endif
@@ -94,22 +120,26 @@ bool Window::create(const WindowConfig& config) {
             (void)setAwareness(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(-4)));
         }
     }
-    static const char* className = "ShinkouEngineWindow";
+    static const wchar_t* className = L"ShinkouEngineWindow";
     static bool registered = false;
     if (!registered) {
-        WNDCLASSA windowClass{};
+        WNDCLASSW windowClass{};
         windowClass.lpfnWndProc = ShinkouWindowProc;
         windowClass.hInstance = GetModuleHandleA(nullptr);
         windowClass.lpszClassName = className;
         windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
         windowClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-        if (!RegisterClassA(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+        if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
         registered = true;
     }
     const DWORD style = WS_OVERLAPPEDWINDOW;
     RECT rect{0, 0, static_cast<LONG>(config.width), static_cast<LONG>(config.height)};
     AdjustWindowRect(&rect, style, FALSE);
-    HWND window = CreateWindowExA(0, className, config.title.c_str(), style,
+    const int titleSize=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,config.title.c_str(),-1,nullptr,0);
+    if (titleSize<=0) return false;
+    std::wstring title(static_cast<std::size_t>(titleSize),L'\0');
+    MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,config.title.c_str(),-1,title.data(),titleSize);
+    HWND window = CreateWindowExW(0, className, title.c_str(), style,
         CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top,
         nullptr, nullptr, GetModuleHandleA(nullptr), this);
     if (!window) return false;
@@ -118,7 +148,7 @@ bool Window::create(const WindowConfig& config) {
     width_ = config.width;
     height_ = config.height;
     if (config.visible) {
-        ShowWindow(window, SW_SHOW);
+        ShowWindow(window, config.maximized ? SW_MAXIMIZE : SW_SHOW);
         UpdateWindow(window);
     }
     // WM_DROPFILES is intentionally used as a small native adapter. It
@@ -150,6 +180,17 @@ void Window::process_events() {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     MSG message{};
     while (PeekMessageA(&message, nullptr, 0, 0, PM_REMOVE)) {
+#if defined(SHINKOU_WITH_IMGUI)
+        // Targeted QA drives every platform HWND through posted Win32 input.
+        // Hardware leave events describe another foreground desktop in that
+        // mode and must not erase the supplied mouse position in child windows.
+        static const bool targetedQaMouse=[] {
+            wchar_t value[2]{};
+            return GetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE",value,2)==1 && value[0]==L'1' &&
+                GetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT",nullptr,0)>1;
+        }();
+        if(targetedQaMouse&&(message.message==WM_MOUSELEAVE||message.message==WM_NCMOUSELEAVE))continue;
+#endif
         if (message.message == WM_QUIT) open_ = false;
         TranslateMessage(&message);
         DispatchMessageA(&message);

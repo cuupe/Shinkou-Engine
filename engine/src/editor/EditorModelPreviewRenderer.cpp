@@ -1,6 +1,7 @@
 #include "shinkou/editor/EditorModelPreviewRenderer.h"
 
 #include "shinkou/render/Renderer.h"
+#include "shinkou/render/BuiltinShaders.h"
 #include "shinkou/ui/Render.h"
 
 #include <algorithm>
@@ -139,14 +140,10 @@ float4 main(FragmentInput input) : SV_Target
         materialRoughness = clamp(materialRoughness * metallicRoughness.g, 0.04f, 1.0f);
     }
     const float3 viewDirection = normalize(cameraPositionAndFlags.xyz - input.worldPosition);
-    const float3 halfway = normalize(lightDirection + viewDirection);
-    const float ndotl = saturate(dot(normal, lightDirection));
-    const float diffuse = 0.18 + 0.82 * ndotl;
-    const float specularPower = lerp(128.0, 4.0, materialRoughness);
-    const float specular = pow(saturate(dot(normal, halfway)), specularPower) *
-        lerp(0.04, 1.0, materialMetallic);
     const float3 albedo = baseColor.rgb * BaseColorTexture.Sample(BaseColorSampler, saturate(input.uv)).rgb;
-    const float3 color = albedo * (0.08 + diffuse * (1.0 - materialMetallic)) + specular.xxx;
+    const float3 direct = shinkou_pbr_direct(albedo,materialMetallic,materialRoughness,
+        normal,viewDirection,lightDirection,3.0.xxx);
+    const float3 color = shinkou_linear_to_srgb(shinkou_tone_map(direct+albedo*0.03*(1.0-materialMetallic)));
     return float4(color, baseColor.a);
 }
 )hlsl";
@@ -382,7 +379,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     const EditorModelPreviewSceneState& scene,
     std::int32_t materialIndex,
     std::shared_ptr<const ui::UiImageSnapshot> textureSnapshot,
-    EditorModelPreviewTextureRole textureRole) {
+    EditorModelPreviewTextureRole textureRole, bool compositeToViewport, bool wireframe) {
     EditorModelPreviewRenderState state;
     const auto capabilities = renderer.capabilities();
     state.backend = capabilities.api;
@@ -413,7 +410,11 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         state.status = "GPU model preview fallback: editor offscreen target path is unavailable";
         return state;
     }
-    const auto& viewport = renderer.editor_viewport().viewport;
+    // The native inspector samples a square texture, independently of the
+    // main scene's aspect ratio. Using the scene viewport here stretched FBX
+    // cubes vertically when the editor's scene dock was wide.
+    const auto viewport = compositeToViewport ? renderer.editor_viewport().viewport :
+        render::EditorViewportRect{0.0f,0.0f,512.0f,512.0f};
     const auto targetWidth = preview_target_dimension(viewport.width);
     const auto targetHeight = preview_target_dimension(viewport.height);
     if (targetWidth == 0 || targetHeight == 0) {
@@ -568,7 +569,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     state.textureCoordinatesApplied = hasTextureCoordinates;
     state.normalsApplied = hasNormals;
 
-    const auto sceneFrame = make_scene_frame(snapshot, scene, renderer.editor_viewport().viewport);
+    const auto sceneFrame = make_scene_frame(snapshot, scene, viewport);
     const bool hasMaterial = snapshot.materials && materialIndex >= 0 &&
         static_cast<std::size_t>(materialIndex) < snapshot.materials->size();
     const bool hasTextureSnapshot = textureSnapshot && textureSnapshot->valid() &&
@@ -582,7 +583,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     auto materialFrame = make_material_frame(snapshot, materialIndex);
     materialFrame.normalMapEnabled = useNormalTexture ? 1.0f : 0.0f;
     materialFrame.metallicRoughnessTextureEnabled = useMetallicRoughnessTexture ? 1.0f : 0.0f;
-    const auto projectionKey = projection_key(snapshot, scene, renderer.editor_viewport().viewport);
+    const auto projectionKey = projection_key(snapshot, scene, viewport);
     if (!valid_buffer_description(renderer, sceneBuffer_, sizeof(sceneFrame), false, false)) {
         if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
         render::BufferDesc description;
@@ -731,7 +732,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     actualNormalTexture_ = useNormalTexture;
     actualMetallicRoughnessTexture_ = useMetallicRoughnessTexture;
 
-    if (!pipeline_ || pipelineColorFormat_ != colorFormat) {
+    if (!pipeline_ || pipelineColorFormat_ != colorFormat || pipelineWireframe_ != wireframe) {
         clear_pipeline(renderer);
         render::ShaderDesc vertexDescription;
         vertexDescription.stage = render::ShaderStage::Vertex;
@@ -744,7 +745,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         render::ShaderDesc fragmentDescription;
         fragmentDescription.stage = render::ShaderStage::Fragment;
         fragmentDescription.name = "editor_model_preview_fragment";
-        fragmentDescription.source = std::string(kPreviewFragmentShader);
+        fragmentDescription.source = std::string(render::pbr_shader_library()) + std::string(kPreviewFragmentShader);
         fragmentDescription.profile = "ps_5_0";
         fragmentDescription.sourceKind = render::ShaderSourceKind::Source;
         fragmentDescription.revision = 1;
@@ -755,7 +756,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
             return state;
         }
         render::PipelineDesc pipelineDescription;
-        pipelineDescription.name = "editor_model_preview_pipeline_" + colorFormat;
+        pipelineDescription.name = "editor_model_preview_pipeline_" + colorFormat + (wireframe?"_wire":"_solid");
         pipelineDescription.vertexShader = vertexShader_.id;
         pipelineDescription.fragmentShader = fragmentShader_.id;
         pipelineDescription.depthTest = true;
@@ -767,7 +768,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         // is a two-sided inspection surface). Avoid dropping the entire
         // asset when a provider's winding is not yet normalized.
         pipelineDescription.cullMode = "none";
-        pipelineDescription.fillMode = "solid";
+        pipelineDescription.fillMode = wireframe ? "wireframe" : "solid";
         pipelineDescription.topology = "triangle";
         pipelineDescription.colorFormat = colorFormat;
         pipelineDescription.depthFormat = depthFormat;
@@ -817,6 +818,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
             return state;
         }
         pipelineColorFormat_ = colorFormat;
+        pipelineWireframe_ = wireframe;
     }
 
     if (!material_ || materialTextureId_ != baseColorTexture_.id || materialSamplerId_ != baseColorSampler_.id ||
@@ -910,7 +912,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
             backend.bind_uniform_buffer(parameters, 4, 0);
             backend.draw_mesh({vertex, index, indexCount, math::Mat4::Identity()});
         }, render::RenderQueue::Graphics, true, false);
-    renderer.graph().add_pass("editor_model_preview_composite", {
+    if (compositeToViewport) renderer.graph().add_pass("editor_model_preview_composite", {
         {offscreenColor_, render::ResourceUsage::ShaderRead},
         {compositeMaterial_, render::ResourceUsage::ShaderRead},
         {baseColorSampler_, render::ResourceUsage::ShaderRead}},
@@ -930,7 +932,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     state.textureSampled = actualBaseColorTexture_ || actualNormalTexture_ ||
         actualMetallicRoughnessTexture_;
     state.offscreenTargetReady = true;
-    state.offscreenCompositeApplied = true;
+    state.offscreenCompositeApplied = compositeToViewport;
     state.status = hasMaterial
         ? (actualMetallicRoughnessTexture_
             ? "GPU lit preview ready (D3D11); offscreen target composited, metallic/roughness texture sampled, factors applied"
@@ -947,6 +949,7 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
                 ? "GPU geometry preview ready (D3D11); offscreen target composited, base color texture sampled"
                 : "GPU geometry preview ready (D3D11); offscreen target composited, base color applied, texture artifact unavailable");
     state.status += "; depth-tested";
+    if (!compositeToViewport) state.status="GPU model preview ready in offscreen texture";
     return state;
 }
 

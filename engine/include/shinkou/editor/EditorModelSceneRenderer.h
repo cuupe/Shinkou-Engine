@@ -60,6 +60,7 @@ class EditorModelSceneRenderer final {
     std::unordered_map<std::uint64_t, render::ResourceHandle> objectBuffers_;
     std::uint64_t sceneRevision_{0};
     std::string pipelineColorFormat_{};
+    bool pipelineDepth_{false};
 
     void clear_pipeline(render::Renderer& renderer) noexcept;
 
@@ -68,7 +69,8 @@ public:
         render::Renderer& renderer,
         const std::vector<EditorModelSceneInstance>& instances,
         const math::Mat4& viewProjection,
-        math::Vec3 cameraPosition);
+        math::Vec3 cameraPosition,
+        render::ResourceHandle colorTarget = {}, render::ResourceHandle depthTarget = {});
 
     // Called after a frame with the active identities. This makes deletion or
     // replacement of scene references reclaim persistent GPU buffers instead

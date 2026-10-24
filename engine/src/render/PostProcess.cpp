@@ -63,6 +63,7 @@ bool valid_stage_kind(PostProcessStageKind kind) noexcept {
     case PostProcessStageKind::TAA:
     case PostProcessStageKind::SSR:
     case PostProcessStageKind::ToneMap:
+    case PostProcessStageKind::MotionBlur:
         return true;
     }
     return false;
@@ -136,8 +137,78 @@ void add_slot(PostProcessValidationResult& result, std::unordered_map<std::uint6
 }
 }
 
+bool validate_post_process_parameters(const PostProcessStageDesc& stage, std::string& error) {
+    error.clear();
+    const auto parameter_non_negative=[](float value){return math::IsFinite(value) && value>=0;};
+    if (!math::IsFinite(stage.exposure) || !math::IsFinite(stage.blendFactor) || stage.blendFactor < 0.0f) {
+        error = "post-process stage has invalid exposure or blend factor";
+        return false;
+    }
+    const auto valid_variant = [&error,&stage,&parameter_non_negative](const auto& value) {
+        using V = std::decay_t<decltype(value)>;
+        const bool matches=std::is_same_v<V,std::monostate> || stage.kind==PostProcessStageKind::Custom ||
+            (std::is_same_v<V,ExposureStageParameters> && stage.kind==PostProcessStageKind::Exposure) ||
+            (std::is_same_v<V,BloomStageParameters> && stage.kind==PostProcessStageKind::Bloom) ||
+            (std::is_same_v<V,SsaoStageParameters> && stage.kind==PostProcessStageKind::SSAO) ||
+            (std::is_same_v<V,TaaStageParameters> && stage.kind==PostProcessStageKind::TAA) ||
+            (std::is_same_v<V,SsrStageParameters> && stage.kind==PostProcessStageKind::SSR) ||
+            (std::is_same_v<V,MotionBlurStageParameters> && stage.kind==PostProcessStageKind::MotionBlur);
+        if (!matches) {error="post-process parameter type does not match its stage";return false;}
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ExposureStageParameters>) {
+            if (!math::IsFinite(value.exposure) || value.exposure<=0 || !parameter_non_negative(value.adaptationRate) || !parameter_non_negative(value.darkAdaptationRate) ||
+                !std::isfinite(value.minExposure) || value.minExposure<=0 || !std::isfinite(value.maxExposure) || value.maxExposure<value.minExposure ||
+                !std::isfinite(value.middleGray) || value.middleGray<=0 || !std::isfinite(value.compensation) || std::abs(value.compensation)>24 ||
+                static_cast<unsigned>(value.metering)>static_cast<unsigned>(ExposureMetering::Histogram) ||
+                !std::isfinite(value.minLogLuminance) || !std::isfinite(value.maxLogLuminance) || value.minLogLuminance<-32 ||
+                value.maxLogLuminance>32 || value.maxLogLuminance-value.minLogLuminance<0.01f ||
+                !std::isfinite(value.lowPercentile) || !std::isfinite(value.highPercentile) || value.lowPercentile<0 ||
+                value.highPercentile>1 || value.highPercentile-value.lowPercentile<0.001f) {
+                error = "exposure parameters must be finite and non-negative where applicable";
+                return false;
+            }
+        } else if constexpr (std::is_same_v<T, BloomStageParameters>) {
+            if (!parameter_non_negative(value.threshold) || !math::IsFinite(value.knee) || value.knee < 0.0f || value.knee > 1.0f ||
+                !parameter_non_negative(value.intensity) || value.mipLevels == 0 || value.mipLevels>12 || !parameter_non_negative(value.scatter) || value.scatter>1) {
+                error = "bloom parameters are outside their supported ranges";
+                return false;
+            }
+        } else if constexpr (std::is_same_v<T, SsaoStageParameters>) {
+            if (!(value.radius > 0.0f) || !math::IsFinite(value.radius) ||
+                !parameter_non_negative(value.power) || !parameter_non_negative(value.bias) || value.sampleCount == 0) {
+                error = "SSAO parameters are outside their supported ranges";
+                return false;
+            }
+        } else if constexpr (std::is_same_v<T, TaaStageParameters>) {
+            if (value.feedback < 0.0f || value.feedback > 1.0f || !math::IsFinite(value.feedback) ||
+                !parameter_non_negative(value.sharpness) || value.motionRejection < 0.0f ||
+                value.motionRejection > 1.0f || !math::IsFinite(value.motionRejection) || !parameter_non_negative(value.depthRejection)) {
+                error = "TAA parameters are outside their supported ranges";
+                return false;
+            }
+        } else if constexpr (std::is_same_v<T, SsrStageParameters>) {
+            if (!(value.maxDistance > 0.0f) || !math::IsFinite(value.maxDistance) ||
+                !parameter_non_negative(value.thickness) || !(value.stride > 0.0f) ||
+                !math::IsFinite(value.stride) || value.maxSteps == 0) {
+                error = "SSR parameters are outside their supported ranges";
+                return false;
+            }
+        } else if constexpr (std::is_same_v<T,MotionBlurStageParameters>) {
+            if (!parameter_non_negative(value.shutterFraction) || value.shutterFraction>1 ||
+                !parameter_non_negative(value.maxRadiusPixels) || value.maxRadiusPixels>256 ||
+                !parameter_non_negative(value.depthRejection) || !value.sampleCount || value.sampleCount>32) {
+                error="motion blur parameters are outside supported ranges";return false;
+            }
+        }
+        return true;
+    };
+    return std::visit(valid_variant, stage.parameters);
+}
+
 PostProcessValidationResult validate_post_process_stage(const PostProcessStageDesc& stage) {
     PostProcessValidationResult result;
+    std::string parameterError;
+    if (!validate_post_process_parameters(stage,parameterError)) add_error(result,parameterError);
     if (!valid_stage_name(stage.name)) add_error(result, "stage name must not be empty");
     if (!stage.pipeline || stage.pipeline.kind != ResourceKind::Pipeline) add_error(result, "stage pipeline must be a pipeline resource");
     if (stage.sampler && stage.sampler.kind != ResourceKind::Sampler) add_error(result, "stage sampler must be a sampler resource");
@@ -190,6 +261,7 @@ PostProcessValidationResult validate_post_process_stage(const PostProcessStageDe
     switch (stage.kind) {
     case PostProcessStageKind::Custom:
     case PostProcessStageKind::ToneMap:
+    case PostProcessStageKind::MotionBlur:
         break;
     case PostProcessStageKind::Exposure: {
         if (!is_default() && !std::holds_alternative<ExposureStageParameters>(stage.parameters)) { add_error(result, "exposure stage parameters have the wrong type"); break; }

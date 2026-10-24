@@ -52,6 +52,7 @@ inline bool has_flag(PropertyFlags value, PropertyFlags flag) noexcept {
     return (static_cast<std::uint32_t>(value) & static_cast<std::uint32_t>(flag)) != 0;
 }
 
+enum class PropertyPresentation { Default, EulerDegrees };
 struct PropertyDescriptor {
     std::string name;
     std::string displayName;
@@ -62,6 +63,9 @@ struct PropertyDescriptor {
     double step{0.0};
     std::function<PropertyValue()> get;
     std::function<bool(const PropertyValue&)> set;
+    PropertyPresentation presentation{PropertyPresentation::Default};
+    std::function<PropertyValue()> editorGet;
+    std::function<bool(const PropertyValue&)> editorSet;
 
     bool editable() const noexcept { return !has_flag(flags, PropertyFlags::ReadOnly) && static_cast<bool>(set); }
 };
@@ -156,7 +160,9 @@ public:
                     std::function<bool(const PropertyValue&)> setter,
                     PropertyFlags flags = PropertyFlags::Serialized,
                     double minimum = 0.0, double maximum = 0.0, double step = 0.0,
-                    std::string displayName = {}) {
+                    std::string displayName = {}, PropertyPresentation presentation = PropertyPresentation::Default,
+                    std::function<PropertyValue()> editorGet = {},
+                    std::function<bool(const PropertyValue&)> editorSet = {}) {
         PropertyDescriptor descriptor;
         descriptor.name = std::move(name);
         descriptor.displayName = displayName.empty() ? descriptor.name : std::move(displayName);
@@ -167,6 +173,8 @@ public:
         descriptor.step = step;
         descriptor.get = std::move(getter);
         descriptor.set = has_flag(flags, PropertyFlags::ReadOnly) ? nullptr : std::move(setter);
+        descriptor.presentation=presentation;
+        descriptor.editorGet=std::move(editorGet);descriptor.editorSet=std::move(editorSet);
         properties_.push_back(std::move(descriptor));
     }
 
@@ -255,6 +263,10 @@ private:
 namespace components {
 class TransformComponent final : public Component {
     math::Mat4 worldMatrix_{math::Mat4::Identity()};
+    math::Mat4 parentWorld_{math::Mat4::Identity()};
+    math::Transform evaluatedLocal_{};
+    mutable math::Quat editorRotation_{};
+    mutable math::Vec3 editorEuler_{};
     bool dirty_{true};
 
     friend class ::shinkou::GameObject;
@@ -266,9 +278,12 @@ public:
     const math::Mat4& world_matrix() const noexcept { return worldMatrix_; }
     std::string_view type_name() const noexcept override { return "Transform"; }
     void mark_dirty() noexcept { dirty_ = true; }
-    void set_position(math::Vec3 position) noexcept { local.position = position; mark_dirty(); }
-    void set_rotation(math::Quat rotation) noexcept { local.rotation = rotation; mark_dirty(); }
-    void set_scale(math::Vec3 scale) noexcept { local.scale = scale; mark_dirty(); }
+    bool set_position(math::Vec3 position) noexcept;
+    bool set_rotation(math::Quat rotation) noexcept;
+    bool set_scale(math::Vec3 scale) noexcept;
+    bool set_local_transform(const math::Transform& transform) noexcept;
+    math::Vec3 euler_degrees() const noexcept;
+    bool set_euler_degrees(math::Vec3 degrees) noexcept;
 
 protected:
     void define_properties(PropertyBuilder& builder) override {
@@ -277,24 +292,23 @@ protected:
             [this](const PropertyValue& value) {
                 const auto* next = std::get_if<math::Vec3>(&value);
                 if (!next) return false;
-                set_position(*next);
-                return true;
+                return set_position(*next);
             });
         builder.add_custom("rotation", PropertyType::Quaternion,
             [this] { return PropertyValue{local.rotation}; },
             [this](const PropertyValue& value) {
                 const auto* next = std::get_if<math::Quat>(&value);
                 if (!next) return false;
-                set_rotation(*next);
-                return true;
-            });
+                return set_rotation(*next);
+            },PropertyFlags::Serialized,0,0,0,"Rotation",PropertyPresentation::EulerDegrees,
+            [this]{return PropertyValue{euler_degrees()};},
+            [this](const PropertyValue& value){const auto* angles=std::get_if<math::Vec3>(&value);return angles && set_euler_degrees(*angles);});
         builder.add_custom("scale", PropertyType::Vec3,
             [this] { return PropertyValue{local.scale}; },
             [this](const PropertyValue& value) {
                 const auto* next = std::get_if<math::Vec3>(&value);
                 if (!next) return false;
-                set_scale(*next);
-                return true;
+                return set_scale(*next);
             });
     }
 };

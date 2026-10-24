@@ -37,6 +37,164 @@ std::string format_media_time(double seconds) {
     return output.str();
 }
 
+void draw_editor_glyph(ui::UiRenderList& list, ui::Rect box, std::string_view glyph,
+                       ui::ThemeColor ink, ui::ThemeColor fill = {}) {
+    const float x = box.x;
+    const float y = box.y;
+    const float w = box.width;
+    const float h = box.height;
+    const float left = x + w * 0.22f;
+    const float right = x + w * 0.78f;
+    const float top = y + h * 0.22f;
+    const float bottom = y + h * 0.78f;
+    const float midX = x + w * 0.5f;
+    const float midY = y + h * 0.5f;
+    const auto stroke = std::max(1.0f, std::min(w, h) * 0.085f);
+    const auto line = [&](ui::Vec2 from, ui::Vec2 to, float thickness = 0.0f) {
+        list.line(from, to, ink, thickness > 0.0f ? thickness : stroke);
+    };
+    const auto filled = [&](ui::Rect rect, float rounding = 1.5f) {
+        list.rect(rect, ink, rounding);
+    };
+
+    if (glyph == "play") {
+        line({left + 1.0f, top}, {right, midY});
+        line({right, midY}, {left + 1.0f, bottom});
+        line({left + 1.0f, bottom}, {left + 1.0f, top});
+    } else if (glyph == "stop") {
+        filled({left, top, right - left, bottom - top}, 2.0f);
+    } else if (glyph == "pause") {
+        filled({left + 1.0f, top, w * 0.18f, bottom - top}, 1.0f);
+        filled({midX + w * 0.08f, top, w * 0.18f, bottom - top}, 1.0f);
+    } else if (glyph == "step") {
+        line({left, top}, {midX + 1.0f, midY});
+        line({midX + 1.0f, midY}, {left, bottom});
+        line({left, bottom}, {left, top});
+        line({right - 1.0f, top}, {right - 1.0f, bottom});
+    } else if (glyph == "save") {
+        list.rect({left, top, right - left, bottom - top}, ink, 1.5f);
+        list.rect({left + w * 0.16f, top + h * 0.12f, w * 0.33f, h * 0.22f},
+                  fill.a > 0.0f ? fill : ink, 0.5f);
+        list.rect({left + w * 0.18f, midY + h * 0.08f, w * 0.50f, h * 0.25f},
+                  fill.a > 0.0f ? fill : ink, 1.0f);
+    } else if (glyph == "build") {
+        line({left + 2.0f, bottom - 1.0f}, {midX + 3.0f, top + 5.0f}, 2.0f);
+        line({midX + 3.0f, top + 5.0f}, {right - 1.0f, top + 1.0f}, 2.0f);
+        line({midX + 3.0f, top + 5.0f}, {right - 1.0f, midY}, 2.0f);
+        line({left + 1.0f, bottom - 1.0f}, {left + 6.0f, bottom - 1.0f}, 3.0f);
+    } else if (glyph == "reset") {
+        line({right - 2.0f, midY - 4.0f}, {right - 2.0f, top + 1.0f});
+        line({right - 2.0f, top + 1.0f}, {right - 8.0f, top + 1.0f});
+        line({right - 2.0f, top + 1.0f}, {right - 2.0f, top + 7.0f});
+        line({right - 3.0f, top + 2.0f}, {midX, top + 2.0f});
+        line({midX, top + 2.0f}, {left + 2.0f, midY});
+        line({left + 2.0f, midY}, {midX, bottom - 2.0f});
+        line({midX, bottom - 2.0f}, {right - 3.0f, bottom - 2.0f});
+    } else if (glyph == "plus") {
+        line({midX, top + 2.0f}, {midX, bottom - 2.0f}, 1.7f);
+        line({left + 2.0f, midY}, {right - 2.0f, midY}, 1.7f);
+    } else if (glyph == "search") {
+        line({midX - w * 0.16f, top + h * 0.05f}, {midX + w * 0.15f, top + h * 0.05f}, 1.5f);
+        line({midX + w * 0.15f, top + h * 0.05f}, {midX + w * 0.25f, midY}, 1.5f);
+        line({midX + w * 0.25f, midY}, {midX + w * 0.15f, bottom - h * 0.05f}, 1.5f);
+        line({midX + w * 0.15f, bottom - h * 0.05f}, {midX - w * 0.16f, bottom - h * 0.05f}, 1.5f);
+        line({midX - w * 0.16f, bottom - h * 0.05f}, {midX - w * 0.25f, midY}, 1.5f);
+        line({midX - w * 0.25f, midY}, {midX - w * 0.16f, top + h * 0.05f}, 1.5f);
+        line({midX + w * 0.16f, bottom - h * 0.02f}, {right - 1.0f, bottom + 1.0f}, 1.8f);
+    } else if (glyph == "filter") {
+        line({left, top + 1.0f}, {right, top + 1.0f}, 1.6f);
+        line({left + w * 0.12f, midY}, {right - w * 0.12f, midY}, 1.6f);
+        line({left + w * 0.26f, bottom - 1.0f}, {right - w * 0.26f, bottom - 1.0f}, 1.6f);
+    } else if (glyph == "chevron-right") {
+        line({midX - 3.0f, top + 1.0f}, {midX + 3.0f, midY});
+        line({midX + 3.0f, midY}, {midX - 3.0f, bottom - 1.0f});
+    } else if (glyph == "chevron-down") {
+        line({left + 1.0f, midY - 3.0f}, {midX, midY + 3.0f});
+        line({midX, midY + 3.0f}, {right - 1.0f, midY - 3.0f});
+    } else if (glyph == "close") {
+        line({left + 1.0f, top + 1.0f}, {right - 1.0f, bottom - 1.0f});
+        line({right - 1.0f, top + 1.0f}, {left + 1.0f, bottom - 1.0f});
+    } else if (glyph == "more") {
+        filled({left + 1.0f, midY - 1.5f, 3.0f, 3.0f}, 1.0f);
+        filled({midX - 1.5f, midY - 1.5f, 3.0f, 3.0f}, 1.0f);
+        filled({right - 4.0f, midY - 1.5f, 3.0f, 3.0f}, 1.0f);
+    } else if (glyph == "folder") {
+        list.rect({left, y + h * 0.32f, right - left, bottom - y - h * 0.32f}, ink, 1.0f);
+        list.rect({left + 1.0f, top + 2.0f, w * 0.31f, h * 0.18f}, ink, 1.0f);
+    } else if (glyph == "scene") {
+        list.border({left, top + 2.0f, right - left, bottom - top - 2.0f}, ink, 1.2f, 1.2f);
+        line({left + 2.0f, midY}, {right - 2.0f, midY}, 1.0f);
+        line({midX, top + 4.0f}, {midX, bottom - 2.0f}, 1.0f);
+    } else if (glyph == "camera") {
+        list.border({left, y + h * 0.32f, right - left, h * 0.39f}, ink, 1.2f, 1.2f);
+        list.border({left + w * 0.18f, top + 1.0f, w * 0.24f, h * 0.18f}, ink, 1.0f, 1.0f);
+        list.border({midX - w * 0.12f, midY - h * 0.11f, w * 0.24f, h * 0.22f}, ink, 1.0f, 3.0f);
+    } else if (glyph == "light") {
+        line({midX, top}, {midX, y + 1.0f});
+        line({midX, bottom}, {midX, y + h - 1.0f});
+        line({left, midY}, {x + 1.0f, midY});
+        line({right, midY}, {x + w - 1.0f, midY});
+        line({left + 3.0f, top + 3.0f}, {left, top});
+        line({right - 3.0f, top + 3.0f}, {right, top});
+        line({left + 3.0f, bottom - 3.0f}, {left, bottom});
+        line({right - 3.0f, bottom - 3.0f}, {right, bottom});
+    } else if (glyph == "mesh") {
+        line({midX, top}, {right, midY});
+        line({right, midY}, {midX, bottom});
+        line({midX, bottom}, {left, midY});
+        line({left, midY}, {midX, top});
+        line({left, midY}, {right, midY});
+        line({midX, top}, {midX, bottom});
+    } else if (glyph == "grid") {
+        line({midX - w * 0.18f, top}, {midX - w * 0.18f, bottom});
+        line({midX + w * 0.18f, top}, {midX + w * 0.18f, bottom});
+        line({left, midY - h * 0.18f}, {right, midY - h * 0.18f});
+        line({left, midY + h * 0.18f}, {right, midY + h * 0.18f});
+    } else if (glyph == "list") {
+        for (int index = 0; index < 3; ++index) {
+            const float row = top + static_cast<float>(index) * h * 0.28f;
+            filled({left, row, 3.0f, 3.0f}, 1.0f);
+            line({left + 7.0f, row + 1.5f}, {right, row + 1.5f}, 1.4f);
+        }
+    } else if (glyph == "layout") {
+        list.rect({left, top, w * 0.30f, bottom - top}, ink, 1.0f);
+        list.rect({x + w * 0.57f, top, w * 0.21f, h * 0.30f}, ink, 1.0f);
+        list.rect({x + w * 0.57f, y + h * 0.57f, w * 0.21f, h * 0.21f}, ink, 1.0f);
+    } else if (glyph == "frame") {
+        line({left, top + 5.0f}, {left, top}); line({left, top}, {left + 5.0f, top});
+        line({right - 5.0f, top}, {right, top}); line({right, top}, {right, top + 5.0f});
+        line({left, bottom - 5.0f}, {left, bottom}); line({left, bottom}, {left + 5.0f, bottom});
+        line({right - 5.0f, bottom}, {right, bottom}); line({right, bottom}, {right, bottom - 5.0f});
+    } else if (glyph == "globe") {
+        list.border({left, top, right - left, bottom - top}, ink, 1.2f, 4.0f);
+        line({midX, top + 1.0f}, {midX, bottom - 1.0f}, 1.0f);
+        line({left + 2.0f, midY}, {right - 2.0f, midY}, 1.0f);
+    } else if (glyph == "eye") {
+        line({left, midY}, {midX, top});
+        line({midX, top}, {right, midY});
+        line({right, midY}, {midX, bottom});
+        line({midX, bottom}, {left, midY});
+        filled({midX - 2.0f, midY - 2.0f, 4.0f, 4.0f}, 2.0f);
+    } else if (glyph == "lock") {
+        list.rect({left + w * 0.12f, midY - h * 0.01f, w * 0.76f, h * 0.39f}, ink, 1.0f);
+        line({left + w * 0.28f, midY - h * 0.01f}, {left + w * 0.28f, top + 2.0f});
+        line({left + w * 0.28f, top + 2.0f}, {right - w * 0.28f, top + 2.0f});
+        line({right - w * 0.28f, top + 2.0f}, {right - w * 0.28f, midY - h * 0.01f});
+    } else if (glyph == "settings") {
+        list.rect({midX - w * 0.13f, midY - h * 0.13f, w * 0.26f, h * 0.26f}, ink, 2.0f);
+        line({midX, top}, {midX, midY - h * 0.16f});
+        line({midX, midY + h * 0.16f}, {midX, bottom});
+        line({left, midY}, {midX - w * 0.16f, midY});
+        line({midX + w * 0.16f, midY}, {right, midY});
+    } else if (glyph == "move") {
+        line({midX, top}, {midX, bottom}); line({left, midY}, {right, midY});
+        line({midX, top}, {midX - 3.0f, top + 4.0f}); line({midX, top}, {midX + 3.0f, top + 4.0f});
+        line({midX, bottom}, {midX - 3.0f, bottom - 4.0f}); line({midX, bottom}, {midX + 3.0f, bottom - 4.0f});
+        line({left, midY}, {left + 4.0f, midY - 3.0f}); line({left, midY}, {left + 4.0f, midY + 3.0f});
+        line({right, midY}, {right - 4.0f, midY - 3.0f}); line({right, midY}, {right - 4.0f, midY + 3.0f});
+    }
+}
+
 DockRect inset(DockRect value, float amount) noexcept {
     value.x += amount;
     value.y += amount;
@@ -89,6 +247,7 @@ AssetIconKind asset_icon_kind(const FileEntry& file) {
     case AssetPreviewKind::Video: return AssetIconKind::Video;
     case AssetPreviewKind::Text:
     case AssetPreviewKind::Shader: return AssetIconKind::Script;
+    case AssetPreviewKind::Document: return AssetIconKind::File;
     case AssetPreviewKind::Font: return AssetIconKind::Font;
     case AssetPreviewKind::Archive: return AssetIconKind::Archive;
     case AssetPreviewKind::Unknown:
@@ -185,6 +344,8 @@ void EditorUi::shutdown() noexcept {
     assetActions_.clear();
     assetContextActions_.clear();
     inspectorChoiceActions_.clear();
+    inspectorGroupActions_.clear();
+    collapsedInspectorGroups_.clear();
     activeRegions_.clear();
     commandActions_.clear();
     if (auto* root = runtime_.widget(runtime_.root())) root->children.clear();
@@ -207,6 +368,7 @@ void EditorUi::shutdown() noexcept {
     assetEditActive_ = false;
     openInspectorChoiceId_.clear();
     inspectorChoiceScroll_ = 0.0f;
+    inspectorFilter_.clear();
     lastAssetClickPath_.clear();
     tabDragActive_ = false;
     floatingDragActive_ = false;
@@ -216,6 +378,8 @@ void EditorUi::shutdown() noexcept {
     layoutWidth_ = 0.0f;
     layoutHeight_ = 0.0f;
     layoutGeneration_ = 0;
+    compactInspectorAutoCollapsed_ = false;
+    compactInspectorExpanded_ = false;
     paintCacheValid_ = false;
     repaintRect_ = {};
     repaintRectValid_ = false;
@@ -326,6 +490,7 @@ void EditorUi::begin_regions() {
     assetActions_.clear();
     assetContextActions_.clear();
     inspectorChoiceActions_.clear();
+    inspectorGroupActions_.clear();
     for (const auto& entry : regions_) {
         if (auto* widget = runtime_.widget(entry.second)) {
             widget->visible = false;
@@ -454,7 +619,8 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
     if (event.type == ui::UiEventType::Scroll) for (const auto& panel : toolRects_) {
         if (panel.second.contains({point.x,point.y})) {
             toolScroll_[panel.first] = std::max(0.0f, toolScroll_[panel.first] - event.delta.y * 64.0f);
-            mark_full_repaint(); paintCacheValid_ = false; return ui::EventResult::Handled;
+            mark_region_repaint("tools:" + panel.first);
+            paintCacheValid_ = false; return ui::EventResult::Handled;
         }
     }
     if (id == "viewport.surface") {
@@ -500,7 +666,9 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         if (activeRegion_ == "assets.scrollbar") {
             const float travel = assetRail_.height - assetThumb_.height;
             if (travel > 0) assetScrollOffset_ = std::clamp((point.y - assetRail_.y - assetDragOffset_) / travel, 0.0f, 1.0f) * assetMaxScroll_;
-            mark_full_repaint(); paintCacheValid_ = false;
+            mark_region_repaint("assets.background");
+            mark_region_repaint("assets.scrollbar");
+            paintCacheValid_ = false;
         }
         if (allowDocking_ && activeRegion_.rfind("split:", 0) == 0 && workspace_) {
             mark_full_repaint();
@@ -602,7 +770,9 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
             const float contentHeight = static_cast<float>(field->second.choices->size()) * 26.0f + 8.0f;
             inspectorChoiceScroll_ = std::clamp(inspectorChoiceScroll_ - event.delta.y * 78.0f,
                                                 0.0f, std::max(0.0f, contentHeight - 220.0f));
-            mark_full_repaint(); paintCacheValid_ = false;
+            mark_region_repaint("inspector-choice-popup");
+            mark_region_repaint("inspector.background");
+            paintCacheValid_ = false;
         }
         return ui::EventResult::Handled;
     }
@@ -610,16 +780,16 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         lower(event.control).find("escape") != std::string::npos) {
         openInspectorChoiceId_.clear();
         inspectorChoiceScroll_ = 0.0f;
-        mark_full_repaint(); paintCacheValid_ = false;
+        mark_region_repaint("inspector.background"); paintCacheValid_ = false;
         return ui::EventResult::Handled;
     }
     if (event.type == ui::UiEventType::Scroll && (id.rfind("field:", 0) == 0 || id == "inspector.background" || id.rfind("component-add:", 0) == 0)) {
         inspectorScroll_ = std::max(0.0f, inspectorScroll_ - event.delta.y * 72.0f);
-        mark_full_repaint(); paintCacheValid_ = false; return ui::EventResult::Handled;
+        mark_region_repaint("inspector.background"); paintCacheValid_ = false; return ui::EventResult::Handled;
     }
     if (event.type == ui::UiEventType::Scroll && (id.rfind("object:", 0) == 0 || id == "hierarchy.background" || id.rfind("object-toggle:", 0) == 0)) {
         hierarchyScroll_ = std::clamp(hierarchyScroll_ - event.delta.y * 72.0f, 0.0f, std::max(0.0f, hierarchyContentHeight_ - hierarchyPageHeight_));
-        mark_full_repaint(); paintCacheValid_ = false; return ui::EventResult::Handled;
+        mark_region_repaint("hierarchy.background"); paintCacheValid_ = false; return ui::EventResult::Handled;
     }
     if (event.type == ui::UiEventType::PointerDown && event.button == ui::PointerButton::Right &&
         (id.rfind("asset:", 0) == 0 || id == "assets.background" || id.rfind("asset-toggle:", 0) == 0 || id == "assets.scrollbar")) {
@@ -662,7 +832,8 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
         const float itemExtent = assetView_ == EditorAssetView::LargeIcons ? 92.0f :
             assetView_ == EditorAssetView::Tree ? 26.0f : 28.0f;
         assetScrollOffset_ = std::max(0.0f, assetScrollOffset_ - wheelRows * itemExtent * 3.0f);
-        mark_full_repaint();
+        mark_region_repaint("assets.background");
+        mark_region_repaint("assets.scrollbar");
         paintCacheValid_ = false;
         return ui::EventResult::Handled;
     }
@@ -675,7 +846,9 @@ ui::EventResult EditorUi::on_region(std::string_view id, ui::WidgetId widget, ui
             assetDragOffset_ = assetThumb_.contains(point) ? point.y - assetThumb_.y : assetThumb_.height * 0.5f;
             const float travel = assetRail_.height - assetThumb_.height;
             if (travel > 0) assetScrollOffset_ = std::clamp((point.y - assetRail_.y - assetDragOffset_) / travel, 0.0f, 1.0f) * assetMaxScroll_;
-            mark_full_repaint(); paintCacheValid_ = false;
+            mark_region_repaint("assets.background");
+            mark_region_repaint("assets.scrollbar");
+            paintCacheValid_ = false;
         }
         if (assetContextOpen_ && id.rfind("asset-context:", 0) != 0 &&
             id != "asset-delete-confirm" && id != "asset-delete-cancel") {
@@ -885,6 +1058,13 @@ void EditorUi::activate_region(std::string_view id, ui::Vec2 position) {
     // filesystem contents), so its repaint boundary is the whole editor.
     // Pure hover/press transitions stay on the dirty-rectangle path.
     mark_full_repaint();
+    if (id == "compact-inspector-toggle" && workspace_) {
+        compactInspectorExpanded_ = !compactInspectorExpanded_;
+        workspace_->set_panel_visibility("inspector", compactInspectorExpanded_);
+        layoutPrepared_ = false;
+        paintCacheValid_ = false;
+        return;
+    }
     if (id == "asset-model-preview-reset") {
         if (callbacks_.resetModelPreview) callbacks_.resetModelPreview();
         return;
@@ -931,6 +1111,15 @@ void EditorUi::activate_region(std::string_view id, ui::Vec2 position) {
         openInspectorChoiceId_.clear();
         inspectorChoiceScroll_ = 0.0f;
         runtime_.clear_focus();
+        paintCacheValid_ = false;
+        return;
+    }
+    if (id.rfind("inspector-group:", 0) == 0) {
+        const auto group = inspectorGroupActions_.find(std::string(id));
+        if (group == inspectorGroupActions_.end()) return;
+        if (!collapsedInspectorGroups_.erase(group->second)) collapsedInspectorGroups_.insert(group->second);
+        openInspectorChoiceId_.clear();
+        inspectorChoiceScroll_ = 0.0f;
         paintCacheValid_ = false;
         return;
     }
@@ -1180,6 +1369,26 @@ void EditorUi::prepare_layout(const EditorLayoutState& layout, DockWorkspace& wo
     // Keep at least two asset rows reachable below wrapped controls at high DPI.
     workspace.set_minimum_size("assets", {180.0f, 200.0f});
     workspace.set_minimum_size("viewport", {260.0f, 130.0f});
+    // Protect the viewport on genuinely narrow shells. The threshold is in
+    // logical pixels so it behaves consistently across DPI settings. A
+    // floating inspector is an explicit user layout choice and is therefore
+    // never auto-collapsed.
+    const bool compactShell = width < 760.0f;
+    const auto currentLayout = workspace.layout(dockArea_, dockOptions_);
+    const bool inspectorFloating = std::any_of(currentLayout.panels.begin(), currentLayout.panels.end(),
+        [](const DockPanelLayout& panel) { return panel.panelId == "inspector" && panel.floating; });
+    if (!layout.showInspector) {
+        workspace.set_panel_visibility("inspector", false);
+        compactInspectorAutoCollapsed_ = false;
+        compactInspectorExpanded_ = false;
+    } else if (!compactShell || inspectorFloating) {
+        if (compactInspectorAutoCollapsed_) workspace.set_panel_visibility("inspector", true);
+        compactInspectorAutoCollapsed_ = false;
+        compactInspectorExpanded_ = false;
+    } else if (!compactInspectorExpanded_ && !compactInspectorAutoCollapsed_) {
+        workspace.set_panel_visibility("inspector", false);
+        compactInspectorAutoCollapsed_ = true;
+    }
     const auto result = workspace.layout(dockArea_, dockOptions_);
     viewportRect_ = {};
     for (const auto& panel : result.panels) {
@@ -1293,8 +1502,12 @@ void EditorUi::build(const EditorUiModel& model, const std::vector<FileEntry>& f
     mix_key(paintKey, openMenuId_);
     mix_key(paintKey, openInspectorChoiceId_);
     mix_key(paintKey, static_cast<std::uint64_t>(std::round(inspectorChoiceScroll_)));
+    mix_key(paintKey, inspectorFilter_);
+    for (const auto& group : collapsedInspectorGroups_) mix_key(paintKey, group);
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showHierarchy));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showInspector));
+    mix_key(paintKey, static_cast<std::uint64_t>(compactInspectorAutoCollapsed_));
+    mix_key(paintKey, static_cast<std::uint64_t>(compactInspectorExpanded_));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showViewport));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showAssets));
     mix_key(paintKey, static_cast<std::uint64_t>(layout.showConsole));
@@ -1477,31 +1690,58 @@ void EditorUi::draw_toolbar(const EditorUiModel& model, const render::Renderer& 
     const float width = physicalWidth_ / dpiScale_;
     const float menuHeight = nativeMainMenuAvailable_ ? 0.0f : kPortableMenuHeight;
     const auto bar = ui::Rect{0.0f, menuHeight, width, kToolbarHeight};
-    const auto panel = color(layout.theme == "light" ? "#FFFFFF" : "#1D232B");
-    renderList_.rect(bar, panel);
-    renderList_.border({0.0f, bar.y + bar.height - 1.0f, bar.width, 1.0f}, color(layout.theme == "light" ? "#D5DDE7" : "#303A47"));
-    renderList_.border({0.0f, bar.y, 4.0f, bar.height}, color(layout.theme == "light" ? "#4D8DDA" : "#4C9AFF"));
-    float x = 12.0f;
-    const auto button = [&](std::string_view id, std::string_view label, EditorCommand command, float width, bool primary = false) {
+    const auto tokens = visual_tokens(layout);
+    renderList_.rect(bar, tokens.surfaceRaised);
+    renderList_.border({0.0f, bar.y + bar.height - 1.0f, bar.width, 1.0f}, tokens.border);
+    renderList_.border({0.0f, bar.y, 3.0f, bar.height}, tokens.accent);
+
+    float x = 14.0f;
+    renderList_.text({x, bar.y + 8.0f, 80.0f, 16.0f}, "SHINKOU", tokens.text, 12.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    renderList_.text({x, bar.y + 24.0f, 80.0f, 12.0f}, "EDITOR", tokens.textMuted, 8.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    x += 96.0f;
+    renderList_.border({x, bar.y + 10.0f, 1.0f, 28.0f}, tokens.border);
+    x += 12.0f;
+
+    std::string tooltip;
+    float tooltipX = 0.0f;
+    const auto iconCommand = [&](std::string_view id, std::string_view label, EditorCommand command,
+                                 std::string_view icon, bool primary = false) {
         const auto key = command_key(id);
         commandActions_[key] = {command, {}};
-        draw_button({x, bar.y + 10.0f, width, 28.0f}, key, tr(label), layout, primary);
-        x += width + 8.0f;
+        const auto button = ui::Rect{x, bar.y + 8.0f, 32.0f, 32.0f};
+        draw_button(button, key, {}, layout, primary, icon);
+        if (hotRegion_ == key) { tooltip = std::string(tr(label)); tooltipX = button.x; }
+        x += 40.0f;
     };
-    button("play", model.playing() ? "Stop" : "Play", EditorCommand::Play, 70.0f, true);
-    button("pause", model.paused() ? "Resume" : "Pause", EditorCommand::Pause, 70.0f);
-    button("step", "Step", EditorCommand::Step, 62.0f);
-    renderList_.border({x + 2.0f, bar.y + 10.0f, 1.0f, 28.0f}, color(layout.theme == "light" ? "#D5DDE7" : "#364354"));
-    x += 14.0f;
-    button("save", "Save", EditorCommand::SaveScene, 66.0f);
-    button("build", "Build", EditorCommand::BuildProject, 70.0f);
-    button("reset", "Reset", EditorCommand::ResetLayout, 70.0f);
+    iconCommand("play", model.playing() ? "Stop" : "Play", EditorCommand::Play,
+                model.playing() ? "stop" : "play", true);
+    iconCommand("pause", model.paused() ? "Resume" : "Pause", EditorCommand::Pause, "pause");
+    iconCommand("step", "Step", EditorCommand::Step, "step");
+    renderList_.border({x - 4.0f, bar.y + 10.0f, 1.0f, 28.0f}, tokens.border);
+    x += 8.0f;
+    iconCommand("save", "Save", EditorCommand::SaveScene, "save");
+    iconCommand("build", "Build", EditorCommand::BuildProject, "build");
+
+    const float languageX = std::max(x + 14.0f, width - 74.0f);
     const auto languageId = command_key("language");
     commandActions_[languageId] = {layout.language == "zh-CN" ? EditorCommand::SetEnglishLanguage : EditorCommand::SetChineseLanguage, {}};
-    draw_button({std::max(x + 12.0f, width - 96.0f), bar.y + 10.0f, 82.0f, 28.0f}, languageId,
-                 layout.language == "zh-CN" ? "English" : "中文", layout);
-    renderList_.text({x + 16.0f, bar.y + 15.0f, std::max(0.0f, width - x - 124.0f), 18.0f}, renderer.last_error().empty() ? tr("Scene Editor") : tr("Renderer diagnostic"),
-                      renderer.last_error().empty() ? color(layout.theme == "light" ? "#69717D" : "#9BA3AF") : color("#F29B8F"), 12.0f);
+    const auto languageButton = ui::Rect{languageX, bar.y + 8.0f, 32.0f, 32.0f};
+    draw_button(languageButton, languageId, {}, layout, false, "globe");
+    if (hotRegion_ == languageId) { tooltip = layout.language == "zh-CN" ? "English" : "中文"; tooltipX = languageButton.x; }
+    const auto titleColor = renderer.last_error().empty() ? tokens.textSecondary : tokens.danger;
+    renderList_.text({x + 18.0f, bar.y + 15.0f, std::max(0.0f, languageX - x - 30.0f), 18.0f},
+                     renderer.last_error().empty() ? tr("Scene Editor") : tr("Renderer diagnostic"),
+                     titleColor, 11.0f, {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+    if (!tooltip.empty()) {
+        const float tooltipWidth = std::max(58.0f, static_cast<float>(tooltip.size()) * 7.0f + 20.0f);
+        const auto tooltipRect = ui::Rect{std::clamp(tooltipX, 4.0f, std::max(4.0f, width - tooltipWidth - 4.0f)),
+                                          bar.bottom() + 4.0f, tooltipWidth, 22.0f};
+        renderList_.rect(tooltipRect, tokens.surfaceInset, 4.0f);
+        renderList_.border(tooltipRect, tokens.borderStrong, 1.0f, 4.0f);
+        renderList_.text(tooltipRect, tooltip, tokens.text, 10.0f, {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+    }
 }
 
 void EditorUi::draw_dock(const EditorUiModel& model, const std::vector<FileEntry>& files,
@@ -1537,20 +1777,23 @@ void EditorUi::draw_dock(const EditorUiModel& model, const std::vector<FileEntry
         renderList_.end_clip();
         regionClipActive_ = false;
     }
+    if (compactInspectorAutoCollapsed_ && !compactInspectorExpanded_) {
+        const auto rail = ui::Rect{dockArea_.x + dockArea_.width - 34.0f, dockArea_.y + 10.0f, 30.0f, 32.0f};
+        draw_button(rail, "compact-inspector-toggle", {}, layout, false, "settings");
+    }
     (void)status;
 }
 
 void EditorUi::draw_panel_frame(const DockPanelLayout& panel, const EditorLayoutState& layout) {
     const auto bounds = rect(panel.rect);
     const bool viewport = panel.panelId == "viewport";
-    const auto surface = color(layout.theme == "light" ? "#FFFFFF" : "#202730");
-    const auto border = color(layout.theme == "high-contrast" ? "#FFFFFF" : layout.theme == "light" ? "#D5DDE7" : "#354252");
+    const auto tokens = visual_tokens(layout);
     if (panel.floating) {
         const auto shadow = ui::Rect{bounds.x - 4.0f, bounds.y - 4.0f, bounds.width + 8.0f, bounds.height + 8.0f};
-        renderList_.rect(shadow, color(layout.theme == "light" ? "#00000018" : "#00000055"), 6.0f);
+        renderList_.rect(shadow, color(layout.theme == "light" ? "#00000018" : "#00000055"), 5.0f);
     }
-    if (!viewport) renderList_.rect(bounds, surface);
-    renderList_.border(bounds, border, 1.0f);
+    if (!viewport) renderList_.rect(bounds, tokens.surface);
+    renderList_.border(bounds, tokens.border, 1.0f);
     if (panel.tabIndex == DockWorkspace::npos) {
         const auto header = ui::Rect{bounds.x, bounds.y, bounds.width, std::min(kPanelHeaderHeight, bounds.height)};
         if (panel.floating) {
@@ -1561,32 +1804,30 @@ void EditorUi::draw_panel_frame(const DockPanelLayout& panel, const EditorLayout
         }
         const bool headerHovered = panel.floating && hotRegion_ == std::string("floating-header:") + panel.panelId;
         const bool headerPressed = panel.floating && activeRegion_ == std::string("floating-header:") + panel.panelId;
-        renderList_.rect(header, headerPressed ? color(layout.theme == "light" ? "#D3E3F8" : "#35557D") :
-                                headerHovered ? color(layout.theme == "light" ? "#E8F1FC" : "#303B4A") :
-                                color(layout.theme == "light" ? "#F5F8FB" : "#252D37"));
-        renderList_.border({header.x, header.bottom() - 1.0f, header.width, 1.0f}, border);
+        renderList_.rect(header, headerPressed ? tokens.pressed : headerHovered ? tokens.hover : tokens.surfaceRaised);
+        renderList_.border({header.x, header.bottom() - 1.0f, header.width, 1.0f}, tokens.border);
         renderList_.text({header.x + 12.0f, header.y + 6.0f, std::max(0.0f, header.width - 20.0f), 18.0f}, tr(panel.title),
-                          color(layout.theme == "light" ? "#3A4654" : "#DCE5F0"), 12.0f, {},
+                          tokens.text, 11.0f, {},
                           ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
     }
 }
 
 void EditorUi::draw_tabs(const DockLayoutResult& result, const EditorLayoutState& layout) {
+    const auto tokens = visual_tokens(layout);
     for (const auto& tab : result.tabs) {
         const auto bounds = rect(tab.rect);
         const auto id = path_key("tab", tab.stackPath) + ":" + std::to_string(tab.tabIndex);
         tabActions_[id] = {tab.stackPath, tab.tabIndex, tab.panelId};
         set_region(id, bounds);
-        const auto background = tab.active ? color(layout.theme == "light" ? "#FFFFFF" : "#202730") :
-            color(layout.theme == "light" ? "#F0F3F7" : "#1A2027");
+        const auto background = tab.active ? tokens.surface : tokens.surfaceInset;
         renderList_.rect(bounds, background);
-        if (tab.active) renderList_.border({bounds.x, bounds.bottom() - 3.0f, bounds.width, 3.0f}, color("#4C9AFF"));
+        if (tab.active) renderList_.border({bounds.x, bounds.bottom() - 2.0f, bounds.width, 2.0f}, tokens.accent);
         if (tab.panelId == draggedPanelId_ && tabDragActive_)
-            renderList_.border({bounds.x + 1.0f, bounds.y + 1.0f, std::max(0.0f, bounds.width - 2.0f), std::max(0.0f, bounds.height - 2.0f)}, color("#78A9E8"), 1.0f, 3.0f);
+            renderList_.border({bounds.x + 1.0f, bounds.y + 1.0f, std::max(0.0f, bounds.width - 2.0f), std::max(0.0f, bounds.height - 2.0f)}, tokens.accent, 1.0f, 3.0f);
         const float closeWidth = tab.closeable ? 22.0f : 0.0f;
         renderList_.text({bounds.x + 10.0f, bounds.y + 3.0f,
                           std::max(0.0f, bounds.width - 18.0f - closeWidth), 18.0f}, tr(tab.title),
-                          tab.active ? color(layout.theme == "light" ? "#252A31" : "#E4E8EE") : color(layout.theme == "light" ? "#68717D" : "#929AA6"), 12.0f, {},
+                           tab.active ? tokens.text : tokens.textMuted, 11.0f, {},
                           ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
         if (tab.closeable && bounds.width >= 42.0f) {
             const auto closeId = std::string("tab-close:") + tab.panelId;
@@ -1594,9 +1835,8 @@ void EditorUi::draw_tabs(const DockLayoutResult& result, const EditorLayoutState
             tabCloseActions_[closeId] = tab.panelId;
             set_region(closeId, close);
             const bool hovered = hotRegion_ == closeId || activeRegion_ == closeId;
-            if (hovered) renderList_.rect(close, color(layout.theme == "light" ? "#E5E8ED" : "#343942"), 3.0f);
-            const auto ink = hovered ? color(layout.theme == "light" ? "#27313C" : "#E6EAF0") :
-                color(layout.theme == "light" ? "#7A828D" : "#8A94A1");
+            if (hovered) renderList_.rect(close, tokens.hover, 3.0f);
+            const auto ink = hovered ? tokens.text : tokens.textMuted;
             renderList_.line({close.x + 6.0f, close.y + 6.0f}, {close.right() - 6.0f, close.bottom() - 6.0f}, ink, 1.2f);
             renderList_.line({close.right() - 6.0f, close.y + 6.0f}, {close.x + 6.0f, close.bottom() - 6.0f}, ink, 1.2f);
         }
@@ -1604,32 +1844,34 @@ void EditorUi::draw_tabs(const DockLayoutResult& result, const EditorLayoutState
 }
 
 void EditorUi::draw_splitters(const DockLayoutResult& result, const EditorLayoutState& layout) {
+    const auto tokens = visual_tokens(layout);
     for (const auto& splitter : result.splitters) {
         const auto id = path_key("split", splitter.path);
         splitterActions_[id] = splitter.path;
         set_region(id, rect(splitter.hitZone));
         const bool hovered = hotRegion_ == id;
         const bool pressed = activeRegion_ == id;
-        renderList_.rect(rect(splitter.bar), pressed ? color("#4C87D7") : hovered ? color("#6E9DDA") :
-                          color(layout.theme == "light" ? "#D7DADF" : "#343840"));
+        renderList_.rect(rect(splitter.bar), pressed ? tokens.accent : hovered ? tokens.borderStrong : tokens.border);
     }
 }
 
 void EditorUi::draw_hierarchy(const DockRect& value, const EditorUiModel& model, const EditorLayoutState& layout) {
-    const auto bounds = inset(value, 8.0f);
-    const auto filter = ui::Rect{bounds.x, bounds.y, std::max(0.0f, bounds.width - 52.0f), 26.0f};
+    const auto bounds = inset(value, 10.0f);
+    const auto tokens = visual_tokens(layout);
+    renderList_.text({bounds.x, bounds.y, bounds.width - 84.0f, 16.0f}, tr("SCENE HIERARCHY"), tokens.textMuted, 9.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    const auto filter = ui::Rect{bounds.x + 24.0f, bounds.y + 24.0f, std::max(0.0f, bounds.width - 72.0f), 30.0f};
+    const auto searchBar = ui::Rect{bounds.x, bounds.y + 24.0f, std::max(0.0f, bounds.width - 48.0f), 30.0f};
     filterText_ = model.object_filter();
-    set_region("hierarchy.filter", filter, true);
-    renderList_.rect(filter, color(layout.theme == "light" ? "#F1F5F9" : "#171C22"), 5.0f);
-    renderList_.border(filter, color(layout.theme == "light" ? "#CBD6E2" : "#354252"), 1.0f, 5.0f);
-    renderList_.text({filter.x + 9.0f, filter.y + 4.0f, filter.width - 18.0f, 18.0f}, filterText_.empty() ? tr("Filter") : filterText_,
-                      filterText_.empty() ? color(layout.theme == "light" ? "#8A929D" : "#737C89") : color(layout.theme == "light" ? "#353A42" : "#E2E6EC"), 12.0f,
-                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    renderList_.rect(searchBar, tokens.surfaceInset, 5.0f);
+    renderList_.border(searchBar, tokens.border, 1.0f, 5.0f);
+    draw_input(filter, "hierarchy.filter", filterText_.empty() ? tr("Filter objects") : filterText_, layout);
+    set_region("hierarchy.filter", searchBar, true);
+    draw_editor_glyph(renderList_, {searchBar.x + 7.0f, searchBar.y + 7.0f, 16.0f, 16.0f}, "search", tokens.textMuted);
     const auto add = command_key("create-empty");
     commandActions_[add] = {EditorCommand::CreateEmpty, {}};
-    draw_button({bounds.x + bounds.width - 44.0f, bounds.y, 44.0f, 26.0f}, add, "+", layout);
-    draw_input(filter, "hierarchy.filter", filterText_.empty() ? tr("Filter objects") : filterText_, layout);
-    DockRect list{bounds.x, bounds.y+36, bounds.width, std::max(0.0f,bounds.height-36)};
+    draw_button({bounds.x + bounds.width - 38.0f, bounds.y + 24.0f, 30.0f, 30.0f}, add, {}, layout, false, "plus");
+    DockRect list{bounds.x, bounds.y + 66.0f, bounds.width, std::max(0.0f, bounds.height - 66.0f)};
     set_region("hierarchy.background", rect(list), true);
     hierarchyPageHeight_ = list.height;
     visibleObjects_.clear();
@@ -1644,28 +1886,35 @@ void EditorUi::draw_hierarchy(const DockRect& value, const EditorUiModel& model,
 
 void EditorUi::draw_hierarchy_node(const DockRect& value, const EditorObjectTreeNode& node,
                                    const EditorLayoutState& layout, float& cursor, int depth) {
+    const auto tokens = visual_tokens(layout);
     visibleObjects_.push_back(node.id);
     if (cursor + kRowHeight > value.y && cursor < value.y + value.height) {
     const auto row = ui::Rect{value.x + 6.0f, cursor, std::max(0.0f, value.width - 12.0f), kRowHeight};
     const auto id = std::string("object:") + std::to_string(node.id);
     set_region(id, row, true);
-    if (hotRegion_ == id || activeRegion_ == id) renderList_.rect(row, color("#303B4A"), 3);
-    if (runtime_.focused() == regions_.at(id)) renderList_.border(row, color("#78A9E8"));
+    if (hotRegion_ == id || activeRegion_ == id) renderList_.rect(row, tokens.hover, 4.0f);
+    if (runtime_.focused() == regions_.at(id)) renderList_.border(row, tokens.accent, 1.0f, 4.0f);
     if (!node.children.empty()) {
         const ui::Rect toggle{row.x + static_cast<float>(depth)*14, row.y, 20, row.height};
         set_region("object-toggle:" + std::to_string(node.id), toggle);
-        renderList_.text(toggle, collapsedObjects_.count(node.id) ? ">" : "v", color("#98A1AD"), 11);
+        draw_editor_glyph(renderList_, {toggle.x + 3.0f, toggle.y + 7.0f, 12.0f, 12.0f},
+                          collapsedObjects_.count(node.id) ? "chevron-right" : "chevron-down", tokens.textMuted);
     }
     if (node.selected) {
-        renderList_.rect(row, color(layout.theme == "light" ? "#DCEBFF" : "#183B63"), 4.0f);
-        renderList_.border({row.x, row.y, 3.0f, row.height}, color("#4C9AFF"), 0.0f, 2.0f);
+        renderList_.rect(row, tokens.selection, 4.0f);
+        renderList_.rect({row.x, row.y, 3.0f, row.height}, tokens.accent, 1.5f);
     }
-    const std::string label = std::string(node.active ? "" : "· ") + node.name;
-    const float textX = row.x + 22.0f + static_cast<float>(depth) * 14.0f;
+    const auto icon = ui::Rect{row.x + 24.0f + static_cast<float>(depth) * 14.0f, row.y + 5.0f, 16.0f, 16.0f};
+    draw_editor_glyph(renderList_, icon, depth == 0 ? "scene" : "mesh",
+                      node.selected ? tokens.accent : node.active ? tokens.textSecondary : tokens.textMuted);
+    const float textX = icon.right() + 8.0f;
+    const std::string label = node.name;
     renderList_.text({textX, row.y + 3.0f,
                       std::max(0.0f, row.x + row.width - textX - 8.0f), 18.0f}, label,
-                      node.selected ? color(layout.theme == "light" ? "#1A5DBB" : "#D7E6FF") : color(layout.theme == "light" ? "#40464F" : "#C9CED7"), 12.0f,
+                      node.selected ? tokens.text : node.active ? tokens.textSecondary : tokens.textMuted, 11.0f,
                       {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    if (!node.active)
+        draw_editor_glyph(renderList_, {row.x + row.width - 22.0f, row.y + 5.0f, 16.0f, 16.0f}, "eye", tokens.textMuted);
     }
     cursor += kRowHeight;
     if (collapsedObjects_.count(node.id) && filterText_.empty()) return;
@@ -1942,30 +2191,181 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
         return;
     }
     set_region("inspector.background", rect(bounds), true);
+    const auto tokens = visual_tokens(layout);
     inspectorFields_.clear();
     std::shared_ptr<const std::vector<EditorInspectorChoice>> openChoices;
     ui::Rect openChoiceAnchor{};
     std::string openChoiceValue;
-    float totalHeight = 40.0f + static_cast<float>(model.component_types().size()) * 30.0f;
-    for (const auto& field : model.inspector_fields()) {
-        const bool timeline = field.id.size() >= 14 &&
-            field.id.compare(field.id.size() - 14, 14, ":audioTimeline") == 0;
-        totalHeight += timeline ? 76.0f : 52.0f;
+    const bool compactInspector = bounds.height < 420.0f || model.inspector_fields().size() > 8;
+    const float headerHeight = compactInspector ? 42.0f : 48.0f;
+    const float fieldHeight = compactInspector ? 36.0f : 52.0f;
+    const float inputOffset = compactInspector ? 14.0f : 20.0f;
+    const float inputHeight = compactInspector ? 22.0f : 26.0f;
+    const auto header = ui::Rect{bounds.x, bounds.y, bounds.width, headerHeight};
+    renderList_.rect(header, tokens.surfaceRaised, 5.0f);
+    draw_editor_glyph(renderList_, {header.x + 10.0f, header.y + (compactInspector ? 11.0f : 14.0f), 20.0f, 20.0f}, "mesh", tokens.accent);
+    renderList_.text({header.x + 40.0f, header.y + (compactInspector ? 5.0f : 7.0f), std::max(0.0f, header.width - 50.0f), 16.0f},
+                     tr("SELECTED OBJECT"), tokens.textMuted, 8.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    renderList_.text({header.x + 40.0f, header.y + (compactInspector ? 20.0f : 23.0f), std::max(0.0f, header.width - 50.0f), 18.0f},
+                     std::string(tr("Object")) + " #" + std::to_string(model.selected_object()), tokens.text, 11.0f,
+                     {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    const auto headerMenu = std::string("inspector-options");
+    if (compactInspectorAutoCollapsed_ && compactInspectorExpanded_) {
+        draw_button({header.right() - 58.0f, header.y + (compactInspector ? 6.0f : 9.0f), 24.0f, 28.0f},
+                     "compact-inspector-toggle", {}, layout, false, "chevron-right");
     }
-    inspectorScroll_ = std::clamp(inspectorScroll_, 0.0f, std::max(0.0f,totalHeight-bounds.height));
-    float y = bounds.y - inspectorScroll_;
+    set_region(headerMenu, {header.right() - 30.0f, header.y + (compactInspector ? 6.0f : 9.0f), 24.0f, 28.0f});
+    draw_editor_glyph(renderList_, {header.right() - 28.0f, header.y + (compactInspector ? 12.0f : 15.0f), 18.0f, 18.0f}, "more", tokens.textMuted);
+    const float filterTop = headerHeight + (compactInspector ? 6.0f : 8.0f);
+    const float filterHeight = compactInspector ? 26.0f : 28.0f;
+    const float contentTop = filterTop + filterHeight + (compactInspector ? 6.0f : 8.0f);
+    const auto searchBar = ui::Rect{bounds.x, bounds.y + filterTop, bounds.width, filterHeight};
+    renderList_.rect(searchBar, tokens.surfaceInset, 5.0f);
+    renderList_.border(searchBar, tokens.border, 1.0f, 5.0f);
+    draw_input({searchBar.x + 22.0f, searchBar.y, std::max(0.0f, searchBar.width - 22.0f), searchBar.height},
+               "inspector.filter", inspectorFilter_.empty() ? tr("Search properties") : inspectorFilter_, layout);
+    set_region("inspector.filter", searchBar, true);
+    draw_editor_glyph(renderList_, {searchBar.x + 6.0f, searchBar.y + 6.0f, 16.0f, 16.0f}, "search", tokens.textMuted);
+
+    struct InspectorGroup {
+        std::string name;
+        std::vector<const EditorInspectorField*> fields;
+    };
+    std::vector<InspectorGroup> groups;
+    constexpr std::string_view enabledSuffix = " enabled";
     for (const auto& field : model.inspector_fields()) {
-        const bool audioTimeline = field.id.size() >= 14 &&
-            field.id.compare(field.id.size() - 14, 14, ":audioTimeline") == 0;
-        const float rowHeight = audioTimeline ? 76.0f : 52.0f;
-        const auto id = "field:" + field.id;
-        inspectorFields_[id] = field;
-        if (y + rowHeight > bounds.y && y < bounds.y + bounds.height) {
-            renderList_.text({bounds.x,y,bounds.width,18}, tr(field.label), color(layout.theme == "light" ? "#59616E" : "#AAB2BE"), 11);
-            const ui::Rect input{bounds.x,y+20,bounds.width,26};
+        std::string groupName = "Object";
+        if (field.id != "name" && field.id != "active") {
+            const bool componentHeader = field.label.size() > enabledSuffix.size() &&
+                field.label.compare(field.label.size() - enabledSuffix.size(), enabledSuffix.size(), enabledSuffix) == 0;
+            if (componentHeader) groupName = field.label.substr(0, field.label.size() - enabledSuffix.size());
+            else if (!groups.empty()) groupName = groups.back().name;
+            else groupName = "Component";
+        }
+        if (groups.empty() || groups.back().name != groupName) groups.push_back({std::move(groupName), {}});
+        groups.back().fields.push_back(&field);
+        inspectorFields_["field:" + field.id] = field;
+    }
+    const auto containsText = [](std::string_view value, std::string_view query) {
+        if (query.empty()) return true;
+        if (query.size() > value.size()) return false;
+        for (std::size_t start = 0; start + query.size() <= value.size(); ++start) {
+            bool matches = true;
+            for (std::size_t offset = 0; offset < query.size(); ++offset) {
+                const auto lhs = static_cast<unsigned char>(value[start + offset]);
+                const auto rhs = static_cast<unsigned char>(query[offset]);
+                if (std::tolower(lhs) != std::tolower(rhs)) { matches = false; break; }
+            }
+            if (matches) return true;
+        }
+        return false;
+    };
+    const auto matchesField = [&](const EditorInspectorField& field, std::string_view group) {
+        if (inspectorFilter_.empty()) return true;
+        const auto translatedLabel = std::string(tr(field.label));
+        const auto translatedGroup = std::string(tr(group));
+        return containsText(field.label, inspectorFilter_) || containsText(field.value, inspectorFilter_) ||
+            containsText(translatedLabel, inspectorFilter_) || containsText(group, inspectorFilter_) ||
+            containsText(translatedGroup, inspectorFilter_);
+    };
+    const auto matchesComponent = [&](std::string_view type) {
+        return inspectorFilter_.empty() || containsText(type, inspectorFilter_) ||
+            containsText(tr(type), inspectorFilter_);
+    };
+    const auto groupHasMatch = [&](const InspectorGroup& group) {
+        return std::any_of(group.fields.begin(), group.fields.end(), [&](const auto* field) {
+            return field != nullptr && matchesField(*field, group.name);
+        });
+    };
+    const auto enabledFieldFor = [](const InspectorGroup& group) -> const EditorInspectorField* {
+        const auto found = std::find_if(group.fields.begin(), group.fields.end(), [](const auto* field) {
+            return field != nullptr && field->id.rfind("enabled:", 0) == 0 && field->boolean;
+        });
+        return found == group.fields.end() ? nullptr : *found;
+    };
+    const auto fieldUnit = [](const EditorInspectorField& field) -> std::string_view {
+        if (field.id.size() >= 12 && field.id.compare(field.id.size() - 12, 12, ":minDistance") == 0) return "m";
+        if (field.id.size() >= 12 && field.id.compare(field.id.size() - 12, 12, ":maxDistance") == 0) return "m";
+        return {};
+    };
+    const float groupHeaderHeight = compactInspector ? 22.0f : 26.0f;
+    const float timelineHeight = compactInspector ? 64.0f : 76.0f;
+    bool anyMatchedGroup = false;
+    float totalHeight = contentTop;
+    for (const auto& group : groups) {
+        if (!groupHasMatch(group)) continue;
+        anyMatchedGroup = true;
+        totalHeight += groupHeaderHeight;
+        const bool collapsed = inspectorFilter_.empty() && collapsedInspectorGroups_.count(group.name) != 0;
+        if (!collapsed) {
+            const auto* enabledField = enabledFieldFor(group);
+            for (const auto* field : group.fields) {
+                if (field == nullptr || field == enabledField || !matchesField(*field, group.name)) continue;
+                const bool timeline = field->id.size() >= 14 &&
+                    field->id.compare(field->id.size() - 14, 14, ":audioTimeline") == 0;
+                totalHeight += timeline ? timelineHeight : fieldHeight;
+            }
+        }
+    }
+    const bool showComponents = std::any_of(model.component_types().begin(), model.component_types().end(),
+        [&](const auto& type) { return matchesComponent(type); });
+    if (showComponents) {
+        totalHeight += 28.0f;
+        for (const auto& type : model.component_types()) if (matchesComponent(type)) totalHeight += 30.0f;
+    }
+    if (!anyMatchedGroup && !showComponents) totalHeight += 28.0f;
+    inspectorScroll_ = std::clamp(inspectorScroll_, 0.0f, std::max(0.0f,totalHeight-bounds.height));
+    float y = bounds.y + contentTop - inspectorScroll_;
+    for (std::size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+        const auto& group = groups[groupIndex];
+        if (!groupHasMatch(group)) continue;
+        const auto groupId = "inspector-group:" + std::to_string(groupIndex);
+        inspectorGroupActions_[groupId] = group.name;
+        const auto groupRect = ui::Rect{bounds.x, y, bounds.width, groupHeaderHeight};
+        set_region(groupId, groupRect, true);
+        const auto* enabledField = enabledFieldFor(group);
+        const bool groupDisabled = enabledField != nullptr && enabledField->value == "false";
+        if (groupRect.bottom() > bounds.y && groupRect.y < bounds.y + bounds.height) {
+            const bool groupHovered = hotRegion_ == groupId || activeRegion_ == groupId;
+            renderList_.rect(groupRect, groupHovered ? tokens.hover : tokens.surfaceInset, 4.0f);
+            draw_editor_glyph(renderList_, {groupRect.x + 7.0f, groupRect.y + 7.0f, 12.0f, 12.0f},
+                              inspectorFilter_.empty() && collapsedInspectorGroups_.count(group.name) != 0
+                                  ? "chevron-right" : "chevron-down", tokens.textMuted);
+            renderList_.text({groupRect.x + 26.0f, groupRect.y + 4.0f,
+                              std::max(0.0f, groupRect.width - (enabledField ? 112.0f : 34.0f)), 18.0f}, tr(group.name),
+                             groupDisabled ? tokens.textMuted : tokens.textSecondary, 10.0f,
+                             {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+            if (enabledField) {
+                draw_toggle({groupRect.right() - 82.0f, groupRect.y + 2.0f, 78.0f,
+                             std::max(0.0f, groupRect.height - 4.0f)},
+                            "field:" + enabledField->id, enabledField->value == "true", layout);
+            }
+        }
+        y += groupHeaderHeight;
+        const bool collapsed = inspectorFilter_.empty() && collapsedInspectorGroups_.count(group.name) != 0;
+        if (collapsed) continue;
+        for (const auto* fieldPtr : group.fields) {
+            if (fieldPtr == nullptr || fieldPtr == enabledField || !matchesField(*fieldPtr, group.name)) continue;
+            const auto& field = *fieldPtr;
+            const bool audioTimeline = field.id.size() >= 14 &&
+                field.id.compare(field.id.size() - 14, 14, ":audioTimeline") == 0;
+            const float rowHeight = audioTimeline ? timelineHeight : fieldHeight;
+            const auto id = "field:" + field.id;
+            if (y + rowHeight > bounds.y && y < bounds.y + bounds.height) {
+            const auto unit = fieldUnit(field);
+            const float unitWidth = unit.empty() ? 0.0f : 24.0f;
+            const auto labelColor = groupDisabled ? tokens.textMuted : tokens.textSecondary;
+            renderList_.text({bounds.x, y, bounds.width - unitWidth, 18}, tr(field.label), labelColor, 10.0f);
+            const ui::Rect input{bounds.x,y+inputOffset,std::max(0.0f, bounds.width - unitWidth),inputHeight};
+            if (!unit.empty()) renderList_.text({input.right() + 5.0f, input.y + 3.0f, unitWidth - 5.0f, 16.0f}, unit,
+                                                groupDisabled ? tokens.textMuted : tokens.textSecondary, 9.0f,
+                                                {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
             const bool audioTransport = field.id.size() >= 15 &&
                 field.id.compare(field.id.size() - 15, 15, ":audioTransport") == 0;
-            if (audioTransport) {
+            if (groupDisabled) {
+                renderList_.text(input, field.value, tokens.textMuted, 11.0f,
+                                 {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+            } else if (audioTransport) {
                 renderList_.text({bounds.x + bounds.width - 88.0f, y, 88.0f, 18.0f}, field.value,
                                   color(layout.theme == "light" ? "#2E6FBE" : "#8DBBFF"), 10.0f,
                                   {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
@@ -1978,12 +2378,12 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 commandActions_[play] = {EditorCommand::MediaPlay, target};
                 commandActions_[pause] = {EditorCommand::MediaPause, target};
                 commandActions_[stop] = {EditorCommand::MediaStop, target};
-                draw_button({input.x, input.y, buttonWidth, input.height}, play, tr("Play"), layout,
-                            field.value == "Playing");
-                draw_button({input.x + buttonWidth + gap, input.y, buttonWidth, input.height}, pause, tr("Pause"), layout,
-                            field.value == "Paused");
-                draw_button({input.x + (buttonWidth + gap) * 2.0f, input.y, buttonWidth, input.height}, stop, tr("Stop"), layout,
-                            false);
+                draw_button({input.x, input.y, buttonWidth, input.height}, play, {}, layout,
+                            field.value == "Playing", "play");
+                draw_button({input.x + buttonWidth + gap, input.y, buttonWidth, input.height}, pause, {}, layout,
+                            field.value == "Paused", "pause");
+                draw_button({input.x + (buttonWidth + gap) * 2.0f, input.y, buttonWidth, input.height}, stop, {}, layout,
+                            false, "stop");
             } else if (audioTimeline) {
                 renderList_.text({bounds.x + bounds.width - 108.0f, y, 108.0f, 18.0f}, field.value,
                                   color(layout.theme == "light" ? "#2E6FBE" : "#8DBBFF"), 10.0f,
@@ -2037,13 +2437,13 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 const float controlsY = input.y + 18.0f;
                 draw_button({input.x, controlsY, buttonWidth, input.height}, back, "-5 s", layout, false);
                 draw_button({input.x + buttonWidth + gap, controlsY, buttonWidth, input.height}, forward, "+5 s", layout, false);
-            } else if (field.boolean && field.editable) draw_button(input,id,field.value == "true" ? tr("On") : tr("Off"),layout,field.value == "true");
+            } else if (field.boolean && field.editable) draw_toggle(input, id, field.value == "true", layout);
             else if (field.editable && field.choices && !field.choices->empty()) {
                 std::string label = field.value.empty() ? "None" : field.value;
                 const auto selected = std::find_if(field.choices->begin(), field.choices->end(),
                     [&](const auto& choice) { return choice.value == field.value; });
                 if (selected != field.choices->end()) label = selected->label;
-                draw_button(input, id, label + "  v", layout, false);
+                draw_button(input, id, label, layout, false, "chevron-down");
                 if (openInspectorChoiceId_ == id) {
                     openChoices = field.choices;
                     openChoiceAnchor = input;
@@ -2051,8 +2451,9 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
                 }
             } else if (field.editable) draw_input(input,id,field.value,layout);
             else renderList_.text(input,field.value,color("#98A1AD"),12);
+            }
+            y += rowHeight;
         }
-        y += rowHeight;
     }
     if (openChoices && openChoiceAnchor.width > 0.0f) {
         constexpr float rowHeight = 26.0f;
@@ -2103,34 +2504,45 @@ void EditorUi::draw_inspector(const DockRect& value, const EditorUiModel& model,
         openInspectorChoiceId_.clear();
         inspectorChoiceScroll_ = 0.0f;
     }
+    if (!anyMatchedGroup && !showComponents && inspectorFilter_.empty() == false)
+        renderList_.text({bounds.x, y, bounds.width, 22.0f}, tr("No matching properties"), tokens.textMuted, 11.0f,
+                         {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
     if (!editError_.empty()) renderList_.text({bounds.x,bounds.y+bounds.height-22,bounds.width,20},editError_,color("#F29B8F"),11);
-    renderList_.text({bounds.x,y,bounds.width,20}, tr("Add component"), color("#98A1AD"),12); y += 28;
-    for (const auto& type : model.component_types()) {
-        if (y+26 > bounds.y && y < bounds.y+bounds.height) draw_button({bounds.x,y,bounds.width,26},"component-add:"+type,type,layout);
-        y += 30;
+    if (showComponents) {
+        renderList_.border({bounds.x, y - 8.0f, bounds.width, 1.0f}, tokens.border);
+        renderList_.text({bounds.x, y, bounds.width, 20}, tr("Add component"), tokens.textMuted, 10.0f); y += 28;
+        for (const auto& type : model.component_types()) {
+            if (!matchesComponent(type)) continue;
+            if (y+26 > bounds.y && y < bounds.y+bounds.height)
+                draw_button({bounds.x, y, bounds.width, 26}, "component-add:" + type, tr(type), layout, false, "settings");
+            y += 30;
+        }
     }
 }
 
 void EditorUi::draw_viewport(const DockRect& value, const EditorUiModel&, const EditorLayoutState& layout) {
     const auto bounds = value;
+    const auto tokens = visual_tokens(layout);
     set_region("viewport.surface", rect(value), true);
-    const auto gridColor = color(layout.theme == "light" ? "#FFFFFF22" : "#FFFFFF14");
+    renderList_.rect(rect(value), tokens.viewport);
+    const auto gridColor = tokens.viewportGrid;
     const float grid = 32.0f;
     const float right = bounds.x + bounds.width;
     const float bottom = bounds.y + bounds.height;
     for (float x = bounds.x; x < right; x += grid) renderList_.line({x, bounds.y}, {x, bottom}, gridColor, 1.0f);
     for (float y = bounds.y; y < bottom; y += grid) renderList_.line({bounds.x, y}, {right, y}, gridColor, 1.0f);
-    renderList_.line({bounds.x + bounds.width * 0.5f, bounds.y}, {bounds.x + bounds.width * 0.5f, bottom}, color("#4C87D744"), 1.0f);
-    renderList_.line({bounds.x, bounds.y + bounds.height * 0.5f}, {right, bounds.y + bounds.height * 0.5f}, color("#4C87D744"), 1.0f);
-    const float modeStart = std::max(bounds.x+8,right-142);
-    draw_button({modeStart,bounds.y+8,134,24},"mode:next",std::string(tr(viewMode_))+" >",layout);
-    const float titleWidth = std::max(0.0f, modeStart - bounds.x - 24.0f);
-    renderList_.text({bounds.x + 12.0f, bounds.y + 12.0f, titleWidth, 18.0f}, tr("Scene Viewport"),
-                     color(layout.theme == "light" ? "#DDE2E8" : "#A6AFBC"), 12.0f,
+    renderList_.line({bounds.x + bounds.width * 0.5f, bounds.y}, {bounds.x + bounds.width * 0.5f, bottom}, tokens.accentSoft, 1.0f);
+    renderList_.line({bounds.x, bounds.y + bounds.height * 0.5f}, {right, bounds.y + bounds.height * 0.5f}, tokens.accentSoft, 1.0f);
+    renderList_.text({bounds.x + 14.0f, bounds.y + 12.0f, 180.0f, 16.0f}, tr("SCENE VIEW"), tokens.textMuted, 9.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    const auto frameCommand = command_key("frame-selection");
+    commandActions_[frameCommand] = {EditorCommand::FrameSelection, {}};
+    draw_button({bounds.x + 10.0f, bounds.y + 34.0f, 30.0f, 30.0f}, frameCommand, {}, layout, false, "frame");
+    const float modeStart = std::max(bounds.x + 8.0f, right - 142.0f);
+    draw_button({modeStart, bounds.y + 8.0f, 134.0f, 28.0f}, "mode:next", std::string(tr(viewMode_)), layout, false, "grid");
     if (assetDragActive_ && !assetDragPath_.empty() &&
         bounds.contains({viewportPointer_.x, viewportPointer_.y})) {
-        const auto dropColor = color(layout.theme == "light" ? "#2F73B7" : "#78A9E8");
+        const auto dropColor = tokens.accent;
         renderList_.border({bounds.x + 4.0f, bounds.y + 4.0f,
                             std::max(0.0f, bounds.width - 8.0f), std::max(0.0f, bounds.height - 8.0f)},
                            dropColor, 2.0f, 5.0f);
@@ -2139,8 +2551,10 @@ void EditorUi::draw_viewport(const DockRect& value, const EditorUiModel&, const 
                          "Drop " + std::filesystem::path(assetDragPath_).filename().string() + " to create an asset reference",
                          dropColor, 11.0f, {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
     }
-    renderList_.text({bounds.x + 12.0f, bottom - 26.0f, std::max(0.0f, bounds.width - 24.0f), 18.0f},
-                     tr("MMB orbit · Shift+MMB pan · Wheel zoom · F frame"), color("#9AA3AF"), 11.0f,
+    const auto hint = ui::Rect{bounds.x + 12.0f, bottom - 30.0f, std::min(320.0f, std::max(0.0f, bounds.width - 24.0f)), 22.0f};
+    renderList_.rect(hint, color(layout.theme == "light" ? "#FFFFFFCC" : "#151A20CC"), 5.0f);
+    renderList_.text({hint.x + 8.0f, hint.y + 3.0f, std::max(0.0f, hint.width - 16.0f), 16.0f},
+                     tr("MMB orbit · Shift+MMB pan · Wheel zoom · F frame"), tokens.textSecondary, 9.0f,
                      {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
 }
 
@@ -2216,48 +2630,46 @@ void EditorUi::rebuild_asset_index(const std::vector<FileEntry>& files) {
 
 void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& files, const EditorLayoutState& layout) {
     const auto bounds = inset(value, 10.0f);
-    const auto border = color(layout.theme == "light" ? "#CBD6E2" : "#354252");
-    const auto surface = color(layout.theme == "light" ? "#F5F8FB" : "#1A2027");
-    const auto text = color(layout.theme == "light" ? "#354252" : "#D7E1EC");
-    const auto muted = color(layout.theme == "light" ? "#748092" : "#8F9BAA");
-    const auto hover = color(layout.theme == "light" ? "#EAF3FF" : "#283849");
-    const auto selected = color(layout.theme == "light" ? "#D7E9FF" : "#183B63");
+    const auto tokens = visual_tokens(layout);
+    const auto border = tokens.border;
+    const auto surface = tokens.surfaceInset;
+    const auto text = tokens.text;
+    const auto muted = tokens.textMuted;
+    const auto hover = tokens.hover;
+    const auto selected = tokens.selection;
     const bool compact = bounds.width < 620.0f;
-    const float toolbarHeight = compact ? 64.0f : 34.0f;
-    const float controlHeight = 26.0f;
+    const float toolbarHeight = compact ? 68.0f : 42.0f;
+    const float controlHeight = 30.0f;
 
     const auto toolbar = ui::Rect{bounds.x, bounds.y, bounds.width, toolbarHeight};
     renderList_.border({toolbar.x, toolbar.bottom() - 1.0f, toolbar.width, 1.0f}, border);
     const float filterWidth = compact ? bounds.width : std::clamp(bounds.width * 0.32f, 120.0f, 190.0f);
-    const auto searchInput = ui::Rect{bounds.x, bounds.y + 3.0f, std::max(0.0f, filterWidth), controlHeight};
-    set_region("assets.filter", searchInput, true);
-    renderList_.rect(searchInput, surface, 4.0f);
-    renderList_.border(searchInput, border, 1.0f, 4.0f);
-    renderList_.text({searchInput.x + 8.0f, searchInput.y + 4.0f, std::max(0.0f, searchInput.width - 16.0f), 18.0f},
-                     assetFilter_.empty() ? tr("Search assets") : assetFilter_,
-                     assetFilter_.empty() ? muted : text, 11.0f, {}, ui::TextAlign::Start,
-                     ui::TextOverflow::Ellipsis);
-
+    const auto searchBar = ui::Rect{bounds.x, bounds.y + 3.0f, std::max(0.0f, filterWidth), controlHeight};
+    const auto searchInput = ui::Rect{searchBar.x + 24.0f, searchBar.y, std::max(0.0f, searchBar.width - 24.0f), searchBar.height};
+    renderList_.rect(searchBar, surface, 5.0f);
+    renderList_.border(searchBar, border, 1.0f, 5.0f);
     draw_input(searchInput, "assets.filter", assetFilter_.empty() ? tr("Search assets") : assetFilter_, layout);
+    set_region("assets.filter", searchBar, true);
+    draw_editor_glyph(renderList_, {searchBar.x + 7.0f, searchBar.y + 7.0f, 16.0f, 16.0f}, "search", muted);
     const std::string directoryLabel = assetDirectory_.empty() ? "Project" : assetDirectory_.generic_string();
-    const float buttonWidth = 56.0f;
-    const float refreshWidth = 70.0f;
+    const float buttonWidth = 32.0f;
+    const float refreshWidth = 32.0f;
     const float controlsWidth = buttonWidth * 3.0f + refreshWidth + 16.0f;
     if (!compact) {
-        const auto breadcrumb = ui::Rect{searchInput.right() + 8.0f, bounds.y + 3.0f,
-                                         std::max(0.0f, bounds.width - searchInput.width - controlsWidth - 16.0f), controlHeight};
+        const auto breadcrumb = ui::Rect{searchBar.right() + 8.0f, bounds.y + 3.0f,
+                                         std::max(0.0f, bounds.width - searchBar.width - controlsWidth - 16.0f), controlHeight};
         renderList_.text({breadcrumb.x, breadcrumb.y + 4.0f, breadcrumb.width, 18.0f}, directoryLabel,
                          muted, 11.0f, {}, ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
     }
-    const float controlsY = compact ? bounds.y + 29.0f : bounds.y + 3.0f;
+    const float controlsY = compact ? bounds.y + 34.0f : bounds.y + 3.0f;
     draw_button({bounds.x + bounds.width - controlsWidth, controlsY, refreshWidth, controlHeight},
-                "asset-refresh", tr("Refresh"), layout);
+                "asset-refresh", {}, layout, false, "reset");
     draw_button({bounds.x + bounds.width - buttonWidth * 3.0f - 8.0f, controlsY, buttonWidth, controlHeight},
-                "asset-view:small", tr("Small"), layout, assetView_ == EditorAssetView::SmallList);
+                "asset-view:small", {}, layout, assetView_ == EditorAssetView::SmallList, "list");
     draw_button({bounds.x + bounds.width - buttonWidth * 2.0f - 4.0f, controlsY, buttonWidth, controlHeight},
-                "asset-view:large", tr("Large"), layout, assetView_ == EditorAssetView::LargeIcons);
+                "asset-view:large", {}, layout, assetView_ == EditorAssetView::LargeIcons, "grid");
     draw_button({bounds.x + bounds.width - buttonWidth, controlsY, buttonWidth, controlHeight},
-                "asset-view:tree", tr("Tree"), layout, assetView_ == EditorAssetView::Tree);
+                "asset-view:tree", {}, layout, assetView_ == EditorAssetView::Tree, "layout");
     float contentTop = toolbar.bottom() + 5.0f;
     if (assetEditActive_) {
         const auto edit = ui::Rect{bounds.x, contentTop, std::max(0.0f, bounds.width - 86.0f), 28.0f};
@@ -2325,12 +2737,12 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
                 const auto id = std::string("asset:") + item.path;
                 set_region(id, cell, true);
                 assetActions_[id] = {file.directory ? EditorAssetAction::Navigate : EditorAssetAction::Open, item.path, {}};
-                if (selectedAsset_ == item.path) renderList_.rect(cell, selected, 5.0f);
-                else if (hotRegion_ == id || activeRegion_ == id) renderList_.rect(cell, hotRegion_ == id ? hover : color("#35557D"), 5.0f);
+                 if (selectedAsset_ == item.path) renderList_.rect(cell, selected, 5.0f);
+                 else if (hotRegion_ == id || activeRegion_ == id) renderList_.rect(cell, hotRegion_ == id ? hover : tokens.pressed, 5.0f);
                 if (runtime_.focused() == ensure_region(id, true)) {
                     renderList_.border({cell.x + 1.0f, cell.y + 1.0f,
                                         std::max(0.0f, cell.width - 2.0f), std::max(0.0f, cell.height - 2.0f)},
-                                       color(layout.theme == "light" ? "#4A86C5" : "#78A9E8"), 1.0f, 5.0f);
+                                        tokens.accent, 1.0f, 5.0f);
                 }
                 const auto iconBounds = ui::Rect{cell.x + cell.width * 0.5f - 25.0f, cell.y + 7.0f, 50.0f, 48.0f};
                 if (!iconLibrary_.paint(renderList_, iconBounds, item.icon,
@@ -2350,20 +2762,20 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
         set_region(id, row, true);
         assetActions_[id] = {file.directory ? EditorAssetAction::Navigate : EditorAssetAction::Open, item.path, {}};
         if (selectedAsset_ == item.path) {
-            renderList_.rect(row, selected, 3.0f);
-            renderList_.rect({row.x, row.y, 2.0f, row.height}, color("#4A86C5"));
-        } else if (hotRegion_ == id || activeRegion_ == id) {
-            renderList_.rect(row, hotRegion_ == id ? hover : color("#35557D"), 3.0f);
+             renderList_.rect(row, selected, 4.0f);
+             renderList_.rect({row.x, row.y, 2.0f, row.height}, tokens.accent);
+         } else if (hotRegion_ == id || activeRegion_ == id) {
+             renderList_.rect(row, hotRegion_ == id ? hover : tokens.pressed, 4.0f);
         }
         if (runtime_.focused() == ensure_region(id, true)) {
             renderList_.border({row.x + 1.0f, row.y + 1.0f,
                                 std::max(0.0f, row.width - 2.0f), std::max(0.0f, row.height - 2.0f)},
-                               color(layout.theme == "light" ? "#4A86C5" : "#78A9E8"), 1.0f, 3.0f);
+                                tokens.accent, 1.0f, 4.0f);
         }
         const float indent = tree ? static_cast<float>(item.depth) * 18.0f : 0.0f;
         const float left = row.x + 6.0f + indent;
         if (tree) {
-            const auto guide = color(layout.theme == "light" ? "#D1D7DF" : "#343B46");
+             const auto guide = tokens.borderStrong;
             for (std::size_t level = 0; level < item.depth; ++level) {
                 const float gx = row.x + 14.0f + static_cast<float>(level) * 18.0f;
                 renderList_.line({gx, row.y}, {gx, row.bottom()}, guide, 1.0f);
@@ -2374,7 +2786,7 @@ void EditorUi::draw_assets(const DockRect& value, const std::vector<FileEntry>& 
                 const auto toggle = ui::Rect{left - 4.0f, row.y, 22.0f, row.height};
                 set_region(toggleId, toggle);
                 const bool collapsed = collapsedAssetDirectories_.find(item.path) != collapsedAssetDirectories_.end();
-                const auto chevron = color(layout.theme == "light" ? "#657180" : "#B7C1CF");
+                 const auto chevron = tokens.textMuted;
                 const float cx = toggle.x + 11.0f;
                 const float cy = toggle.y + toggle.height * 0.5f;
                 if (collapsed) {
@@ -3018,25 +3430,106 @@ void EditorUi::draw_generic_panel(const DockRect& value, std::string_view id,
     renderList_.text({bounds.x, bounds.y + 28.0f, bounds.width, 18.0f}, id=="media" ? "No media preview provider is registered." : "No retained panel content is registered.", color(layout.theme == "light" ? "#78808A" : "#8D97A4"), 11.0f);
 }
 
+EditorUi::VisualTokens EditorUi::visual_tokens(const EditorLayoutState& layout) const {
+    const bool light = layout.theme == "light";
+    VisualTokens tokens;
+    tokens.window = color(light ? "#E7ECF2" : "#151A20");
+    tokens.surface = color(light ? "#F1F4F7" : "#1B222A");
+    tokens.surfaceRaised = color(light ? "#FFFFFF" : "#222B35");
+    tokens.surfaceInset = color(light ? "#E1E7ED" : "#12171C");
+    tokens.border = color(layout.theme == "high-contrast" ? "#FFFFFF" : light ? "#C9D2DC" : "#2D3945");
+    tokens.borderStrong = color(layout.theme == "high-contrast" ? "#FFFFFF" : light ? "#AEBBC8" : "#40505F");
+    tokens.text = color(light ? "#1F2933" : "#E8EDF3");
+    tokens.textSecondary = color(light ? "#506070" : "#B0BBC7");
+    tokens.textMuted = color(light ? "#7B8794" : "#748291");
+    tokens.accent = color(light ? "#2F78C5" : "#4B9BFF");
+    tokens.accentSoft = color(light ? "#D9E9FA" : "#1F4166");
+    tokens.selection = color(light ? "#D8E9FB" : "#203D60");
+    tokens.hover = color(light ? "#E5EEF8" : "#293541");
+    tokens.pressed = color(light ? "#C8DDF2" : "#344657");
+    tokens.success = color(light ? "#287B58" : "#64C493");
+    tokens.warning = color(light ? "#97651D" : "#D4A85E");
+    tokens.danger = color(light ? "#B24C4C" : "#E18181");
+    tokens.viewport = color(light ? "#F7F9FB" : "#11161B");
+    tokens.viewportGrid = color(light ? "#B5C1CD66" : "#FFFFFF12");
+    return tokens;
+}
+
 void EditorUi::draw_button(ui::Rect bounds, std::string id, std::string_view label,
-                           const EditorLayoutState& layout, bool primary) {
+                           const EditorLayoutState& layout, bool primary, std::string_view icon) {
     set_region(id, bounds, true);
     const bool hovered = hotRegion_ == id;
     const bool pressed = activeRegion_ == id;
     const bool focused = runtime_.focused() == ensure_region(id, true);
-    const auto fill = primary ? color(pressed ? "#2D6CB5" : hovered ? "#3D87DE" : "#3579C7") :
-        color(layout.theme == "light" ? (pressed ? "#D8E4F0" : hovered ? "#EAF2FB" : "#F4F7FA") :
-              (pressed ? "#344556" : hovered ? "#2B3948" : "#25303B"));
+    const auto tokens = visual_tokens(layout);
+    const auto fill = primary ? (pressed ? tokens.pressed : hovered ? tokens.accent : tokens.accentSoft) :
+        (pressed ? tokens.pressed : hovered ? tokens.hover : tokens.surfaceRaised);
     const bool highContrast = layout.theme == "high-contrast";
-    const auto foreground = highContrast && pressed ? color("#000000") : primary ? color("#FFFFFF") : color(layout.theme == "light" ? "#314052" : "#DDE7F2");
-    renderList_.rect(bounds, highContrast && pressed ? color("#FFFFFF") : highContrast && hovered ? color("#0066CC") : fill, 4.0f);
-    renderList_.border(bounds, color(highContrast ? "#FFFFFF" : layout.theme == "light" ? "#C8D5E2" : "#3A4A5C"), 1.0f, 4.0f);
+    const auto foreground = highContrast && pressed ? color("#000000") : primary ? color("#FFFFFF") : tokens.text;
+    renderList_.rect(bounds, highContrast && pressed ? color("#FFFFFF") : highContrast && hovered ? color("#0066CC") : fill, 5.0f);
+    renderList_.border(bounds, focused ? tokens.accent : tokens.border, focused ? 1.5f : 1.0f, 5.0f);
     if (focused) {
-        const auto focusColor = primary ? color("#8DBBFF") : color(layout.theme == "light" ? "#2E6FBE" : "#78A9E8");
-        renderList_.border({bounds.x - 1.0f, bounds.y - 1.0f, bounds.width + 2.0f, bounds.height + 2.0f}, focusColor, 1.0f, 6.0f);
+        renderList_.border({bounds.x - 2.0f, bounds.y - 2.0f, bounds.width + 4.0f, bounds.height + 4.0f},
+                           tokens.accent, 1.0f, 7.0f);
     }
-    renderList_.text({bounds.x + 6.0f, bounds.y + 3.0f, std::max(0.0f, bounds.width - 12.0f), 18.0f}, label, foreground, 12.0f,
-                      {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+    if (!icon.empty()) {
+        const float iconSize = std::min(18.0f, std::max(12.0f, bounds.height - 10.0f));
+        const auto iconRect = label.empty()
+            ? ui::Rect{bounds.x + (bounds.width - iconSize) * 0.5f, bounds.y + (bounds.height - iconSize) * 0.5f, iconSize, iconSize}
+            : ui::Rect{bounds.x + 8.0f, bounds.y + (bounds.height - iconSize) * 0.5f, iconSize, iconSize};
+        draw_editor_glyph(renderList_, iconRect, icon, foreground, fill);
+    }
+    if (!label.empty()) {
+        const float left = icon.empty() ? bounds.x + 6.0f : bounds.x + 31.0f;
+        renderList_.text({left, bounds.y + 3.0f, std::max(0.0f, bounds.right() - left - 6.0f), 18.0f}, label, foreground, 11.0f,
+                          {}, icon.empty() ? ui::TextAlign::Center : ui::TextAlign::Start, ui::TextOverflow::Ellipsis);
+    }
+    // Icon-only controls remain discoverable outside the toolbar. Toolbar
+    // commands already use the centered command-band tooltip, so keep this
+    // fallback for panel-local controls and media/inspector transport.
+    if (label.empty() && hotRegion_ == id && bounds.y > kToolbarHeight + kPortableMenuHeight) {
+        std::string tooltip;
+        if (id == "command:create-empty") tooltip = std::string(tr("Create Empty"));
+        else if (id == "command:frame-selection") tooltip = std::string(tr("Frame Selected"));
+        else if (id == "asset-refresh") tooltip = std::string(tr("Refresh"));
+        else if (id == "asset-view:small") tooltip = std::string(tr("Small"));
+        else if (id == "asset-view:large") tooltip = std::string(tr("Large"));
+        else if (id == "asset-view:tree") tooltip = std::string(tr("Tree"));
+        else if (id.rfind("command:media-play", 0) == 0) tooltip = std::string(tr("Play"));
+        else if (id.rfind("command:media-pause", 0) == 0) tooltip = std::string(tr("Pause"));
+        else if (id.rfind("command:media-stop", 0) == 0) tooltip = std::string(tr("Stop"));
+        else if (id == "compact-inspector-toggle")
+            tooltip = std::string(tr(compactInspectorExpanded_ ? "Hide Inspector" : "Show Inspector"));
+        if (!tooltip.empty()) {
+            const float tooltipWidth = std::max(58.0f, static_cast<float>(tooltip.size()) * 7.0f + 20.0f);
+            const float width = physicalWidth_ / std::max(0.25f, dpiScale_);
+            const float x = std::clamp(bounds.x + (bounds.width - tooltipWidth) * 0.5f,
+                                       4.0f, std::max(4.0f, width - tooltipWidth - 4.0f));
+            const float below = bounds.bottom() + 4.0f;
+            const float above = bounds.y - 26.0f;
+            const float y = below + 22.0f <= physicalHeight_ / std::max(0.25f, dpiScale_) ? below : above;
+            renderList_.rect({x, y, tooltipWidth, 22.0f}, tokens.surfaceInset, 4.0f);
+            renderList_.border({x, y, tooltipWidth, 22.0f}, tokens.borderStrong, 1.0f, 4.0f);
+            renderList_.text({x, y + 2.0f, tooltipWidth, 18.0f}, tooltip, tokens.text, 10.0f,
+                              {}, ui::TextAlign::Center, ui::TextOverflow::Ellipsis);
+        }
+    }
+}
+
+void EditorUi::draw_toggle(ui::Rect bounds, std::string id, bool checked,
+                           const EditorLayoutState& layout) {
+    set_region(id, bounds, true);
+    const auto tokens = visual_tokens(layout);
+    const bool hovered = hotRegion_ == id || activeRegion_ == id;
+    if (hovered) renderList_.rect(bounds, tokens.hover, 5.0f);
+    const auto track = ui::Rect{bounds.right() - 40.0f, bounds.y + 5.0f, 36.0f, 16.0f};
+    renderList_.rect(track, checked ? tokens.accent : tokens.borderStrong, 8.0f);
+    const float knobX = checked ? track.right() - 8.0f : track.x + 8.0f;
+    renderList_.rect({knobX - 5.0f, track.y + 3.0f, 10.0f, 10.0f},
+                     checked ? color("#FFFFFF") : tokens.textMuted, 5.0f);
+    renderList_.text({bounds.x + 2.0f, bounds.y + 2.0f, std::max(0.0f, bounds.width - 52.0f), 20.0f},
+                     checked ? tr("On") : tr("Off"), checked ? tokens.accent : tokens.textMuted, 10.0f,
+                     {}, ui::TextAlign::End, ui::TextOverflow::Ellipsis);
 }
 
 ui::ThemeColor EditorUi::color(std::string_view hex, ui::ThemeColor fallback) const {

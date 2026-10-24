@@ -95,6 +95,10 @@ class TestAudioBackend final : public audio::IAudioBackend {
     }
 
 public:
+    audio::AudioPlayParams lastPlay{}, lastSpatial{};
+    float lastPitch{1}, lastPan{0}, lastVolume{1};
+    std::size_t effectCount{0}, activeTracks{0};
+    audio::AudioTrackId nextTrack{1};
     bool initialize(const audio::AudioConfig&) override { return true; }
     void shutdown() override { voices_.clear(); cursors_.clear(); }
     void update(Seconds) override {}
@@ -102,6 +106,7 @@ public:
         return {asset.streaming, true, 30.0, true};
     }
     audio::AudioVoiceId play(const audio::AudioAssetDesc&, const audio::AudioPlayParams& params) override {
+        lastPlay=params;
         const auto id = audio::make_audio_handle(static_cast<std::uint32_t>(voices_.size()), 1);
         voices_.push_back({id, params.bus, params.startPaused ? audio::AudioVoiceState::Paused : audio::AudioVoiceState::Playing});
         cursors_[id] = 0.0;
@@ -116,15 +121,16 @@ public:
         return found == cursors_.end() ? 0.0 : found->second;
     }
     bool supports_cursor() const noexcept override { return true; }
-    void set_volume(audio::AudioVoiceId, float) override {}
-    void set_pitch(audio::AudioVoiceId, float) override {}
-    void set_pan(audio::AudioVoiceId, float) override {}
-    void set_spatial(audio::AudioVoiceId, const audio::AudioPlayParams&) override {}
+    void set_volume(audio::AudioVoiceId, float value) override {lastVolume=value;}
+    void set_pitch(audio::AudioVoiceId, float value) override {lastPitch=value;}
+    void set_pan(audio::AudioVoiceId, float value) override {lastPan=value;}
+    void set_spatial(audio::AudioVoiceId, const audio::AudioPlayParams& value) override {lastSpatial=value;}
     void set_listener(const audio::AudioListener&) override {}
     void set_bus_volume(audio::AudioBus, float) override {}
     void set_bus_muted(audio::AudioBus, bool) override {}
-    audio::AudioTrackId create_track(const audio::AudioTrackDesc&) override { return 0; }
-    void destroy_track(audio::AudioTrackId) override {}
+    audio::AudioTrackId create_track(const audio::AudioTrackDesc&) override {++activeTracks;return audio::make_audio_handle(nextTrack++,1);}
+    void destroy_track(audio::AudioTrackId) override {--activeTracks;}
+    void set_track_effects(audio::AudioTrackId,const std::vector<audio::AudioEffectDesc>& effects) override {effectCount=effects.size();}
     void set_track_volume(audio::AudioTrackId, float) override {}
     void set_track_muted(audio::AudioTrackId, bool) override {}
     audio::AudioTrackSnapshot track_snapshot(audio::AudioTrackId) const override { return {}; }
@@ -320,7 +326,8 @@ int main() {
         audio::AudioConfig audioConfig;
         audioConfig.assetRoot = project;
         audioConfig.startDevice = false;
-        audio::AudioSystem audioSystem(std::make_unique<TestAudioBackend>(), audioConfig);
+        auto audioBackend=std::make_unique<TestAudioBackend>();auto* audioProbe=audioBackend.get();
+        audio::AudioSystem audioSystem(std::move(audioBackend), audioConfig);
         require(audioSystem.initialize(), "editor audio test backend initialization failed");
         audio::AudioSceneSystem audioScene;
         EditorLayer editor; editor.set_project_root(project.generic_string());
@@ -562,12 +569,17 @@ int main() {
         require_unloaded_reference("assets/Folder/Nested/renamed.txt");
         needleReference->set_asset_id(0);
         editor.execute_command(EditorCommand::RefreshAssets, {}, world);
-        for (int i = 0; i < 120 && needleReference->asset_id() == 0; ++i) {
+        // Scanning is asynchronous disk work; a frame count is not a time
+        // budget, especially while GPU and build validation run concurrently.
+        const auto manifestRefreshDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while (needleReference->asset_id() == 0 && std::chrono::steady_clock::now()<manifestRefreshDeadline) {
             tick();
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         require(needleReference->asset_id() == renamedNeedleAssetId,
-                "manifest-ready rebind did not restore a path-only asset reference");
+                ("manifest-ready rebind did not restore a path-only asset reference: path="+needleReference->path()+
+                 " id="+std::to_string(needleReference->asset_id())+" expected="+std::to_string(renamedNeedleAssetId)+
+                 " count="+std::to_string(editor.asset_system_manifest_count())+" status="+editor.asset_system_manifest_status()).c_str());
         click("assets.filter"); key("Left Ctrl"); key("A");
         {input::InputEvent e;e.type=input::InputEventType::KeyUp;e.control="key:Left Ctrl";fake->queue.push_back(e);tick();}
         key("Backspace"); key("Return"); key("End");tick();
@@ -1189,6 +1201,16 @@ int main() {
                 editor.asset_preview().modelMaterialLabel.find("MaterialB") != std::string::npos &&
                 editor.asset_preview().modelTextureLabel.find("TextureB") != std::string::npos,
                 "GLTF material selection did not follow its base-color texture reference");
+        const auto cachedModelPreview = editor.asset_preview().modelPreview;
+        const auto cachedModelTexture = editor.asset_preview().modelTextureSnapshot;
+        editor.execute_command(EditorCommand::OpenAsset, "assets/preview.gltf", world);
+        tick();
+        require(editor.asset_preview().modelPreview == cachedModelPreview &&
+                editor.asset_preview().modelTextureSnapshot == cachedModelTexture &&
+                editor.asset_preview().modelMaterialIndex == 1 &&
+                editor.asset_preview().modelTextureIndex == 1 &&
+                editor.asset_preview().status == "Model preview ready",
+                "reselecting a cached model cleared its preview or material selection");
         struct UiScenario {
             float width;
             float height;
@@ -1228,6 +1250,38 @@ int main() {
             require(editor.editor_ui().render_list().size() > 0 && editor.ui_text_command_count() > 0,
                     "responsive UI scenario produced an empty retained render list");
         }
+        editor.execute_command(EditorCommand::OpenAsset,"assets/preview.wav",world);tick();
+        auto audition=editor.asset_settings();audition.pitch=1.5f;audition.pan=-0.5f;audition.volume=0.4f;
+        audition.bus=2;audition.spatialized=true;audition.minDistance=2;audition.maxDistance=30;
+        audition.lowPass=true;audition.reverb=true;audition.loop=true;
+        require(editor.set_asset_settings(audition,true),"audio asset settings did not save");
+        editor.execute_command(EditorCommand::MediaPlay,{},world);tick();
+        require(audioProbe->lastPlay.pitch==1.5f && audioProbe->lastPlay.pan==-0.5f &&
+                audioProbe->lastPlay.bus==audio::AudioBus::Sfx && audioProbe->lastPlay.loop &&
+                audioProbe->effectCount==2 && audioProbe->activeTracks==1,
+                "audition did not apply play parameters and isolated effects via AudioSystem");
+        audition.pitch=0.75f;audition.pan=0.25f;audition.volume=0.6f;
+        require(editor.set_asset_settings(audition),"live audio settings rejected");
+        require(audioProbe->lastPitch==0.75f && audioProbe->lastPan==0.25f && audioProbe->lastVolume==0.6f &&
+                audioProbe->lastSpatial.minDistance==2,"live audition controls did not reach audio API");
+        editor.execute_command(EditorCommand::MediaPause,{},world);tick();
+        audition.bus=1;require(editor.set_asset_settings(audition),"audio bus routing change failed");tick();
+        require(editor.media_preview().playbackState=="paused" && audioProbe->lastPlay.bus==audio::AudioBus::Music &&
+                audioProbe->activeTracks==1,"routing restart lost pause state or leaked an audition track");
+        const auto countBeforeSource=world.object_count();
+        require(editor.create_audio_source_from_asset(world),"audio asset did not create a scene AudioSource");tick();
+        auto* auditionObject=world.find_object(editor.layout().selectedObject);
+        auto* auditionSource=auditionObject?auditionObject->get_component<components::AudioSourceComponent>():nullptr;
+        require(auditionSource && auditionSource->clipPath=="assets/preview.wav" && auditionSource->pitch==0.75f &&
+                auditionSource->bus==1 && auditionSource->minDistance==2,"scene source did not copy supported asset settings");
+        editor.execute_command(EditorCommand::Undo,{},world);tick();
+        require(world.object_count()==countBeforeSource,"created scene AudioSource was not undoable");
+        editor.execute_command(EditorCommand::MediaStop,{},world);tick();
+        require(audioProbe->activeTracks==0,"stopped preview retained its audio track");
+        editor.execute_command(EditorCommand::OpenAsset,"assets/preview.obj",world);tick();
+        editor.execute_command(EditorCommand::OpenAsset,"assets/preview.wav",world);tick();
+        require(editor.asset_settings().pitch==1.5f && editor.asset_settings().bus==2,
+                "reselecting audio did not restore saved asset preferences");
         editor.shutdown();
         audioScene.shutdown(audioSystem);
         audioSystem.shutdown();

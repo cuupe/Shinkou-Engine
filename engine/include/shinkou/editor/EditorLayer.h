@@ -21,6 +21,8 @@
 #include "shinkou/editor/EditorImagePreview.h"
 #include "shinkou/editor/EditorVideoPreview.h"
 #include "shinkou/editor/EditorModelPreview.h"
+#include "shinkou/editor/EditorTextPreview.h"
+#include "shinkou/editor/EditorAssetSettings.h"
 #include "shinkou/assets/AssetSystem.h"
 #include "shinkou/audio/AudioSystem.h"
 #include "shinkou/render/Renderer.h"
@@ -36,6 +38,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -49,6 +52,7 @@ namespace input { class InputSystem; }
 namespace audio { class AudioSceneSystem; }
 
 namespace editor {
+class EditorImGuiView;
 
 struct EditorLayoutState {
     std::uint32_t layoutVersion{3};
@@ -60,7 +64,7 @@ struct EditorLayoutState {
     std::string dockLayoutFile{"Saved/Editor/Layouts/Default.dock.json"};
     std::string styleFile{"Saved/Editor/Styles/Default.json"};
     std::string fontPath{};
-    float fontSize{14.0f};
+    float fontSize{15.0f};
     std::string backgroundColor{"#0e1117"};
     std::string backgroundImage{};
     bool compactControls{false};
@@ -104,23 +108,20 @@ struct EditorPanel {
 };
 
 class EditorLayer {
+    friend class EditorImGuiView;
+    std::unique_ptr<EditorImGuiView> imguiView_;
     struct AsyncFileScan {
         std::uint64_t generation{0};
         std::string scope;
         FileSystemService service{};
         std::vector<FileEntry> entries;
         std::vector<FileChange> changes;
+        bool complete{true};
+        std::string error;
         std::shared_ptr<const EditorAssetIndexSnapshot> index;
     };
 
-    struct AsyncAssetPreview {
-        std::uint64_t generation{0};
-        std::uint64_t sourceStamp{0};
-        std::string path;
-        std::string content;
-        bool truncated{false};
-        std::string error;
-    };
+    using AsyncAssetPreview = EditorTextPreviewResult;
 
     struct AsyncAssetManifest {
         std::uint64_t generation{0};
@@ -146,7 +147,7 @@ class EditorLayer {
         std::string firstError;
     };
 
-    enum class EditHistoryKind : std::uint8_t { Scene, File };
+    enum class EditHistoryKind : std::uint8_t { Scene, File, Property };
     struct FileOperation {
         enum class Kind : std::uint8_t { Rename, RecycleDelete };
         Kind kind{Kind::Rename};
@@ -251,6 +252,13 @@ class EditorLayer {
     std::shared_ptr<const std::vector<EditorInspectorChoice>> audioInspectorChoices_{};
     std::string assetManifestStatus_{"AssetSystem manifest not connected"};
     EditorAssetPreviewUiState assetPreviewState_{};
+    EditorAssetSettings assetSettings_{};
+    std::string assetSettingsPath_, assetSettingsRoot_, assetSettingsStatus_;
+    bool assetSettingsLoadFailed_{false};
+    audio::AudioTrackId audioPreviewTrack_{0};
+    void load_asset_settings();
+    void apply_asset_audio_settings(bool restart, bool effectsChanged);
+    void remap_asset_settings(std::string_view from, std::string_view to);
     std::uint64_t imagePreviewGeneration_{0};
     std::uint64_t imagePreviewStamp_{0};
     std::uint64_t audioPreviewGeneration_{0};
@@ -336,6 +344,21 @@ class EditorLayer {
     std::vector<EditorDocument> undo_, redo_;
     std::vector<FileOperation> fileUndo_, fileRedo_;
     std::vector<EditHistoryKind> undoHistory_, redoHistory_;
+    struct PropertyEdit {
+        std::size_t objectIndex{};
+        ObjectId object{};
+        std::string componentType,property;
+        PropertyValue before,after;
+    };
+    std::vector<PropertyEdit> propertyUndo_,propertyRedo_;
+    struct InspectorEdit {
+        ObjectId object{0};std::string field;PropertyValue original;
+        PropertyEdit change;bool changed{false},wasDirty{false};
+    };
+    std::optional<InspectorEdit> inspectorEdit_;
+    void record_scene_checkpoint(EditorDocument document);
+    bool replay_property_edit(bool undo);
+    void rebind_property_history(World& world);
     std::uint64_t fileOperationSerial_{0};
     bool replayingFileOperation_{false};
     bool fileRecoveryUiDirty_{true};
@@ -438,20 +461,6 @@ class EditorLayer {
     void set_asset_directory(std::filesystem::path directory);
     void handle_asset_action(EditorAssetAction action, std::string path, std::string value);
     bool drop_asset_to_viewport(std::string path, math::Vec2 point);
-    void draw_toolbar(render::Renderer& renderer, World& world);
-    void draw_main_menu(render::Renderer& renderer, World& world);
-    void draw_hierarchy(World& world);
-    void draw_hierarchy_object(const EditorObjectTreeNode& object);
-    void draw_inspector(World& world);
-    void draw_viewport(render::Renderer& renderer);
-    void draw_game_view(render::Renderer& renderer);
-    void draw_assets();
-    void draw_console(const render::Renderer& renderer);
-    void draw_profiler(const render::Renderer& renderer);
-    void draw_render_graph(render::Renderer& renderer);
-    void draw_settings();
-    void draw_media();
-    void draw_status_bar(const render::Renderer& renderer);
     void draw_registered_panels(render::Renderer& renderer, World& world, FrameIndex frame, Seconds dt);
     void dispatch_command(EditorCommand command, std::string_view target, World& world);
     void install_native_menu();
@@ -468,6 +477,11 @@ class EditorLayer {
     void apply_render_view_mode(World& world, std::string_view mode);
 
 public:
+    bool begin_inspector_edit(std::string_view field);
+    bool edit_inspector_value(std::string_view field,const PropertyValue& value);
+    void finish_inspector_edit(bool cancel=false);
+    EditorLayer();
+    ~EditorLayer();
     void execute_command(EditorCommand command, std::string_view target, World& world) { activeWorld_ = &world; dispatch_command(command, target, world); }
     // Shared ingress for native OS drag/drop adapters and the retained Project
     // browser. It preserves the same validation and undo transaction for both
@@ -496,14 +510,15 @@ public:
     std::size_t ui_command_count() const noexcept;
     std::size_t ui_text_command_count() const noexcept;
     std::size_t ui_asset_file_count() const noexcept { return projectFiles_.size(); }
-    std::size_t ui_visible_asset_file_count() const noexcept { return editorUi_.visible_asset_count(); }
+    std::size_t ui_visible_asset_file_count() const noexcept;
     std::string ui_asset_directory() const { return assetDirectory_.generic_string(); }
     const EditorMediaUiState& media_preview() const noexcept { return uiModel_.media_state(); }
     std::string ui_first_asset_path() const {
         return projectFiles_.empty() ? std::string{} : projectFiles_.front().relativePath.generic_string();
     }
-    DockRect ui_viewport_rect() const noexcept { return editorUi_.viewport_rect(); }
-    float ui_dpi_scale() const noexcept { return editorUi_.dpi_scale(); }
+    DockRect ui_viewport_rect() const noexcept;
+    float ui_dpi_scale() const noexcept;
+    const std::unordered_map<std::string,ui::Rect>& ui_interaction_regions() const noexcept;
     std::size_t model_scene_instance_count() const noexcept { return modelSceneRenderState_.submittedInstances; }
     std::size_t model_scene_cached_asset_count() const noexcept { return modelSceneRenderer_.cached_asset_count(); }
     std::size_t model_scene_loaded_asset_count() const noexcept;
@@ -567,6 +582,11 @@ public:
     std::size_t compile_command_count() const noexcept { return compileCommands_.size(); }
     const std::string& compile_commands_status() const noexcept { return compileCommandsStatus_; }
     const EditorAssetPreviewUiState& asset_preview() const noexcept { return assetPreviewState_; }
+    const EditorAssetSettings& asset_settings() const noexcept { return assetSettings_; }
+    const std::string& asset_settings_status() const noexcept { return assetSettingsStatus_; }
+    bool set_asset_settings(EditorAssetSettings settings, bool persist = false);
+    bool save_asset_settings();
+    bool create_audio_source_from_asset(World& world);
     std::size_t asset_system_manifest_count() const noexcept {
         return assetManifest_ ? assetManifest_->size() : 0;
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shinkou/Math.h"
+#include "shinkou/render/PipelineState.h"
 #include <cstdint>
 #include <string>
 #include <variant>
@@ -159,7 +160,7 @@ struct DescriptorBinding {
     bool unbounded{false};
     // Legacy bindings use resource. Array bindings provide one resource per
     // descriptor; the first entry is also accepted as the legacy resource.
-    std::vector<ResourceHandle> resources;
+    std::vector<ResourceHandle> resources{};
 };
 
 struct MaterialDesc {
@@ -191,6 +192,11 @@ struct PipelineDesc {
     // Appended to preserve existing aggregate initialization. DirectX 11
     // uses this to opt into the NORMAL vertex input element.
     bool vertexNormals{false};
+    VertexLayout vertexLayout{};
+    std::optional<DepthStencilState> depthStencilState;
+    std::vector<BlendAttachmentState> blendAttachments;
+    RasterizerState rasterizerState{};
+    math::Vec4 blendConstants{};
 };
 
 using ResourceDesc = std::variant<TextureDesc, BufferDesc, ShaderDesc, PipelineDesc, MaterialDesc, SamplerDesc>;
@@ -200,6 +206,12 @@ struct SpriteDraw {
     math::Vec2 position{};
     math::Vec2 size{1, 1};
     float rotation{0};
+};
+
+struct VertexBufferBinding {
+    ResourceHandle buffer{};
+    std::uint32_t binding{0};
+    std::size_t offset{0};
 };
 
 struct MeshDraw {
@@ -212,6 +224,9 @@ struct MeshDraw {
     // source-compatible.
     std::uint32_t firstIndex{0};
     std::int32_t vertexOffset{0};
+    std::vector<VertexBufferBinding> vertexBindings{};
+    std::uint32_t instanceCount{1};
+    std::uint32_t firstInstance{0};
 };
 
 struct IndirectMeshDraw {
@@ -221,6 +236,7 @@ struct IndirectMeshDraw {
     std::uint32_t maxDrawCount{1};
     std::uint32_t stride{sizeof(std::uint32_t) * 5};
     std::size_t argumentOffset{0};
+    std::vector<VertexBufferBinding> vertexBindings{};
 };
 
 struct DispatchDesc {

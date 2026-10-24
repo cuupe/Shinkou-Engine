@@ -17,12 +17,26 @@ enum class PostProcessStageKind {
     SSAO,
     TAA,
     SSR,
-    ToneMap
+    ToneMap,
+    MotionBlur
 };
+
+enum class ExposureMetering { LogAverage, Histogram };
 
 struct ExposureStageParameters {
     float exposure{1.0f};
     float adaptationRate{0.0f};
+    float minExposure{0.01f};
+    float maxExposure{64.0f};
+    float middleGray{0.18f};
+    float compensation{0.0f};
+    // Scene darkening (exposure increasing); zero uses adaptationRate.
+    float darkAdaptationRate{0.0f};
+    ExposureMetering metering{ExposureMetering::LogAverage};
+    float minLogLuminance{-12.0f};
+    float maxLogLuminance{16.0f};
+    float lowPercentile{0.02f};
+    float highPercentile{0.98f};
 };
 
 struct BloomStageParameters {
@@ -30,6 +44,7 @@ struct BloomStageParameters {
     float knee{0.5f};
     float intensity{0.8f};
     std::uint32_t mipLevels{5};
+    float scatter{0.7f};
 };
 
 struct SsaoStageParameters {
@@ -43,6 +58,7 @@ struct TaaStageParameters {
     float feedback{0.9f};
     float sharpness{0.0f};
     float motionRejection{1.0f};
+    float depthRejection{0.01f};
 };
 
 struct SsrStageParameters {
@@ -52,8 +68,15 @@ struct SsrStageParameters {
     std::uint32_t maxSteps{64};
 };
 
+struct MotionBlurStageParameters {
+    float shutterFraction{0.5f};
+    float maxRadiusPixels{32.0f};
+    float depthRejection{0.01f};
+    std::uint32_t sampleCount{12};
+};
+
 using PostProcessStageParameters = std::variant<std::monostate, ExposureStageParameters,
-    BloomStageParameters, SsaoStageParameters, TaaStageParameters, SsrStageParameters>;
+    BloomStageParameters, SsaoStageParameters, TaaStageParameters, SsrStageParameters,MotionBlurStageParameters>;
 
 struct PostProcessValidationResult {
     std::vector<std::string> errors;
@@ -123,6 +146,7 @@ public:
     ResourceHandle build(RenderGraph& graph, const PostProcessChainDesc& chain) const;
 };
 
+bool validate_post_process_parameters(const PostProcessStageDesc& stage,std::string& error);
 PostProcessValidationResult validate_post_process_stage(const PostProcessStageDesc& stage);
 PostProcessValidationResult validate_post_process_chain(const PostProcessChainDesc& chain);
 }

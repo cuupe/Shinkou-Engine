@@ -30,7 +30,7 @@ bool cancelled(const std::atomic_bool* value) noexcept {
 
 std::uint64_t video_revision(std::string_view path, std::uint64_t stamp,
                              std::uint32_t width, std::uint32_t height,
-                             double duration) noexcept {
+                             double duration, std::int64_t frameTicks) noexcept {
     std::uint64_t hash = 1469598103934665603ull;
     const auto mix = [&hash](const void* data, std::size_t size) {
         const auto* bytes = static_cast<const unsigned char*>(data);
@@ -44,6 +44,7 @@ std::uint64_t video_revision(std::string_view path, std::uint64_t stamp,
     mix(&width, sizeof(width));
     mix(&height, sizeof(height));
     mix(&duration, sizeof(duration));
+    mix(&frameTicks, sizeof(frameTicks));
     return hash == 0 ? 1 : hash;
 }
 
@@ -178,6 +179,10 @@ EditorVideoPreviewResult load_editor_video_preview_at(
     if (FAILED(hr)) return release_all(failed(path, generation, sourceStamp, mf_error(hr)));
     hr = attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, FALSE);
     if (FAILED(hr)) return release_all(failed(path, generation, sourceStamp, mf_error(hr)));
+    // H.264 and other common codecs decode to YUV. Source Reader only adds
+    // its YUV->RGB32 converter when video processing is explicitly enabled.
+    hr = attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+    if (FAILED(hr)) return release_all(failed(path, generation, sourceStamp, mf_error(hr)));
     const auto widePath = absolute.wstring();
     hr = MFCreateSourceReaderFromURL(widePath.c_str(), attributes, &reader);
     if (FAILED(hr) || !reader) return release_all(failed(path, generation, sourceStamp, mf_error(hr)));
@@ -210,18 +215,23 @@ EditorVideoPreviewResult load_editor_video_preview_at(
     PropVariantClear(&durationValue);
     const double duration = static_cast<double>(durationTicks) / 10000000.0;
     const double targetSeconds = duration > 0.0
-        ? std::clamp(std::isfinite(seconds) ? seconds : 0.0, 0.0, duration)
+        ? std::clamp(std::isfinite(seconds) ? seconds : 0.0, 0.0,
+            std::max(0.0,duration-(rateNumerator?0.5*rateDenominator/rateNumerator:0.0001)))
         : std::max(0.0, std::isfinite(seconds) ? seconds : 0.0);
 
     std::uint32_t audioStreamCount = 0;
     for (DWORD index = 0; index < 32; ++index) {
         IMFMediaType* audioType = nullptr;
-        const auto audioResult = reader->GetNativeMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM,
-                                                             index, &audioType);
-        if (FAILED(audioResult) || !audioType) break;
-        ++audioStreamCount;
+        const auto audioResult = reader->GetNativeMediaType(index,0,&audioType);
+        if (audioResult==MF_E_INVALIDSTREAMNUMBER) break;
+        GUID major{};
+        if (SUCCEEDED(audioResult) && audioType && SUCCEEDED(audioType->GetGUID(MF_MT_MAJOR_TYPE,&major)) && major==MFMediaType_Audio)
+            ++audioStreamCount;
         release_com(audioType);
     }
+    reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS,FALSE);
+    hr=reader->SetStreamSelection(videoStream,TRUE);
+    if(FAILED(hr)) return release_all(failed(path,generation,sourceStamp,mf_error(hr)));
 
     hr = MFCreateMediaType(&outputType);
     if (FAILED(hr)) return release_all(failed(path, generation, sourceStamp, mf_error(hr)));
@@ -236,6 +246,9 @@ EditorVideoPreviewResult load_editor_video_preview_at(
             "video RGB32 conversion is unavailable"));
     }
     LONG stride = static_cast<LONG>(width * 4u);
+    release_com(outputType);
+    hr=reader->GetCurrentMediaType(videoStream,&outputType);
+    if(FAILED(hr)) return release_all(failed(path,generation,sourceStamp,mf_error(hr)));
     UINT32 configuredStride = 0;
     if (SUCCEEDED(outputType->GetUINT32(MF_MT_DEFAULT_STRIDE, &configuredStride)) && configuredStride != 0)
         stride = static_cast<LONG>(configuredStride);
@@ -255,10 +268,22 @@ EditorVideoPreviewResult load_editor_video_preview_at(
         if (FAILED(hr)) return release_all(failed(path, generation, sourceStamp,
             "video seek is unavailable: " + mf_error(hr)));
     }
-    hr = reader->ReadSample(videoStream, 0, &actualStream, &flags, &timestamp, &sample);
-    if (FAILED(hr) || (flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0 || !sample)
+    // Seeking lands at a preceding keyframe. Decode forward to the requested
+    // presentation time, retaining the last frame if the request reaches EOF.
+    const auto targetTicks=static_cast<LONGLONG>(std::llround(targetSeconds*10000000.0));
+    const auto tolerance=rateNumerator?static_cast<LONGLONG>(10000.0*rateDenominator/rateNumerator):1;
+    bool reached=false;
+    for(unsigned attempt=0;attempt<4096;++attempt) {
+        if(cancelled(cancel)) return release_all(failed(path,generation,sourceStamp,"video preview cancelled"));
+        IMFSample* candidate=nullptr;LONGLONG candidateTime=0;
+        hr=reader->ReadSample(videoStream,0,&actualStream,&flags,&candidateTime,&candidate);
+        if(FAILED(hr)) {release_com(candidate);return release_all(failed(path,generation,sourceStamp,mf_error(hr)));}
+        if(candidate) {release_com(sample);sample=candidate;timestamp=candidateTime;}
+        if((sample && timestamp+tolerance>=targetTicks) || (flags&MF_SOURCE_READERF_ENDOFSTREAM)) {reached=true;break;}
+    }
+    if (!sample || !reached)
         return release_all(failed(path, generation, sourceStamp,
-            "video first frame is unavailable: " + mf_error(hr)));
+            "video frame unavailable or keyframe preroll exceeds preview budget"));
     if (cancelled(cancel)) return release_all(failed(path, generation, sourceStamp, "video preview cancelled"));
     hr = sample->ConvertToContiguousBuffer(&buffer);
     if (FAILED(hr) || !buffer) return release_all(failed(path, generation, sourceStamp, mf_error(hr)));
@@ -271,7 +296,7 @@ EditorVideoPreviewResult load_editor_video_preview_at(
     buffer->Unlock();
     if (!frame) return release_all(failed(path, generation, sourceStamp,
         "video first frame exceeds the preview pixel budget"));
-    frame->revision = video_revision(path, sourceStamp, frame->width, frame->height, duration);
+    frame->revision = video_revision(path, sourceStamp, frame->width, frame->height, duration,timestamp);
 
     auto snapshot = std::make_shared<EditorVideoPreviewSnapshot>();
     snapshot->width = width;
@@ -282,7 +307,7 @@ EditorVideoPreviewResult load_editor_video_preview_at(
     snapshot->frameTime = std::max(0.0, static_cast<double>(timestamp) / 10000000.0);
     snapshot->audioStreamCount = audioStreamCount;
     snapshot->firstFrame = std::move(frame);
-    snapshot->revision = video_revision(path, sourceStamp, width, height, snapshot->duration);
+    snapshot->revision = video_revision(path, sourceStamp, width, height, snapshot->duration,timestamp);
     EditorVideoPreviewResult result;
     result.generation = generation;
     result.sourceStamp = sourceStamp;
