@@ -17,6 +17,10 @@
 统一，见 [公共数据契约](CoreArchitecture.md)；无需为此引入 Boost。以下规模等统计
 保留原评估时的快照。
 
+当前依赖管理已统一为 [固定归档/校验清单与补丁](../third_party/README.md)，
+PhysX 保留固定提交的子模块，路径统一到 `third_party/PhysX`。下文 vendored
+相关描述是原评估背景，不再作为新增依赖的接入规范。
+
 ## 现状事实（可复查）
 
 - 构建：CMake 3.25+、C++17。默认预设 `mingw-debug`，本机为 MinGW GCC 15.2.0

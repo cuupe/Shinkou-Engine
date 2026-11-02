@@ -25,6 +25,8 @@ flowchart BT
 Core 不依赖 Engine、World、UI、renderer、平台后端或日志。JSON 实现依赖固定版本
 nlohmann/json 3.12.0，只在 `core/src/Json.cpp` 私有编译；公共头文件不会传播该依赖。
 资产项目可以独立构建，自动添加 Core，无需链接主引擎。
+JSON 依赖由固定归档及 SHA-256 清单获取，源文件保存在构建缓存，详见
+[依赖获取约定](../third_party/README.md)。
 
 ## 公共 API
 

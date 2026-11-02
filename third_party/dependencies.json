@@ -1,0 +1,125 @@
+{
+  "schema": "shinkou.dependencies",
+  "version": 1,
+  "libraries": {
+    "spdlog": {
+      "version": "1.16.0",
+      "revision": "v1.16.0",
+      "url": "https://codeload.github.com/gabime/spdlog/zip/v1.16.0",
+      "sha256": "3d25808d2fc4db86621a46855800c99ab5734999b61c4cbf9470edf631555397",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    "json": {
+      "version": "3.12.0",
+      "revision": "v3.12.0",
+      "url": "https://codeload.github.com/nlohmann/json/zip/v3.12.0",
+      "sha256": "34660b5e9a407195d55e8da705ed26cc6d175ce5a6b1fb957e701fb4d5b04022",
+      "licenses": [
+        "LICENSE.MIT"
+      ]
+    },
+    "miniaudio": {
+      "version": "0.11.21",
+      "revision": "0.11.21",
+      "url": "https://codeload.github.com/mackron/miniaudio/zip/0.11.21",
+      "sha256": "cbde908871e2619115fd216c74235265348060fe7d340f980cd14342e88d7f72",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    "ufbx": {
+      "version": "0.20.0",
+      "revision": "a63ff0a47485328880b3300e7bcdf01413343a45",
+      "url": "https://codeload.github.com/ufbx/ufbx/zip/a63ff0a47485328880b3300e7bcdf01413343a45",
+      "sha256": "e4d20725854d5d3878097a1dd00a5143001a92549c46a9b89b28bcf571d2d6d7",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    "miniz": {
+      "version": "3.1.1",
+      "revision": "d10b03cc73475af673df40f06e5cefd1d5f940d9",
+      "url": "https://codeload.github.com/richgel999/miniz/zip/d10b03cc73475af673df40f06e5cefd1d5f940d9",
+      "sha256": "cb32a09ac06d85c3547556924f78834b82795233a4ad94bf80635cbe527e984f",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    "pugixml": {
+      "version": "1.15",
+      "revision": "ee86beb30e4973f5feffe3ce63bfa4fbadf72f38",
+      "url": "https://codeload.github.com/zeux/pugixml/zip/ee86beb30e4973f5feffe3ce63bfa4fbadf72f38",
+      "sha256": "12acd7ee9bc5dfc5d269547c149b55b4cd2fb36943fab038e49bcdfd8c5bc140",
+      "licenses": [
+        "LICENSE.md"
+      ]
+    },
+    "imgui": {
+      "version": "1.91.9b-docking",
+      "revision": "4806a1924ff6181180bf5e4b8b79ab4394118875",
+      "url": "https://codeload.github.com/ocornut/imgui/zip/4806a1924ff6181180bf5e4b8b79ab4394118875",
+      "sha256": "a4b4845ed6736328083c896c5057ef51219455ceb6f908338adee0c84524805a",
+      "licenses": [
+        "LICENSE.txt"
+      ],
+      "patch": "patches/imgui-backends.patch"
+    },
+    "hello_imgui": {
+      "version": "1.6.3",
+      "revision": "4271e5f631a4d992f7499b7ab22c5f07319d9fd2",
+      "url": "https://codeload.github.com/pthom/hello_imgui/zip/4271e5f631a4d992f7499b7ab22c5f07319d9fd2",
+      "sha256": "691784abe9d10f35c3244097dc7cf56349a8df11fa08129b2969dfb78ebb36d8",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    "implot": {
+      "version": "0.16",
+      "revision": "18c72431f8265e2b0b5378a3a73d8a883b2175ff",
+      "url": "https://codeload.github.com/epezent/implot/zip/18c72431f8265e2b0b5378a3a73d8a883b2175ff",
+      "sha256": "79c0436e0843c3f5beb99f21a65221a9e8aa280d0502632770ccfbccf79b7fd8",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    "imguizmo": {
+      "version": "105e4fde",
+      "revision": "105e4fde45e4e74aae8973d98750820ef7aca7e2",
+      "url": "https://codeload.github.com/CedricGuillemet/ImGuizmo/zip/105e4fde45e4e74aae8973d98750820ef7aca7e2",
+      "sha256": "754fca4e8c66c5a255f953239b5181385228923f646d1a39bdca5ba18acc7cfd",
+      "licenses": [
+        "LICENSE"
+      ]
+    },
+    "sdl3": {
+      "version": "3.2.0",
+      "revision": "release-3.2.0",
+      "url": "https://codeload.github.com/libsdl-org/SDL/zip/release-3.2.0",
+      "sha256": "c92c16ff4926bea1674b8c797b7bef5058297ed0fc5a4e1a991471b96b44ff3a",
+      "licenses": [
+        "LICENSE.txt"
+      ]
+    },
+    "codicons": {
+      "version": "0.0.36",
+      "revision": "f82216e8ddcdf0c31eb1e5074a87bb88b3cf7517",
+      "url": "https://registry.npmjs.org/@vscode/codicons/-/codicons-0.0.36.tgz",
+      "sha256": "ac89ee6ce0608cc3791ad62d0b9b7a4ffb50a37258d8b7de239002c0d0e22fb6",
+      "licenses": [
+        "LICENSE",
+        "LICENSE-CODE"
+      ]
+    },
+    "entt": {
+      "version": "3.16.0",
+      "revision": "v3.16.0",
+      "url": "https://codeload.github.com/skypjack/entt/zip/v3.16.0",
+      "sha256": "b34b11f00ea9abbdda63c4cfdcee319047882376abf3c3ef95436ed138293bd1",
+      "licenses": [
+        "LICENSE"
+      ]
+    }
+  }
+}

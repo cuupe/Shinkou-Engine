@@ -1,7 +1,7 @@
 # 原生编辑器界面接入
 
 主编辑器采用 Dear ImGui Docking。HelloImGui 提供完整主题，ImPlot 提供性能曲线，
-ImGuizmo 提供场景网格和变换操作器。依赖源码与许可证已纳入 `third_party/`，
+ImGuizmo 提供场景网格和变换操作器。依赖版本与补丁归入 `third_party/`，源码按固定归档及 SHA-256 下载至构建缓存，
 版本、来源及用途见 [依赖清单](../third_party/EDITOR_UI_LIBRARIES.md)。
 
 ## 构建和启动

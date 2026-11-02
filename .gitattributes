@@ -1,0 +1,3 @@
+
+# Unified diffs contain intentional blank context lines; preserve patch bytes.
+third_party/patches/*.patch text eol=lf -whitespace

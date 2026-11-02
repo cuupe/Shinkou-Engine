@@ -1,18 +1,26 @@
-include(FetchContent)
+include(ShinkouFetchDependency)
 
-# Pinned, offline asset readers. Keep third-party warnings out of engine code.
+# Source revisions and archive checksums are centralized in dependencies.json.
+shinkou_fetch_dependency(ufbx ufbx_SOURCE_DIR)
+shinkou_fetch_dependency(pugixml pugixml_SOURCE_DIR)
+shinkou_fetch_dependency(miniz miniz_SOURCE_DIR)
+set(SHINKOU_MINIZ_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/shinkou_dependency_include")
+file(MAKE_DIRECTORY "${SHINKOU_MINIZ_INCLUDE_DIR}")
+file(WRITE "${SHINKOU_MINIZ_INCLUDE_DIR}/miniz_export.h" "#pragma once\n#define MINIZ_EXPORT\n")
 add_library(shinkou_asset_readers STATIC
-    "${PROJECT_SOURCE_DIR}/third_party/ufbx/ufbx.c"
-    "${PROJECT_SOURCE_DIR}/third_party/pugixml/pugixml.cpp"
-    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz.c"
-    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz_zip.c"
-    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz_tinfl.c"
-    "${PROJECT_SOURCE_DIR}/third_party/miniz/miniz_tdef.c")
+    "${ufbx_SOURCE_DIR}/ufbx.c"
+    "${pugixml_SOURCE_DIR}/src/pugixml.cpp"
+    "${miniz_SOURCE_DIR}/miniz.c"
+    "${miniz_SOURCE_DIR}/miniz_zip.c"
+    "${miniz_SOURCE_DIR}/miniz_tinfl.c"
+    "${miniz_SOURCE_DIR}/miniz_tdef.c")
 target_include_directories(shinkou_asset_readers SYSTEM PUBLIC
-    "${PROJECT_SOURCE_DIR}/third_party/ufbx"
-    "${PROJECT_SOURCE_DIR}/third_party/pugixml"
-    "${PROJECT_SOURCE_DIR}/third_party/miniz")
+    "${ufbx_SOURCE_DIR}" "${pugixml_SOURCE_DIR}/src"
+    "${miniz_SOURCE_DIR}" "${SHINKOU_MINIZ_INCLUDE_DIR}")
 target_compile_features(shinkou_asset_readers PRIVATE c_std_99 cxx_std_17)
+foreach(reader IN ITEMS ufbx pugixml miniz)
+    shinkou_install_dependency_licenses(${reader} "${${reader}_SOURCE_DIR}")
+endforeach()
 
 set(SHINKOU_WITH_SDL3 OFF)
 set(SHINKOU_WITH_VULKAN OFF)
@@ -26,39 +34,14 @@ set(SHINKOU_WITH_PYTHON OFF)
 set(SHINKOU_WITH_CSHARP OFF)
 set(SHINKOU_WITH_SPDLOG OFF)
 
-find_package(spdlog CONFIG QUIET)
-if(TARGET spdlog::spdlog_header_only)
-    set(SHINKOU_SPDLOG_TARGET spdlog::spdlog_header_only)
-    set(SHINKOU_WITH_SPDLOG ON)
-elseif(TARGET spdlog::spdlog)
-    set(SHINKOU_SPDLOG_TARGET spdlog::spdlog)
-    set(SHINKOU_WITH_SPDLOG ON)
-elseif(EXISTS "${PROJECT_SOURCE_DIR}/third_party/spdlog/include/spdlog/spdlog.h")
-    # Logging is available in normal offline builds, independently of the
-    # optional dependency downloads. Includes also contain spdlog's bundled fmt.
-    find_package(Threads REQUIRED)
-    add_library(shinkou_spdlog_header_only INTERFACE)
-    target_include_directories(shinkou_spdlog_header_only SYSTEM INTERFACE
-        "${PROJECT_SOURCE_DIR}/third_party/spdlog/include")
-    target_link_libraries(shinkou_spdlog_header_only INTERFACE Threads::Threads)
-    set(SHINKOU_SPDLOG_TARGET shinkou_spdlog_header_only)
-    set(SHINKOU_WITH_SPDLOG ON)
-elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/engine/include/spdlog/spdlog.h")
-    add_library(shinkou_spdlog_header_only INTERFACE)
-    target_include_directories(shinkou_spdlog_header_only INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}/engine/include")
-    set(SHINKOU_SPDLOG_TARGET shinkou_spdlog_header_only)
-    set(SHINKOU_WITH_SPDLOG ON)
-elseif(SHINKOU_FETCH_DEPENDENCIES)
-    FetchContent_Declare(spdlog
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.16.0)
-    FetchContent_MakeAvailable(spdlog)
-    set(SHINKOU_SPDLOG_TARGET spdlog::spdlog_header_only)
-    set(SHINKOU_WITH_SPDLOG ON)
-else()
-    message(FATAL_ERROR "Logging requires spdlog. Restore third_party/spdlog, install spdlog, or enable SHINKOU_FETCH_DEPENDENCIES.")
-endif()
+shinkou_fetch_dependency(spdlog spdlog_SOURCE_DIR)
+find_package(Threads REQUIRED)
+add_library(shinkou_spdlog_header_only INTERFACE)
+target_include_directories(shinkou_spdlog_header_only SYSTEM INTERFACE "${spdlog_SOURCE_DIR}/include")
+target_link_libraries(shinkou_spdlog_header_only INTERFACE Threads::Threads)
+set(SHINKOU_SPDLOG_TARGET shinkou_spdlog_header_only)
+set(SHINKOU_WITH_SPDLOG ON)
+shinkou_install_dependency_licenses(spdlog "${spdlog_SOURCE_DIR}")
 
 find_package(Vulkan QUIET)
 if(TARGET Vulkan::Vulkan)
@@ -156,73 +139,52 @@ if(SHINKOU_ENABLE_PHYSX)
 endif()
 
 if(SHINKOU_ENABLE_IMGUI)
-    set(SHINKOU_IMGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui" CACHE PATH "Dear ImGui docking source directory")
-    if(EXISTS "${SHINKOU_IMGUI_SOURCE_DIR}/imgui.cpp")
-        set(imgui_SOURCE_DIR "${SHINKOU_IMGUI_SOURCE_DIR}")
-    elseif(SHINKOU_FETCH_DEPENDENCIES)
-        FetchContent_Declare(imgui
-            GIT_REPOSITORY https://github.com/ocornut/imgui.git
-            GIT_TAG 4806a1924ff6181180bf5e4b8b79ab4394118875)
-        FetchContent_MakeAvailable(imgui)
-    else()
-        message(FATAL_ERROR "Editor UI needs the pinned Dear ImGui docking sources. Set SHINKOU_IMGUI_SOURCE_DIR or disable SHINKOU_ENABLE_IMGUI.")
+    shinkou_fetch_dependency(imgui imgui_SOURCE_DIR)
+    shinkou_fetch_dependency(hello_imgui hello_imgui_SOURCE_DIR)
+    shinkou_fetch_dependency(implot implot_SOURCE_DIR)
+    shinkou_fetch_dependency(imguizmo imguizmo_SOURCE_DIR)
+    shinkou_fetch_dependency(codicons codicons_SOURCE_DIR)
+    set(IMGUI_INCLUDE_DIR "${imgui_SOURCE_DIR}")
+    add_library(shinkou_imgui STATIC
+        "${imgui_SOURCE_DIR}/imgui_demo.cpp"
+        "${imgui_SOURCE_DIR}/imgui.cpp"
+        "${imgui_SOURCE_DIR}/imgui_draw.cpp"
+        "${imgui_SOURCE_DIR}/imgui_tables.cpp"
+        "${imgui_SOURCE_DIR}/imgui_widgets.cpp")
+    target_include_directories(shinkou_imgui SYSTEM PUBLIC "${imgui_SOURCE_DIR}")
+    target_include_directories(shinkou_imgui PRIVATE "${imgui_SOURCE_DIR}/backends")
+    if(WIN32)
+        target_sources(shinkou_imgui PRIVATE
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp"
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp")
+        target_compile_definitions(shinkou_imgui PRIVATE VK_USE_PLATFORM_WIN32_KHR=1)
+        target_link_libraries(shinkou_imgui PUBLIC d3d11 dxgi dwmapi)
     endif()
-    if(imgui_SOURCE_DIR)
-        set(IMGUI_INCLUDE_DIR "${imgui_SOURCE_DIR}")
-        add_library(shinkou_imgui STATIC
-            "${imgui_SOURCE_DIR}/imgui_demo.cpp"
-            "${imgui_SOURCE_DIR}/imgui.cpp"
-            "${imgui_SOURCE_DIR}/imgui_draw.cpp"
-            "${imgui_SOURCE_DIR}/imgui_tables.cpp"
-            "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
-        )
-        target_include_directories(shinkou_imgui PUBLIC "${imgui_SOURCE_DIR}")
-        target_include_directories(shinkou_imgui PRIVATE "${imgui_SOURCE_DIR}/backends")
-        if(WIN32)
-            target_sources(shinkou_imgui PRIVATE
-                "${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
-                "${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp"
-                "${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp")
-            target_compile_definitions(shinkou_imgui PRIVATE VK_USE_PLATFORM_WIN32_KHR=1)
-            target_link_libraries(shinkou_imgui PUBLIC d3d11 dxgi dwmapi)
-        endif()
-        if(TARGET Vulkan::Vulkan)
-            target_sources(shinkou_imgui PRIVATE "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
-            target_link_libraries(shinkou_imgui PUBLIC Vulkan::Vulkan)
-        endif()
-        set(IMGUI_LIBRARY shinkou_imgui)
-        set(SHINKOU_WITH_IMGUI ON)
-        add_library(shinkou_editor_widgets STATIC
-            "${PROJECT_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/hello_imgui/imgui_theme.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/implot/implot.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/implot/implot_items.cpp")
-        target_include_directories(shinkou_editor_widgets PUBLIC
-            "${PROJECT_SOURCE_DIR}/third_party/ImGuizmo"
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/hello_imgui"
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/implot")
-        target_link_libraries(shinkou_editor_widgets PUBLIC shinkou_imgui)
+    if(TARGET Vulkan::Vulkan)
+        target_sources(shinkou_imgui PRIVATE "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
+        target_link_libraries(shinkou_imgui PUBLIC Vulkan::Vulkan)
     endif()
+    set(IMGUI_LIBRARY shinkou_imgui)
+    set(SHINKOU_WITH_IMGUI ON)
+    add_library(shinkou_editor_widgets STATIC
+        "${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp"
+        "${hello_imgui_SOURCE_DIR}/src/hello_imgui/impl/imgui_theme.cpp"
+        "${implot_SOURCE_DIR}/implot.cpp"
+        "${implot_SOURCE_DIR}/implot_items.cpp")
+    target_include_directories(shinkou_editor_widgets SYSTEM PUBLIC
+        "${imguizmo_SOURCE_DIR}/src" "${hello_imgui_SOURCE_DIR}/src" "${implot_SOURCE_DIR}")
+    target_link_libraries(shinkou_editor_widgets PUBLIC shinkou_imgui)
+    foreach(widget IN ITEMS imgui hello_imgui implot imguizmo codicons)
+        shinkou_install_dependency_licenses(${widget} "${${widget}_SOURCE_DIR}")
+    endforeach()
 endif()
 
 if(SHINKOU_ENABLE_MINIAUDIO)
-    find_path(MINIAUDIO_INCLUDE_DIR miniaudio.h
-        PATHS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
-        NO_DEFAULT_PATH)
-    if(NOT MINIAUDIO_INCLUDE_DIR)
-        find_path(MINIAUDIO_INCLUDE_DIR miniaudio.h)
-    endif()
-    if(MINIAUDIO_INCLUDE_DIR)
-        set(SHINKOU_WITH_MINIAUDIO ON)
-    elseif(SHINKOU_FETCH_DEPENDENCIES)
-        FetchContent_Declare(miniaudio
-            GIT_REPOSITORY https://github.com/mackron/miniaudio.git
-            GIT_TAG 0.11.21
-        )
-        FetchContent_MakeAvailable(miniaudio)
-        set(MINIAUDIO_INCLUDE_DIR "${miniaudio_SOURCE_DIR}")
-        set(SHINKOU_WITH_MINIAUDIO ON)
-    endif()
+    shinkou_fetch_dependency(miniaudio miniaudio_SOURCE_DIR)
+    set(MINIAUDIO_INCLUDE_DIR "${miniaudio_SOURCE_DIR}")
+    set(SHINKOU_WITH_MINIAUDIO ON)
+    shinkou_install_dependency_licenses(miniaudio "${miniaudio_SOURCE_DIR}")
 endif()
 
 if(SHINKOU_ENABLE_LUA)

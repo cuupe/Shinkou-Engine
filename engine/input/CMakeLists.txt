@@ -16,19 +16,15 @@ if(SHINKOU_INPUT_SDL3_SOURCE_DIR)
     set(SDL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
     add_subdirectory("${SHINKOU_INPUT_SDL3_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/shinkou_input_sdl3" EXCLUDE_FROM_ALL)
 elseif(SHINKOU_INPUT_FETCH_SDL3)
-    include(FetchContent)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/ShinkouFetchDependency.cmake")
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)
     set(SDL_TESTS OFF CACHE BOOL "" FORCE)
     set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
     set(SDL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG release-3.2.0
-        GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(SDL3)
+    shinkou_fetch_dependency(sdl3 SDL3_SOURCE_DIR)
+    add_subdirectory("${SDL3_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_sdl3" EXCLUDE_FROM_ALL)
+    shinkou_install_dependency_licenses(sdl3 "${SDL3_SOURCE_DIR}")
 else()
     message(FATAL_ERROR "ShinkouInput requires SDL3 source: set SHINKOU_INPUT_SDL3_SOURCE_DIR or enable SHINKOU_INPUT_FETCH_SDL3")
 endif()

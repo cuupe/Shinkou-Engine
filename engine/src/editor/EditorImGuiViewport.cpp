@@ -6,12 +6,14 @@
 #include "shinkou/profile/Profiler.h"
 #include "shinkou/ui/Performance.h"
 #if defined(SHINKOU_WITH_IMGUI)
+#include <imgui.h>
+
+// ImGuizmo requires ImGui types to be declared before its header.
 #include <ImGuizmo.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <imgui.h>
 #include <imgui_internal.h>
 namespace shinkou::editor {
 void EditorImGuiView::viewport(EditorLayer &e, render::Renderer &renderer, World &world,

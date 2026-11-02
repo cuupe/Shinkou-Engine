@@ -9,11 +9,13 @@
 #include "shinkou/GameObject.h"
 #include "shinkou/World.h"
 #include "shinkou/render/RenderScene.h"
+#include <imgui.h>
+
+// ImGuizmo requires ImGui types to be declared before its header.
 #include <ImGuizmo.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <imgui.h>
 #include <imgui_internal.h>
 #include <sstream>
 

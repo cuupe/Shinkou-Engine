@@ -31,7 +31,7 @@
 
 文本读取最多 1 MiB / 10,000 行。DOCX/ZIP 压缩包最多 64 MiB，Word XML 解压后最多 8 MiB，显示文字有额外预算。FBX 源最多 128 MiB，解析分配器和三角形/顶点数量有限额；支持取消加载。读取不跟随 Word 外部关系、宏或 FBX 外部文件路径。
 
-第三方库与固定提交见 [资源读取器清单](../third_party/ASSET_READER_LIBRARIES.md)：ufbx、miniz、pugixml。源文件和许可证随仓库离线提供。
+第三方库与固定提交见 [资源读取器清单](../third_party/ASSET_READER_LIBRARIES.md)：ufbx、miniz、pugixml。源文件由固定版本及 SHA-256 清单下载至构建缓存，上游许可证随安装分发。
 
 ## 重复验证
 

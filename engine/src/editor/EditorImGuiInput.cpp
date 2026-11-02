@@ -2,8 +2,10 @@
 #include "EditorImGuiView.h"
 #include "shinkou/editor/EditorLayer.h"
 #if defined(SHINKOU_WITH_IMGUI)
-#include <ImGuizmo.h>
 #include <imgui.h>
+
+// ImGuizmo requires ImGui types to be declared before its header.
+#include <ImGuizmo.h>
 
 namespace shinkou::editor {
 int editor_imgui_key(EditorKey key) noexcept {

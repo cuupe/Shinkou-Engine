@@ -7,9 +7,11 @@
 #include "shinkou/profile/Profiler.h"
 
 #if defined(SHINKOU_WITH_IMGUI)
+#include <imgui.h>
+
+// ImGuizmo requires ImGui types to be declared before its header.
 #include <ImGuizmo.h>
 #include <hello_imgui/imgui_theme.h>
-#include <imgui.h>
 #include <imgui_internal.h>
 #include <implot.h>
 #if defined(SHINKOU_PLATFORM_WINDOWS)

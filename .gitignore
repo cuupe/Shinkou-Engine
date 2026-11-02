@@ -15,3 +15,6 @@
 
 # 独立仓库/外部学习资料，不随本仓库提交
 /Tools/Games101Lab/
+
+# CMake FetchContent source/build caches
+**/_deps/

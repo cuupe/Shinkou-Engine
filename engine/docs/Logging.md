@@ -3,10 +3,12 @@
 `shinkou::log` is the runtime logging service. It is independent of the render
 backend and is initialized from `EngineConfig::logging`.
 
-Normal builds enable logging even with `SHINKOU_FETCH_DEPENDENCIES=OFF`.
-CMake uses an installed spdlog package when available, otherwise the pinned
-v1.16.0 headers (including bundled fmt) in `third_party/spdlog`. Missing spdlog
-is a configuration error rather than silently disabling all log calls.
+CMake downloads the pinned spdlog 1.16.0 archive and verifies its SHA-256.
+Headers (including bundled fmt) live in the ignored build cache, not in the
+source repository. The first configuration needs network access; later builds
+can use `SHINKOU_FETCH_DEPENDENCIES=OFF` with the populated cache. A missing
+required dependency is a configuration error. Version pins and offline source
+overrides are documented in [third-party dependencies](../../third_party/README.md).
 
 The default configuration writes to `Saved/Logs/Engine.log` and the console,
 uses an asynchronous queue of 8192 messages, rotates at 16 MiB, keeps five

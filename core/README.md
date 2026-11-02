@@ -20,3 +20,7 @@ ctest --test-dir out/build/core-release --output-on-failure
 ```
 
 See [the architecture and migration contract](../docs/CoreArchitecture.md).
+
+CMake obtains nlohmann/json 3.12.0 using the shared version/checksum registry.
+The first configure downloads into `_deps/`; populated caches can be reused with
+`SHINKOU_FETCH_DEPENDENCIES=OFF`. See [dependency management](../third_party/README.md).

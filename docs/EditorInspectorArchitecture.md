@@ -51,8 +51,8 @@ compatibility; new editor code uses validated setters.
 
 ## Icons and validation
 
-Codicons is pinned and bundled with attribution and licenses in
-`third_party/codicons`. Its font merges into the editor's DPI atlas; icon buttons
+Codicons uses a fixed archive in the CMake dependency cache, including upstream
+attribution and licenses. Its font merges into the editor's DPI atlas; icon buttons
 retain text tooltips and fall back to text when the font is unavailable.
 
 `shinkou_transform_inspector_tests` covers mixed rotations, sign-equivalent

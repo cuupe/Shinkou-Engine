@@ -1,6 +1,7 @@
 # Editor UI dependencies
 
-Vendored source subsets, including upstream license notices. No nested Git repositories.
+Fixed official archives with SHA-256 checksums in [dependencies.json](dependencies.json).
+Sources and font assets live in the ignored build cache; see [dependency policy](README.md).
 
 | Library | Revision | Used for |
 |---|---|---|
@@ -11,10 +12,10 @@ Vendored source subsets, including upstream license notices. No nested Git repos
 | [Microsoft Codicons](https://github.com/microsoft/vscode-codicons) | `@vscode/codicons` 0.0.36, `f82216e8ddcdf0c31eb1e5074a87bb88b3cf7517` | DPI rasterized toolbar, hierarchy and inspector font icons; CC BY 4.0 icons, MIT code |
 
 Versions are pinned together for the existing native renderer APIs. Configuration uses
-the checked-in sources and does not require a network connection. The application owns
+the downloaded cache; first configuration requires network access. The application owns
 the engine loop, commands and assets; HelloImGui's window/application runner is not used.
 
-Local backend integration patches (preserve when updating ImGui):
+Local backend integration patches are recorded in `patches/imgui-backends.patch` and applied at configure time (preserve when updating ImGui):
 
 - DX12 exposes borrowed viewport queue/fence/backbuffer handles through
   `ImGui_ImplDX12_GetViewportSync`. The engine inserts GPU waits between its

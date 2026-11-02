@@ -84,8 +84,8 @@ NVIDIA GitHub repository, but the source tree must be built for the target
 platform before Shinkou links it:
 
 ```text
-git clone --recurse-submodules https://github.com/NVIDIA-Omniverse/PhysX.git external/PhysX
-cd external/PhysX/physx
+git submodule update --init --recursive third_party/PhysX
+cd third_party/PhysX/physx
 generate_projects.bat       # Windows; select a supported Visual Studio preset
 generate_projects.sh        # Linux; select the matching Linux preset
 ```

@@ -18,8 +18,8 @@ C++17 游戏引擎与 Windows 原生编辑器，使用 CMake 构建。主引擎�
 | `engine/scripting/` | C# 脚本运行时与编译工具 |
 | `assets/` | 独立 `shinkou_assets` 资源库、测试和文档；不是示例素材目录 |
 | `render/` | 独立显示内核实验项目，尚未接入根构建图 |
-| `third_party/`、`external/` | 随仓库提供的依赖及 PhysX 子模块 |
-| `cmake/` | 可选依赖探测 |
+| `third_party/` | 固定版本清单、集成补丁及 PhysX 子模块；普通依赖源码放在构建缓存 |
+| `cmake/` | 固定依赖获取与校验、SDK 探测及构建工具 |
 | `Tools/` | 开发 MCP、音频工具与编辑器交互记录 |
 | `docs/` | 架构、工作流和验收文档 |
 | `out/`、`Saved/`、`.shinkou/cache/` | 本地构建、运行日志及资源缓存，不作为源码提交 |
@@ -52,11 +52,14 @@ $env:PATH = 'D:\paths\GNU\mingw64\bin;' + $env:PATH
 
 默认启用 SDL3 输入，并从源码拉取 SDL3。离线构建时，可以通过
 `SHINKOU_INPUT_SDL3_SOURCE_DIR` 指定已有 SDL3 源码，或关闭
-`SHINKOU_ENABLE_SDL3_INPUT`。`SHINKOU_FETCH_DEPENDENCIES=OFF` 不会关闭输入模块
-单独控制的 SDL3 下载。PhysX、Vulkan、Lua、Python、.NET 等依赖的探测与配置见
+`SHINKOU_ENABLE_SDL3_INPUT`。普通依赖默认下载固定版本，并校验 SHA-256；源码缓存在
+构建目录的 `_deps/`，首次配置需要联网。缓存齐全后可设置
+`SHINKOU_FETCH_DEPENDENCIES=OFF` 离线构建，包括默认获取的 SDL3。
+依赖清单与本地源码覆盖方法见 [第三方依赖](third_party/README.md)。
+PhysX、Vulkan、Lua、Python、.NET 等依赖的探测与配置见
 `cmake/ShinkouDependencies.cmake`；PhysX 的接入要求见下方文档。
 
-日志默认启用。仓库内提供固定版本的 spdlog，关闭依赖下载也能离线编译日志；
+日志默认启用，CMake 获取固定版本的 spdlog，并在后续构建中复用下载缓存；
 运行时默认异步输出到控制台和工作目录下的 `Saved/Logs/Engine.log`。
 日志级别、文件轮转等配置见 [日志文档](engine/docs/Logging.md)。
 

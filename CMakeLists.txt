@@ -13,7 +13,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(SHINKOU_BUILD_SAMPLE "Build the engine sample" ON)
 option(SHINKOU_BUILD_PHYSICS_VISUALIZER "Build the standalone rendered rigid-body visualizer" ON)
 option(SHINKOU_BUILD_SHADER_SCENE_TEST "Build the standalone reference multi-pass shader scene test" ON)
-option(SHINKOU_FETCH_DEPENDENCIES "Fetch optional third-party dependencies" OFF)
+option(SHINKOU_FETCH_DEPENDENCIES "Download pinned dependencies when not cached" ON)
 option(SHINKOU_ENABLE_SDL3_INPUT "Enable SDL3 event input" ON)
 option(SHINKOU_INPUT_FETCH_SDL3 "Fetch SDL3 source for the private ShinkouInput DLL" ON)
 set(SHINKOU_INPUT_SDL3_SOURCE_DIR "" CACHE PATH "Optional local SDL3 source directory for ShinkouInput")
@@ -164,12 +164,9 @@ endif()
 target_include_directories(shinkou_engine PUBLIC
     "${SHINKOU_ENGINE_ROOT}/include"
 )
-target_include_directories(shinkou_engine PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt"
-)
 target_compile_features(shinkou_engine PUBLIC cxx_std_17)
 target_compile_definitions(shinkou_engine PRIVATE
-    SHINKOU_EDITOR_ICON_FONT_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/third_party/codicons/codicon.ttf"
+    SHINKOU_EDITOR_ICON_FONT_SOURCE="${codicons_SOURCE_DIR}/dist/codicon.ttf"
     SHINKOU_EDITOR_ICON_FONT_INSTALL="${CMAKE_INSTALL_PREFIX}/share/shinkou/editor/fonts/codicon.ttf")
 
 if(SHINKOU_ENABLE_AVX2)
@@ -1004,8 +1001,11 @@ if(SHINKOU_BUILD_BENCHMARKS)
     target_link_libraries(shinkou_physics_benchmarks PRIVATE shinkou_physics)
     add_executable(shinkou_object_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/ObjectBenchmarks.cpp")
     target_link_libraries(shinkou_object_benchmarks PRIVATE shinkou_engine)
+    shinkou_fetch_dependency(entt entt_SOURCE_DIR)
+    shinkou_install_dependency_licenses(entt "${entt_SOURCE_DIR}")
     add_executable(shinkou_ecs_chunk_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/EcsChunkBenchmarks.cpp")
     target_link_libraries(shinkou_ecs_chunk_benchmarks PRIVATE shinkou_engine)
+    target_include_directories(shinkou_ecs_chunk_benchmarks SYSTEM PRIVATE "${entt_SOURCE_DIR}/single_include")
     add_executable(shinkou_ecs_runtime_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/EcsRuntimeBenchmarks.cpp")
     target_link_libraries(shinkou_ecs_runtime_benchmarks PRIVATE shinkou_engine)
     add_executable(shinkou_ecs_bulk_benchmarks "${SHINKOU_ENGINE_ROOT}/benchmarks/EcsBulkBenchmarks.cpp")
@@ -1045,11 +1045,11 @@ install(TARGETS shinkou_physics shinkou_engine shinkou_assets shinkou_asset_read
     RUNTIME DESTINATION bin
 )
 install(DIRECTORY "${SHINKOU_ENGINE_ROOT}/include/" DESTINATION include)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include/" DESTINATION include)
-install(FILES third_party/spdlog/LICENSE DESTINATION share/shinkou/spdlog)
+install(DIRECTORY "${spdlog_SOURCE_DIR}/include/" DESTINATION include)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/include/" DESTINATION include)
-install(FILES third_party/codicons/codicon.ttf third_party/codicons/LICENSE third_party/codicons/LICENSE-CODE
-    DESTINATION share/shinkou/editor/fonts)
+if(SHINKOU_WITH_IMGUI)
+    install(FILES "${codicons_SOURCE_DIR}/dist/codicon.ttf" DESTINATION share/shinkou/editor/fonts)
+endif()
 
 message(STATUS "ShinkouEngine optional capabilities:")
 message(STATUS "  SDL3 input DLL: ${SHINKOU_ENABLE_SDL3_INPUT}")
