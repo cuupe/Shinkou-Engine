@@ -22,6 +22,6 @@ struct EditorTextPreviewResult {
 };
 // Bounded, read-only. Scripts are never executed; Word packages are never
 // extracted to disk and external relationships/macros are not followed.
-EditorTextPreviewResult load_editor_text_preview(const FileSystemService&, std::string_view path,
-    std::uint64_t generation, std::uint64_t stamp);
-}
+EditorTextPreviewResult load_editor_text_preview(const FileSystemService &, std::string_view path,
+                                                 std::uint64_t generation, std::uint64_t stamp);
+} // namespace shinkou::editor

@@ -15,26 +15,11 @@ using ShapeIndex = std::uint16_t;
 
 constexpr BodyId InvalidBodyId = 0;
 
-enum class PhysicsBackend : std::uint8_t {
-    Auto,
-    Simple,
-    PhysX
-};
+enum class PhysicsBackend : std::uint8_t { Auto, Simple, PhysX };
 
-enum class ShapeType : std::uint8_t {
-    Box,
-    Sphere,
-    Capsule,
-    Plane,
-    ConvexMesh,
-    TriangleMesh
-};
+enum class ShapeType : std::uint8_t { Box, Sphere, Capsule, Plane, ConvexMesh, TriangleMesh };
 
-enum class ContactPhase : std::uint8_t {
-    Begin,
-    Persist,
-    End
-};
+enum class ContactPhase : std::uint8_t { Begin, Persist, End };
 
 struct CollisionFilter {
     std::uint32_t layer{1u};
@@ -180,33 +165,34 @@ struct PhysicsWorldConfig {
     PhysicsMaterialDesc defaultMaterial{};
 };
 
-using ContactListener = std::function<void(const ContactEvent&)>;
+using ContactListener = std::function<void(const ContactEvent &)>;
 
 class IPhysicsWorld {
-public:
+  public:
     virtual ~IPhysicsWorld() = default;
 
     virtual PhysicsBackend backend() const noexcept = 0;
     virtual bool is_available() const noexcept = 0;
-    virtual const char* backend_name() const noexcept = 0;
-    virtual const std::string& last_error() const noexcept = 0;
+    virtual const char *backend_name() const noexcept = 0;
+    virtual const std::string &last_error() const noexcept = 0;
 
-    virtual BodyId create_body(const BodyDesc&) = 0;
+    virtual BodyId create_body(const BodyDesc &) = 0;
     virtual void destroy_body(BodyId) = 0;
     virtual bool is_valid(BodyId) const noexcept = 0;
-    virtual bool get_body_state(BodyId, BodyState&) const noexcept = 0;
-    virtual void get_body_ids(std::vector<BodyId>&) const = 0;
+    virtual bool get_body_state(BodyId, BodyState &) const noexcept = 0;
+    virtual void get_body_ids(std::vector<BodyId> &) const = 0;
     // Bulk state extraction is the boundary used by render/gameplay systems.
     // Backends may override it to avoid one virtual call and one lookup per
     // body; the default keeps the API source-compatible for small backends.
-    virtual void get_body_states(std::vector<BodyState>& output) const {
+    virtual void get_body_states(std::vector<BodyState> &output) const {
         std::vector<BodyId> ids;
         get_body_ids(ids);
         output.clear();
         output.reserve(ids.size());
         for (const BodyId id : ids) {
             BodyState state;
-            if (get_body_state(id, state)) output.push_back(state);
+            if (get_body_state(id, state))
+                output.push_back(state);
         }
     }
 
@@ -222,21 +208,20 @@ public:
     virtual math::Vec3 gravity() const noexcept = 0;
     virtual void step(float dt) = 0;
 
-    virtual bool raycast(const RaycastQuery&, RaycastHit&) const = 0;
-    bool raycast(math::Vec3 origin, math::Vec3 direction, float distance,
-                 RaycastHit& hit) const {
+    virtual bool raycast(const RaycastQuery &, RaycastHit &) const = 0;
+    bool raycast(math::Vec3 origin, math::Vec3 direction, float distance, RaycastHit &hit) const {
         return raycast(RaycastQuery{origin, direction, distance}, hit);
     }
 
     virtual void set_contact_listener(ContactListener listener) = 0;
-    virtual void drain_contact_events(std::vector<ContactEvent>& output) = 0;
-    virtual const PhysicsStatistics& statistics() const noexcept = 0;
+    virtual void drain_contact_events(std::vector<ContactEvent> &output) = 0;
+    virtual const PhysicsStatistics &statistics() const noexcept = 0;
 };
 
 // Selects PhysX for Auto when it was found at configure time, otherwise the
 // deterministic fallback. Explicit PhysX still returns a usable fallback if
 // the SDK is unavailable, with the reason exposed through last_error().
-std::unique_ptr<IPhysicsWorld> create_physics_world(const PhysicsWorldConfig& config = {});
+std::unique_ptr<IPhysicsWorld> create_physics_world(const PhysicsWorldConfig &config = {});
 bool physx_available() noexcept;
 
 } // namespace shinkou::physics

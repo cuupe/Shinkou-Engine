@@ -1,7 +1,9 @@
 #include "shinkou/editor/EditorLayer.h"
 #include "shinkou/editor/EditorDocument.h"
+#include "shinkou/editor/EditorPrimitiveMesh.h"
 #include "shinkou/audio/AudioSceneSystem.h"
 #include "shinkou/World.h"
+#include "shinkou/input/InputSystem.h"
 #include "shinkou/render/RenderScene.h"
 #include <algorithm>
 #include <cmath>
@@ -342,951 +344,98 @@ int main() {
         input::InputSystem input(std::move(backend)); input.initialize();
         FrameIndex frame=0;
         auto tick = [&] { input.poll(); editor.process_input(input,world); editor.prepare_frame(renderer,world); editor.draw(renderer,world,1.0f/60,frame++); };
-        auto require_unloaded_reference = [&](const std::string& expectedPath) {
-            FileSystemService files(project);
-            std::string documentJson, documentError;
-            EditorDocument document;
-            require(files.read_text("assets/Scenes/Unloaded.prefab", documentJson, &documentError) &&
-                        EditorDocument::from_json(documentJson, document, documentError),
-                    "unloaded scene/prefab document could not be read after asset operation");
-            bool found = false;
-            for (const auto& object : document.objects) {
-                for (const auto& component : object.components) {
-                    if (component.type != "AssetReference") continue;
-                    std::string pathValue;
-                    std::string assetIdValue;
-                    for (const auto& property : component.properties) {
-                        if (property.name == "path") pathValue = property.value;
-                        else if (property.name == "assetId") assetIdValue = property.value;
-                    }
-                    if (pathValue == expectedPath) {
-                        found = true;
-                        require(assetIdValue == "0", "unloaded reference retained a stale AssetId");
-                    }
-                }
-            }
-            require(found, "unloaded scene/prefab reference was not migrated");
-        };
-        auto region = [&](const std::string& id) {
-            const auto& regions=editor.editor_ui().interaction_regions();
-            auto it=regions.find(id);
-            if (it==regions.end() || it->second.width<=0 || it->second.height<=0) throw std::runtime_error("missing region: "+id);
-            return it->second;
-        };
-        auto click = [&](const std::string& id) {
-            const auto r=region(id); fake->mouse.position={r.x+r.width*0.5f,r.y+r.height*0.5f};
-            input::InputEvent e; e.type=input::InputEventType::MouseButtonDown; e.control="mouse:left"; e.position=fake->mouse.position;
-            fake->queue.push_back(e); e.type=input::InputEventType::MouseButtonUp; fake->queue.push_back(e); tick();
-        };
-        auto key = [&](const char* name) { input::InputEvent e; e.type=input::InputEventType::KeyDown;e.control=std::string("key:")+name;fake->queue.push_back(e);tick(); };
-        auto key_up = [&](const char* name) { input::InputEvent e; e.type=input::InputEventType::KeyUp;e.control=std::string("key:")+name;fake->queue.push_back(e);tick(); };
-        auto text = [&](const char* text) { input::InputEvent e;e.type=input::InputEventType::TextInput;e.text=text;fake->queue.push_back(e);tick(); };
-        for(int i=0;i<200 && editor.ui_asset_file_count()<100;++i) {tick();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
-        require(editor.ui_asset_file_count()>100,"async file scan did not finish");
-        click("assets.filter");
-        key("Shift"); key("N"); key_up("Shift");
-        require(editor.editor_ui().asset_filter() == "N", "shifted key fallback did not preserve case");
-        key("Backspace");
-        require(editor.editor_ui().asset_filter().empty(), "key fallback backspace did not clear the filter");
-        input::InputEvent fallbackKey; fallbackKey.type=input::InputEventType::KeyDown; fallbackKey.control="key:M";
-        fake->queue.push_back(fallbackKey);
-        input::InputEvent duplicateText; duplicateText.type=input::InputEventType::TextInput; duplicateText.text="m";
-        fake->queue.push_back(duplicateText);
-        tick();
-        require(editor.editor_ui().asset_filter() == "m", "key fallback duplicated an SDL text event");
-        key("Backspace");
-        auto& referenceObject = world.create_object("Needle Reference");
-        auto* needleReference = referenceObject.add_component<AssetReferenceComponent>(
-            "assets/Folder/Nested/needle.txt", needleAssetId);
-        require(needleReference != nullptr, "could not create asset rename migration fixture");
-        auto& deletedReferenceObject = world.create_object("Deleted Asset Reference");
-        auto* deletedReference = deletedReferenceObject.add_component<AssetReferenceComponent>(
-            "assets/Folder-extra.txt", folderExtraAssetId);
-        require(deletedReference != nullptr, "could not create asset delete invalidation fixture");
-        tick();
-        const auto camera = world.ecs().create();
-        world.ecs().emplace<render::CameraComponent>(camera);
-        render::TransformComponent cameraTransform; cameraTransform.local.position={0,0,-5};
-        world.ecs().emplace<render::TransformComponent>(camera,cameraTransform);
-        tick();
-        const auto viewport = region("viewport.surface");
-        input::InputEvent gesture; gesture.type=input::InputEventType::MouseWheel;
-        gesture.position={viewport.x+viewport.width/2,viewport.y+viewport.height/2}; gesture.delta.y=1;
-        fake->queue.push_back(gesture);tick();
-        auto* cameraPose=world.ecs().try_get<render::TransformComponent>(camera);
-        require(cameraPose->local.position.z > -5,"viewport wheel did not move scene camera");
-        gesture.type=input::InputEventType::MouseButtonDown;gesture.control="mouse:middle";fake->queue.push_back(gesture);tick();
-        gesture.type=input::InputEventType::MouseMove;gesture.position.x+=40;gesture.position.y+=20;fake->queue.push_back(gesture);tick();
-        gesture.type=input::InputEventType::MouseButtonUp;fake->queue.push_back(gesture);tick();
-        require(std::abs(cameraPose->local.rotation.y)>0.01f,"viewport orbit did not rotate camera");
-        editor.execute_command(EditorCommand::ProjectSettings,{},world);tick();
-        click("command:theme-light"); require(editor.layout().theme=="light","settings theme command failed");
-        click("command:language-en"); require(editor.layout().language=="en-US","settings English language command failed");
-        bool englishChromeVisible = false;
-        for (const auto& command : editor.editor_ui().render_list().commands())
-            if (command.type == ui::DrawCommandType::Text && command.text == "Scene Editor") englishChromeVisible = true;
-        require(englishChromeVisible, "English localization was not painted after switching language");
-        click("command:language-zh"); require(editor.layout().language=="zh-CN","settings Chinese language command failed");
-        const auto settings=region("tools:settings");
-        gesture.type=input::InputEventType::MouseWheel;gesture.position={settings.x+10,settings.y+10};gesture.delta.y=-20;
-        fake->queue.push_back(gesture);tick();
-        click("command:save-layout"); require(std::filesystem::exists(editor.layout().layoutFile),"settings could not save layout");
-        editor.set_panel_visible("settings",false);editor.set_theme("dark");tick();
-        editor.execute_command(EditorCommand::TogglePage, "build", world); tick();
-        require(editor.layout().showBuild && editor.panel_visible("build"), "build panel visibility was not persisted in the editor state");
-        require(region("command:build-panel-build").width > 0 && region("command:build-panel-refresh").width > 0,
-                "retained build panel controls were not registered");
-        require(region("command:build-panel-open-vscode").width > 0 &&
-                region("command:build-panel-save-profile").width > 0,
-                "retained IDE/profile controls were not registered");
-        require(region("command:build-panel-profile:default").width > 0 &&
-                region("command:build-panel-profile:release").width > 0 &&
-                region("command:build-diagnostic-filter:all").width > 0 &&
-                region("command:build-diagnostic-filter:errors").width > 0 &&
-                region("command:build-panel-refresh-project-files").width > 0 &&
-                region("command:build-panel-associate-project-file").width > 0 &&
-                region("command:build-panel-generate-clangd").width > 0 &&
-                region("field:build-profile.name").width > 0 &&
-                region("field:build-profile.buildDirectory").width > 0,
-                "retained build profile editor controls were not registered");
-        click("command:build-diagnostic-filter:errors");
-        require(editor.diagnostic_filter() == "errors", "diagnostic filter command did not update editor state");
-        click("command:build-diagnostic-filter:all");
-        click("command:build-panel-refresh-project-files");
-        require(editor.project_integration_status().find("Discovered") != std::string::npos &&
-                editor.project_discovery().recommendedProjectFile == std::filesystem::path("Sample.sln"),
-                "project discovery command did not expose the recommended solution");
-        click("command:build-panel-associate-project-file");
-        require(editor.build_profile().projectFile == std::filesystem::path("Sample.sln") &&
-                editor.project_integration_status().find("Associated") != std::string::npos,
-                "project association command did not update the selected profile");
-        click("command:build-panel-generate-clangd");
-        require(std::filesystem::exists(project / ".clangd") &&
-                editor.clangd_config_status().find("Generated") != std::string::npos,
-                "clangd config command did not write a project-root config");
-        click("command:build-panel-profile:release");
-        require(editor.selected_build_profile_id() == "release" && editor.build_profile().name == "CMake Release",
-                "retained build profile selector did not switch the active profile");
-        click("command:build-panel-profile:default");
-        click("field:build-profile.name"); text("QA Profile"); key("Return");
-        require(editor.build_profile().name == "QA Profile" &&
-                editor.build_profile_status().find("Unsaved") != std::string::npos,
-                "build profile field edit did not commit through the retained input path");
-        editor.execute_command(EditorCommand::SaveBuildProfile, {}, world); tick();
-        require(std::filesystem::exists(project / ".shinkou" / "build-profile.json"),
-                "build profile command did not persist project configuration");
-        require(editor.build_profile_status().find("Saved") != std::string::npos,
-                "build profile save status was not published");
-        editor.execute_command(EditorCommand::ReloadBuildProfile, {}, world); tick();
-        require(editor.build_profile_status().find("Loaded") != std::string::npos,
-                "build profile reload command did not publish status");
-        require(editor.build_profile().name == "QA Profile",
-                "build profile field edit was not persisted by the profile set format");
-        editor.execute_command(EditorCommand::ImportCompileCommands, {}, world); tick();
-        require(editor.compile_command_count() == 1 && editor.compile_commands_status().find("Imported 1") != std::string::npos,
-                "compile_commands import did not update the build model");
-        editor.execute_command(EditorCommand::ExportCompileCommands, "Saved/exported-compile_commands.json", world);
-        require(std::filesystem::exists(project/"Saved/exported-compile_commands.json"),
-                "compile_commands export did not write through the project filesystem");
-        editor.execute_command(EditorCommand::TogglePage, "build", world); tick();
-        require(!editor.layout().showBuild && !editor.panel_visible("build"), "build panel toggle command failed");
-        tick();click("asset-view:large"); require(editor.asset_view()==EditorAssetView::LargeIcons,"large view click failed");
-        click("asset-view:tree");
-        require(region("asset:assets/Folder/Nested/needle.txt").y < region("asset:assets/Folder-extra.txt").y,"tree sibling interrupted a directory subtree");
-        click("asset-toggle:assets/Folder");
-        click("assets.filter"); text("needle");
-        require(editor.ui_visible_asset_file_count()==3,"search did not include collapsed ancestors");
-        key("Return"); key("End"); tick();
-        require(editor.editor_ui().selected_asset()=="assets/Folder/Nested/needle.txt","End navigation failed");
-        for (int i = 0; i < 100 && editor.asset_preview().loading; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_preview().path == "assets/Folder/Nested/needle.txt" &&
-                editor.asset_preview().kind == "Text" && !editor.asset_preview().textLines.empty() &&
-                editor.asset_preview().textLines.front().find("fixture") != std::string::npos,
-                "selected text resource did not produce an async preview");
-        for (int i = 0; i < 100 && !editor.asset_preview().assetSystemReady; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_preview().assetSystemReady &&
-                editor.asset_preview().assetSystemStatus == "AssetSystem ready" &&
-                editor.asset_preview().assetSystemFormat == "text" &&
-                editor.asset_preview().assetSystemMetadataFormat == "shinkou.asset.text.v1" &&
-                editor.asset_preview().assetSystemMetadataBytes > 0 &&
-                editor.asset_preview().assetSystemSourceHash != 0,
-                "selected resource did not publish the AssetSystem cache contract");
-        for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        if (editor.asset_system_manifest_count() == 0 ||
-            editor.asset_system_manifest_status().find("AssetSystem manifest ready") == std::string::npos) {
-            throw std::runtime_error("editor did not publish the AssetSystem manifest snapshot: count=" +
-                std::to_string(editor.asset_system_manifest_count()) + " status=" +
-                editor.asset_system_manifest_status());
-        }
-        require(editor.asset_system_manifest_status().find("validated cache") != std::string::npos,
-                "editor did not validate and seed the persisted AssetSystem manifest");
-        for (int i = 0; i < 8; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_system_manifest_count() > 0 &&
-                editor.asset_system_manifest_status().find("AssetSystem manifest ready") != std::string::npos,
-                "ready AssetSystem manifest was restarted while the file tree was still settling");
-        bool bridgeStatusVisible = false;
-        for (const auto& command : editor.editor_ui().render_list().commands()) {
-            if (command.type == ui::DrawCommandType::Text && command.text.find("AssetSystem ready") != std::string::npos) {
-                bridgeStatusVisible = true;
-                break;
-            }
-        }
-        require(bridgeStatusVisible, "Inspector did not retain-paint the AssetSystem status");
-        editor.execute_command(EditorCommand::OpenAsset, "assets/Folder/Nested/needle.txt", world); tick();
-        require(editor.layout().showInspector && editor.asset_preview().path == "assets/Folder/Nested/needle.txt",
-                "open asset command did not route to the inspector preview");
-        editor.execute_command(EditorCommand::OpenAsset, "../outside.txt", world);
-        require(editor.last_status().find("outside") != std::string::npos,
-                "open asset command accepted a path outside the project root");
-        key("F2"); text("renamed.txt"); key("Return");
-        require(std::filesystem::exists(project/"assets/Folder/Nested/renamed.txt"),"real rename failed");
-        require(needleReference->path() == "assets/Folder/Nested/renamed.txt",
-                "asset rename did not migrate the live reference path");
-        assets::AssetId renamedNeedleAssetId = 0;
-        for (int i = 0; i < 200 && needleReference->asset_id() == 0; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        for (const auto& entry : resourceSystem.scan_sources()) {
-            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
-                "assets/Folder/Nested/renamed.txt") renamedNeedleAssetId = entry.id;
-        }
-        require(renamedNeedleAssetId != 0 && renamedNeedleAssetId != needleAssetId &&
-                needleReference->asset_id() == renamedNeedleAssetId,
-                "asset rename did not rebind the live reference to the new manifest identity");
-        require_unloaded_reference("assets/Folder/Nested/renamed.txt");
-        needleReference->set_asset_id(0);
-        editor.execute_command(EditorCommand::RefreshAssets, {}, world);
-        // Scanning is asynchronous disk work; a frame count is not a time
-        // budget, especially while GPU and build validation run concurrently.
-        const auto manifestRefreshDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
-        while (needleReference->asset_id() == 0 && std::chrono::steady_clock::now()<manifestRefreshDeadline) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(needleReference->asset_id() == renamedNeedleAssetId,
-                ("manifest-ready rebind did not restore a path-only asset reference: path="+needleReference->path()+
-                 " id="+std::to_string(needleReference->asset_id())+" expected="+std::to_string(renamedNeedleAssetId)+
-                 " count="+std::to_string(editor.asset_system_manifest_count())+" status="+editor.asset_system_manifest_status()).c_str());
-        click("assets.filter"); key("Left Ctrl"); key("A");
-        {input::InputEvent e;e.type=input::InputEventType::KeyUp;e.control="key:Left Ctrl";fake->queue.push_back(e);tick();}
-        key("Backspace"); key("Return"); key("End");tick();
-        require(editor.editor_ui().asset_scroll_offset()>0,"keyboard failed to reveal last item");
-        const auto rail=region("assets.scrollbar");
-        input::InputEvent e;e.type=input::InputEventType::MouseButtonDown;e.control="mouse:left";e.position={rail.x+6,rail.y+rail.height-3};fake->queue.push_back(e);tick();
-        e.type=input::InputEventType::MouseMove;e.position={rail.x+6,rail.y};fake->queue.push_back(e);tick();
-        e.type=input::InputEventType::MouseButtonUp;fake->queue.push_back(e);tick();
-        require(editor.editor_ui().asset_scroll_offset()<30,"scrollbar drag failed");
+        for(int i=0;i<500 && (editor.ui_asset_file_count()<100 || editor.asset_system_manifest_count()==0);++i){tick();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+        require(editor.ui_asset_file_count()>100 && editor.asset_system_manifest_count()>0,"controller resource scan did not settle");
+        require(editor.ui_command_count()==0 && editor.ui_interaction_regions().empty(),"controller-only initialization created an alternate UI");
+        require(editor.asset_browser().directory=="assets","browser directory diverged from the controller");
+        editor.set_asset_filter("NEEDLE");tick();
+        require(editor.asset_browser().rows().size()==1,"shared browser did not apply case-insensitive descendant search");
+        editor.set_asset_filter("");
+        require(!editor.select_object(999999,world),"invalid object selection accepted");
+        require(editor.select_object(selected,world),"valid object selection failed");tick();
+        auto* transform=world.find_object(selected)->get_component<components::TransformComponent>();
+        const auto field=std::to_string(transform->id())+":position";
+        const auto before=transform->local.position;
+        require(editor.begin_inspector_edit(field),"typed edit transaction did not start");
+        require(editor.edit_inspector_value(field,math::Vec3{1,2,3}) && editor.edit_inspector_value(field,math::Vec3{4,5,6}),"typed vector edit failed");
+        editor.finish_inspector_edit();
+        editor.execute_command(EditorCommand::Undo,{},world);
+        require(math::Length(world.find_object(selected)->get_component<components::TransformComponent>()->local.position-before)<0.0001f,"vector gesture was not one undo operation");
+        editor.execute_command(EditorCommand::Redo,{},world);
+        require(math::Length(world.find_object(selected)->get_component<components::TransformComponent>()->local.position-math::Vec3{4,5,6})<0.0001f,"typed vector redo failed");
 
-        for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_system_manifest_count() > 0 &&
-                editor.asset_system_manifest_status().find("AssetSystem manifest ready") != std::string::npos,
-                "asset manifest did not settle before the AudioSource inspector interaction");
-
-        editor.execute_command(EditorCommand::CreateEmpty,{},world); tick();
-        const auto created=editor.layout().selectedObject;
-        auto* audioSource = world.find_object(created)->add_component<components::AudioSourceComponent>();
-        require(audioSource != nullptr, "could not create AudioSource inspector fixture");
-        tick();
-        const auto audioClipField = "field:" + std::to_string(audioSource->id()) + ":clipPath";
-        const auto audioBusField = "field:" + std::to_string(audioSource->id()) + ":bus";
-        const auto audioMinDistanceField = "field:" + std::to_string(audioSource->id()) + ":minDistance";
-        const auto audioMaxDistanceField = "field:" + std::to_string(audioSource->id()) + ":maxDistance";
-        const auto audioRolloffField = "field:" + std::to_string(audioSource->id()) + ":rolloff";
-        require(region(audioClipField).width > 0 && region(audioBusField).width > 0 &&
-                editor.editor_ui().interaction_regions().find("field:" + std::to_string(audioSource->id()) + ":assetId") ==
-                    editor.editor_ui().interaction_regions().end(),
-                "AudioSource inspector did not expose clip/bus/spatial fields");
-        click(audioClipField);
-        require(region("inspector-choice-popup").width > 0, "AudioSource clip picker did not open");
-        std::string previewAudioChoice;
-        for (const auto& entry : editor.editor_ui().interaction_regions()) {
-            if (entry.first.rfind("inspector-choice:", 0) == 0) { previewAudioChoice = entry.first; break; }
-        }
-        require(!previewAudioChoice.empty(), "AudioSource clip picker did not expose manifest choices");
-        click(previewAudioChoice);
-        require(audioSource->clipPath == "assets/preview.wav" && audioSource->assetId == previewAudioAssetId,
-                "AudioSource clip picker did not link path and AssetId");
-        click(audioBusField);
-        require(region("inspector-choice-popup").width > 0 &&
-                editor.editor_ui().interaction_regions().find("inspector-choice:0") !=
-                    editor.editor_ui().interaction_regions().end(),
-                "AudioSource bus choice control did not open");
-        click("inspector-choice:0");
-        require(audioSource->bus == 0, "AudioSource bus choice did not commit");
-        const auto inspectorSurface = region("inspector.background");
-        gesture.type = input::InputEventType::MouseWheel;
-        gesture.position = {inspectorSurface.x + inspectorSurface.width * 0.5f,
-                            inspectorSurface.y + inspectorSurface.height * 0.5f};
-        gesture.delta.y = -20.0f;
-        fake->queue.push_back(gesture);
-        tick();
-        require(region(audioMinDistanceField).width > 0 && region(audioMaxDistanceField).width > 0 &&
-                region(audioRolloffField).width > 0,
-                "AudioSource inspector did not expose spatial fields after scrolling");
-        click(audioMinDistanceField); text("12.5"); key("Return");
-        click(audioMaxDistanceField); text("40"); key("Return");
-        click(audioRolloffField); text("0.75"); key("Return");
-        require(std::abs(audioSource->minDistance - 12.5f) < 0.001f &&
-                std::abs(audioSource->maxDistance - 40.0f) < 0.001f &&
-                std::abs(audioSource->rolloff - 0.75f) < 0.001f,
-                "AudioSource spatial inspector fields did not commit");
-        gesture.delta.y = 20.0f;
-        fake->queue.push_back(gesture);
-        tick();
-        bool audioStatusVisible = false;
-        for (const auto& command : editor.editor_ui().render_list().commands()) {
-            if (command.type == ui::DrawCommandType::Text && command.text.find("Ready · assets/preview.wav") != std::string::npos) {
-                audioStatusVisible = true;
-                break;
-            }
-        }
-        require(audioStatusVisible, "AudioSource inspector did not show linked resource status");
-        const auto audioTarget = "audio-source:" + std::to_string(created);
-        const auto audioPlayControl = "command:media-play:" + audioTarget;
-        const auto audioPauseControl = "command:media-pause:" + audioTarget;
-        const auto audioStopControl = "command:media-stop:" + audioTarget;
-        const auto audioSeekBackControl = "command:media-seek:" + audioTarget + ":relative:-5";
-        const auto audioSeekForwardControl = "command:media-seek:" + audioTarget + ":relative:5";
-        require(region(audioPlayControl).width > 0 && region(audioPauseControl).width > 0 &&
-                region(audioStopControl).width > 0,
-                "AudioSource playback transport controls were not registered");
-        click(audioPlayControl);
-        require(audioScene.transport_state(created, audioSystem) == "Playing",
-                "AudioSource Play did not start the scene voice");
-        gesture.delta.y = -30.0f;
-        fake->queue.push_back(gesture);
-        tick();
-        require(region(audioSeekBackControl).width > 0 && region(audioSeekForwardControl).width > 0,
-                "AudioSource timeline seek controls were not registered");
-        const auto audioTimelineRegion = "audio-timeline:" + std::to_string(created);
-        require(region(audioTimelineRegion).width > 0, "AudioSource continuous timeline was not registered");
-        bool audioWaveformRendered = false;
-        for (int index = 0; index < 160 && !audioWaveformRendered; ++index) {
-            tick();
-            const auto timeline = region(audioTimelineRegion);
-            std::size_t waveformColumns = 0;
-            for (const auto& command : editor.editor_ui().render_list().commands()) {
-                if (command.type != ui::DrawCommandType::Line ||
-                    command.from.x <= timeline.x || command.from.x >= timeline.x + timeline.width ||
-                    command.to.x != command.from.x ||
-                    command.from.y < timeline.y - 2.0f ||
-                    command.to.y > timeline.y + timeline.height + 2.0f) continue;
-                ++waveformColumns;
-            }
-            audioWaveformRendered = waveformColumns >= 8;
-            if (!audioWaveformRendered)
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(audioWaveformRendered,
-                "AudioSource inspector did not render the decoded waveform snapshot");
-        click(audioSeekForwardControl);
-        require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 5.0) < 0.001,
-                "AudioSource timeline seek did not move the scene voice cursor");
-        click(audioTimelineRegion);
-        require(std::abs(audioScene.cursor_seconds(created, audioSystem) - 15.0) < 0.001,
-                "AudioSource continuous timeline seek did not target the clicked position");
-        editor.execute_command(EditorCommand::MediaSeek, audioTarget + ":absolute:nan", world);
-        require(editor.last_status().find("invalid") != std::string::npos,
-                "AudioSource absolute seek accepted a non-finite payload");
-        bool audioTimelineShowsDuration = false;
-        for (const auto& command : editor.editor_ui().render_list().commands()) {
-            if (command.type == ui::DrawCommandType::Text && command.text.find("15.00 / 30.00 s") != std::string::npos) {
-                audioTimelineShowsDuration = true;
-                break;
-            }
-        }
-        require(audioTimelineShowsDuration, "AudioSource timeline did not show the resource duration");
-        gesture.delta.y = 1000.0f;
-        fake->queue.push_back(gesture);
-        tick();
-        click(audioPauseControl);
-        require(audioScene.transport_state(created, audioSystem) == "Paused",
-                "AudioSource Pause did not pause the scene voice");
-        click(audioPlayControl);
-        require(audioScene.transport_state(created, audioSystem) == "Playing",
-                "AudioSource Play did not resume a paused scene voice");
-        click(audioStopControl);
-        require(audioScene.transport_state(created, audioSystem) == "Stopped",
-                "AudioSource Stop did not release the scene voice");
-        click("field:name");text("Edited Object");key("Return");
-        require(world.find_object(created)->name()=="Edited Object","inspector did not commit name");
-        std::string positionField;
-        for (const auto& r:editor.editor_ui().interaction_regions()) if(r.first.find(":position")!=std::string::npos) positionField=r.first;
-        require(!positionField.empty(),"missing transform input");click(positionField);text("3 4 5");key("Return");
-        require(world.find_object(created)->get_component<components::TransformComponent>()->local.position.x==3,"transform edit failed");
-        click(positionField);text("nan 4 5");key("Return");
-        require(world.find_object(created)->get_component<components::TransformComponent>()->local.position.x==3,"invalid transform modified world");key("Escape");
+        auto& live=world.create_object("Live file reference");const auto liveId=live.id();
+        live.add_component<AssetReferenceComponent>("assets/Folder/Nested/needle.txt",needleAssetId);
+        editor.set_selected_asset("assets/Folder/Nested/needle.txt");
+        editor.handle_asset_action(EditorAssetAction::Rename,"assets/Folder","Renamed");tick();
+        require(std::filesystem::exists(project/"assets/Renamed/Nested/needle.txt"),"folder rename failed");
+        require(editor.asset_browser().selection=="assets/Renamed/Nested/needle.txt","selected asset was not remapped by rename");
+        require(world.find_object(liveId)->get_component<AssetReferenceComponent>()->path()=="assets/Renamed/Nested/needle.txt","live reference did not follow rename");
+        std::string prefab,error2;
+        require(editor.file_system().read_text("assets/Scenes/Unloaded.prefab",prefab,&error2) && prefab.find("assets/Renamed/Nested/needle.txt")!=std::string::npos,"unloaded prefab reference was not remapped");
         editor.execute_command(EditorCommand::Undo,{},world);tick();
-        require(world.find_object(editor.layout().selectedObject)->get_component<components::TransformComponent>()->local.position.x==0,"undo failed");
+        require(std::filesystem::exists(project/"assets/Folder/Nested/needle.txt"),"file rename undo failed");
+        std::filesystem::create_directory(project/"assets/Renamed");
+        editor.execute_command(EditorCommand::Redo,{},world);
+        require(std::filesystem::exists(project/"assets/Folder/Nested/needle.txt"),"failed redo changed its source");
+        std::filesystem::remove(project/"assets/Renamed");
         editor.execute_command(EditorCommand::Redo,{},world);tick();
-        require(world.find_object(editor.layout().selectedObject)->get_component<components::TransformComponent>()->local.position.x==3,"redo failed");
-        editor.execute_command(EditorCommand::SaveScene,"assets/Scenes/test.scene",world);
-        require(std::filesystem::exists(project/"assets/Scenes/test.scene"),"save scene failed");
-        editor.execute_command(EditorCommand::NewScene,{},world);require(world.object_count()==0,"new scene failed");
-        editor.execute_command(EditorCommand::OpenScene,"assets/Scenes/test.scene",world);require(world.object_count()==5,"open scene failed");
-        AssetReferenceComponent* liveDeletedReference = nullptr;
-        world.each_object([&](GameObject& object) {
-            auto* reference = object.get_component<AssetReferenceComponent>();
-            if (reference && reference->path() == "assets/Folder-extra.txt") liveDeletedReference = reference;
-        });
-        require(liveDeletedReference != nullptr, "restored scene lost the delete invalidation fixture");
-        editor.set_panel_visible("build", false);
-        editor.set_panel_visible("viewport", true);
-        editor.dock_workspace().activate_tab("viewport");
-        for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_system_manifest_count() > 0 &&
-                editor.asset_system_manifest_status().find("AssetSystem manifest ready") != std::string::npos,
-                "asset manifest did not settle before the viewport drop interaction");
-        tick();
-        click("assets.filter");
-        key("Left Ctrl");
-        key("A");
-        {input::InputEvent e;e.type=input::InputEventType::KeyUp;e.control="key:Left Ctrl";fake->queue.push_back(e);tick();}
-        key("Backspace");
-        text("preview.obj");
-        tick();
-        const auto objectCountBeforeDrop = world.object_count();
-        const auto assetSource = region("asset:assets/preview.obj");
-        const auto viewportDropTarget = region("viewport.surface");
-        gesture.type = input::InputEventType::MouseButtonDown;
-        gesture.control = "mouse:left";
-        gesture.position = {assetSource.x + assetSource.width * 0.5f,
-                             assetSource.y + assetSource.height * 0.5f};
-        fake->queue.push_back(gesture);
-        tick();
-        gesture.type = input::InputEventType::MouseMove;
-        gesture.position = {viewportDropTarget.x + viewportDropTarget.width * 0.75f,
-                             viewportDropTarget.y + viewportDropTarget.height * 0.25f};
-        fake->queue.push_back(gesture);
-        tick();
-        bool dropCueVisible = false;
-        for (const auto& command : editor.editor_ui().render_list().commands()) {
-            if (command.type == ui::DrawCommandType::Text && command.text.find("Drop preview.obj") != std::string::npos) {
-                dropCueVisible = true;
-                break;
-            }
-        }
-        require(dropCueVisible, "asset drag did not retain a viewport drop cue");
-        gesture.type = input::InputEventType::MouseButtonUp;
-        fake->queue.push_back(gesture);
-        tick();
-        if (world.object_count() != objectCountBeforeDrop + 1) {
-            throw std::runtime_error("asset drag did not create a scene object: " + editor.last_status() +
-                " / " + editor.asset_system_manifest_status());
-        }
-        GameObject* droppedAssetObject = nullptr;
-        world.each_object([&](GameObject& object) {
-            if (object.get_component<AssetReferenceComponent>() != nullptr) droppedAssetObject = &object;
-        });
-        require(droppedAssetObject != nullptr &&
-                droppedAssetObject->get_component<AssetReferenceComponent>()->path() == "assets/preview.obj" &&
-                droppedAssetObject->get_component<AssetReferenceComponent>()->asset_id() == previewModelAssetId &&
-                droppedAssetObject->get_component<components::TransformComponent>()->local.position.x > 1.0f &&
-                droppedAssetObject->get_component<components::TransformComponent>()->local.position.y > 1.0f &&
-                editor.last_status().find("Created asset reference") != std::string::npos,
-                "asset drop did not publish a manifest identity, bounded reference and viewport position");
-        EditorDocument droppedDocument;
-        std::string droppedDocumentError;
-        std::string droppedDocumentJson;
-        require(EditorDocument::capture(world, editor.layout().selectedObject, droppedDocument, droppedDocumentError) &&
-                droppedDocument.to_json(droppedDocumentJson, droppedDocumentError) &&
-                droppedDocumentJson.find("assetId") != std::string::npos,
-                "asset reference manifest identity was not serialized");
-        editor.execute_command(EditorCommand::Undo, {}, world);
-        require(world.object_count() == objectCountBeforeDrop, "asset drop was not undoable");
-        editor.execute_command(EditorCommand::Redo, {}, world);
-        require(world.object_count() == objectCountBeforeDrop + 1,
-                "asset drop was not redoable");
-        bool restoredDroppedAsset = false;
-        world.each_object([&](GameObject& object) {
-            const auto* reference = object.get_component<AssetReferenceComponent>();
-            restoredDroppedAsset = restoredDroppedAsset ||
-                (reference != nullptr && reference->path() == "assets/preview.obj");
-        });
-        require(restoredDroppedAsset, "asset reference was not restored by redo");
-        bool restoredAssetId = false;
-        world.each_object([&](GameObject& object) {
-            const auto* reference = object.get_component<AssetReferenceComponent>();
-            restoredAssetId = restoredAssetId ||
-                (reference != nullptr && reference->path() == "assets/preview.obj" &&
-                 reference->asset_id() == previewModelAssetId);
-        });
-        require(restoredAssetId, "asset reference manifest identity was not restored by redo");
-        for (int i = 0; i < 160 && editor.model_scene_loaded_asset_count() == 0; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.model_scene_loaded_asset_count() == 1,
-                "AssetId-backed model reference did not enter the asynchronous scene-instance cache");
-        require(editor.model_scene_instance_count() == 0 &&
-                editor.model_scene_status().find("GPU model scene fallback") != std::string::npos,
-                "Null renderer did not expose the model scene backend fallback honestly");
-        click("assets.filter");
-        key("Left Ctrl");
-        key("A");
-        {input::InputEvent e;e.type=input::InputEventType::KeyUp;e.control="key:Left Ctrl";fake->queue.push_back(e);tick();}
-        key("Backspace");
-        key("Return");
-        tick();
-        const auto objectCountBeforeRejectedDrop = world.object_count();
-        const auto unsupportedSource = region("asset:assets/Folder-extra.txt");
-        gesture.type = input::InputEventType::MouseButtonDown;
-        gesture.control = "mouse:left";
-        gesture.position = {unsupportedSource.x + unsupportedSource.width * 0.5f,
-                             unsupportedSource.y + unsupportedSource.height * 0.5f};
-        fake->queue.push_back(gesture);
-        tick();
-        gesture.type = input::InputEventType::MouseMove;
-        gesture.position = {viewportDropTarget.x + viewportDropTarget.width * 0.25f,
-                             viewportDropTarget.y + viewportDropTarget.height * 0.25f};
-        fake->queue.push_back(gesture);
-        tick();
-        gesture.type = input::InputEventType::MouseButtonUp;
-        fake->queue.push_back(gesture);
-        tick();
-        require(world.object_count() == objectCountBeforeRejectedDrop &&
-                editor.last_status().find("not instantiable") != std::string::npos,
-                "unsupported asset drop changed the scene");
-        auto rightClick = [&](const std::string& id) {
-            const auto r = region(id);
-            fake->mouse.position = {r.x + r.width * 0.5f, r.y + r.height * 0.5f};
-            input::InputEvent right;
-            right.type = input::InputEventType::MouseButtonDown;
-            right.control = "mouse:right";
-            right.position = fake->mouse.position;
-            fake->queue.push_back(right);
-            tick();
-        };
-        rightClick("asset:assets/Folder-extra.txt");
-        click("asset-context:2");
-        click("asset-delete-confirm");
-        bool deletedReferenceInvalidated = false;
-        world.each_object([&](GameObject& object) {
-            const auto* reference = object.get_component<AssetReferenceComponent>();
-            deletedReferenceInvalidated = deletedReferenceInvalidated ||
-                (reference != nullptr && reference->path() == "assets/Folder-extra.txt" &&
-                 reference->asset_id() == 0);
-        });
-        require(!std::filesystem::exists(project / "assets/Folder-extra.txt") && deletedReferenceInvalidated,
-                "asset delete did not invalidate the live reference identity");
-        bool recycledDeleteFound = false;
-        if (std::filesystem::exists(project / ".shinkou" / "recycle")) {
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(project / ".shinkou" / "recycle")) {
-                if (entry.path().filename() == "Folder-extra.txt") recycledDeleteFound = true;
-            }
-        }
-        require(recycledDeleteFound, "asset delete did not retain a recoverable recycle entry");
-        for (const auto& entry : resourceSystem.scan_sources()) {
-            const auto relative = std::filesystem::relative(entry.sourcePath, project).generic_string();
-            require(relative.rfind(".shinkou/", 0) != 0,
-                    "editor recycle metadata leaked into the AssetSystem manifest");
-        }
-        require_unloaded_reference("assets/Folder-extra.txt");
-        auto read_file_history = [&]() {
-            FileSystemService historyFiles(project);
-            FileHistoryDocument history;
-            std::string historyJson, historyError;
-            require(historyFiles.read_text(".shinkou/file-history.json", historyJson, &historyError) &&
-                        FileHistoryDocument::from_json(historyJson, history, historyError),
-                    "file operation journal could not be read");
-            return history;
-        };
-        const auto deletedHistory = read_file_history();
-        require(deletedHistory.entries.size() == 1 &&
-                    deletedHistory.entries.front().kind == "recycle-delete" &&
-                    deletedHistory.entries.front().sourcePath == "assets/Folder-extra.txt",
-                "file delete did not persist a validated operation journal");
-        {
-            std::ofstream external(project / "assets/external-editor.txt", std::ios::binary | std::ios::trunc);
-            external << "external editor change";
-        }
-        for (int i = 0; i < 720 && editor.file_recovery_state().externalChangeCount == 0; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        if (editor.file_recovery_state().externalChangeCount != 1 ||
-            editor.file_recovery_state().externalChanges.empty() ||
-            editor.file_recovery_state().externalChanges.front().path != "assets/external-editor.txt" ||
-            editor.file_recovery_state().latestExternalBatchId == 0 ||
-            editor.file_recovery_state().externalChanges.front().batchId !=
-                editor.file_recovery_state().latestExternalBatchId ||
-            editor.file_recovery_state().externalChanges.front().previousBytes != 0 ||
-            editor.file_recovery_state().externalChanges.front().currentBytes == 0) {
-            throw std::runtime_error("external project file change was not published to the recovery audit state: " +
-                editor.file_recovery_state().status + " / " + editor.last_status());
-        }
-        EditorLayer restartedEditor;
-        restartedEditor.set_project_root(project.generic_string());
-        require(restartedEditor.initialize(false) && restartedEditor.file_history_undo_count() == 1,
-                "a new editor session did not load the recoverable file journal");
-        editor.execute_command(EditorCommand::TogglePage, "recovery", world);
-        tick();
-        require(editor.layout().showRecovery && editor.panel_visible("recovery") &&
-                    editor.file_recovery_state().undoCount == 1 &&
-                    editor.file_recovery_state().orphanCount == 0,
-                "file recovery panel did not publish the validated undo state");
-        require(region("command:recovery-undo").width > 0,
-                "file recovery panel did not expose the Undo action");
-        require(region("command:recovery-clear-conflicts").width > 0,
-                "file recovery panel did not expose the external change acknowledgement action");
-        require(region("command:recovery-review:assets/external-editor.txt").width > 0,
-                "file recovery panel did not expose a per-path external change review action");
-        click("command:recovery-review:assets/external-editor.txt");
-        require(editor.editor_ui().selected_asset() == "assets/external-editor.txt" &&
-                    editor.last_status().find("Reviewing external change") != std::string::npos,
-                "external change review did not route through the asset preview selection");
-        click("command:recovery-clear-conflicts");
-        require(editor.file_recovery_state().externalChangeCount == 0,
-                "external change acknowledgement did not clear the bounded audit report");
-        AssetReferenceComponent* currentDeletedReference = nullptr;
-        world.each_object([&](GameObject& object) {
-            auto* reference = object.get_component<AssetReferenceComponent>();
-            if (reference && reference->path() == "assets/Folder-extra.txt") currentDeletedReference = reference;
-        });
-        require(currentDeletedReference != nullptr, "live delete reference disappeared before file Undo");
-        click("command:recovery-undo");
-        require(std::filesystem::exists(project / "assets/Folder-extra.txt"),
-                "file Undo did not restore the deleted resource");
-        require(editor.file_recovery_state().undoCount == 0 &&
-                    editor.file_recovery_state().redoCount == 1 &&
-                    region("command:recovery-redo").width > 0,
-                "file recovery panel did not publish the redo state after Undo");
-        for (int i = 0; i < 400 &&
-                    (currentDeletedReference->asset_id() == 0 || editor.asset_system_manifest_count() == 0); ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        assets::AssetId restoredManifestId = 0;
-        for (const auto& entry : resourceSystem.scan_sources()) {
-            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
-                "assets/Folder-extra.txt") restoredManifestId = entry.id;
-        }
-        assets::AssetId editorManifestId = 0;
-        std::string editorManifestUri;
-        std::string editorManifestType;
-        for (const auto& entry : editor.asset_system_manifest()) {
-            if (std::filesystem::relative(entry.sourcePath, project).generic_string() ==
-                "assets/Folder-extra.txt") {
-                editorManifestId = entry.id;
-                editorManifestUri = entry.key.uri;
-                editorManifestType = entry.key.type;
-            }
-        }
-        require(currentDeletedReference->asset_id() == folderExtraAssetId,
-                ("file Undo did not rebind the restored resource identity: id=" +
-                 std::to_string(currentDeletedReference->asset_id()) +
-                 " expected=" + std::to_string(folderExtraAssetId) +
-                 " rescanned=" + std::to_string(restoredManifestId) +
-                 " editor=" + std::to_string(editorManifestId) +
-                 " uri=" + editorManifestUri + " type=" + editorManifestType +
-                 " manifest=" + std::to_string(editor.asset_system_manifest_count()) +
-                 " status=" + editor.asset_system_manifest_status()).c_str());
-        require(read_file_history().entries.empty(),
-                "file Undo did not persist the cleared operation journal");
-        click("command:recovery-redo");
-        require(!std::filesystem::exists(project / "assets/Folder-extra.txt") &&
-                    currentDeletedReference->asset_id() == 0,
-                "file Redo did not reapply the recoverable delete");
-        require(editor.file_recovery_state().undoCount == 1 && editor.file_recovery_state().redoCount == 0,
-                "file recovery panel did not publish the undo state after Redo");
-        require(read_file_history().entries.size() == 1 &&
-                    read_file_history().entries.front().kind == "recycle-delete",
-                "file Redo did not persist the recoverable operation journal");
-        for (int i = 0; i < 160 && editor.asset_system_manifest_count() == 0; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_system_manifest_count() > 0 &&
-                editor.asset_system_manifest_status().find("AssetSystem manifest ready") != std::string::npos,
-                "asset manifest did not settle after reference-invalidating delete");
-        editor.execute_command(EditorCommand::OpenScene, "assets/Scenes/Unloaded.prefab", world);
-        AssetReferenceComponent* reopenedRenamedReference = nullptr;
-        AssetReferenceComponent* reopenedDeletedReference = nullptr;
-        world.each_object([&](GameObject& object) {
-            auto* reference = object.get_component<AssetReferenceComponent>();
-            if (!reference) return;
-            if (reference->path() == "assets/Folder/Nested/renamed.txt") reopenedRenamedReference = reference;
-            if (reference->path() == "assets/Folder-extra.txt") reopenedDeletedReference = reference;
-        });
-        require(reopenedRenamedReference != nullptr && reopenedDeletedReference != nullptr,
-                "reopening migrated prefab lost one of its structured references");
-        require(reopenedRenamedReference->asset_id() == renamedNeedleAssetId &&
-                reopenedDeletedReference->asset_id() == 0,
-                "reopening migrated prefab did not reconcile manifest and missing AssetIds");
-        editor.execute_command(EditorCommand::OpenScene, "assets/Scenes/test.scene", world);
-        require(world.object_count() == 5, "reopening the active scene after prefab rebind damaged the scene");
-        const auto objectCountBeforeBoundaryDrops = world.object_count();
-        require(!editor.create_asset_reference_at_viewport(
-                    world, "assets/Folder", {viewportDropTarget.x + 10.0f, viewportDropTarget.y + 10.0f}) &&
-                editor.last_status().find("folders cannot be instantiated") != std::string::npos,
-                "directory asset drop was not rejected at the editor boundary");
-        require(!editor.create_asset_reference_at_viewport(
-                    world, "../outside.txt", {viewportDropTarget.x + 10.0f, viewportDropTarget.y + 10.0f}) &&
-                editor.last_status().find("outside the project") != std::string::npos,
-                "out-of-root asset drop was not rejected at the editor boundary");
-        require(!editor.create_asset_reference_at_viewport(
-                    world, "assets/preview.obj", {viewportDropTarget.x - 1.0f, viewportDropTarget.y}) &&
-                editor.last_status().find("position is invalid") != std::string::npos &&
-                world.object_count() == objectCountBeforeBoundaryDrops,
-                "invalid viewport coordinate changed the scene");
-        const auto objectCountBeforeNativeDrop = world.object_count();
-        require(editor.create_asset_reference_from_window_drop(
-                    world, (project / "assets/preview.obj").generic_string(),
-                    {viewportDropTarget.x + 20.0f, viewportDropTarget.y + 20.0f}) &&
-                world.object_count() == objectCountBeforeNativeDrop + 1 &&
-                editor.last_status().find("Created asset reference") != std::string::npos,
-                "native absolute file drop did not route through the validated editor ingress");
-        const auto objectCountAfterNativeDrop = world.object_count();
-        require(!editor.create_asset_reference_from_window_drop(
-                    world, (project.parent_path() / "outside-native.obj").generic_string(),
-                    {viewportDropTarget.x + 20.0f, viewportDropTarget.y + 20.0f}) &&
-                world.object_count() == objectCountAfterNativeDrop &&
-                editor.last_status().find("native path") != std::string::npos,
-                "native file drop boundary accepted an outside-project path");
-        editor.execute_command(EditorCommand::Undo, {}, world);
-        require(world.object_count() == objectCountBeforeNativeDrop,
-                "native file drop did not remain undoable through the shared editor transaction");
-        tick();
-        require(!editor.consume_simulation_step(),"edit mode advances simulation");
-        key("Left Ctrl");
-        { input::InputEvent lost; lost.type=input::InputEventType::FocusLost; fake->queue.push_back(lost); tick(); }
-        click("field:name"); text("After focus loss"); key("Return");
-        require(world.find_object(editor.layout().selectedObject)->name()=="After focus loss","focus loss left Ctrl latched");
-        editor.execute_command(EditorCommand::Play,{},world);require(editor.consume_simulation_step(),"play failed");
-        editor.execute_command(EditorCommand::Pause,{},world);require(!editor.consume_simulation_step(),"pause failed");
-        editor.execute_command(EditorCommand::Step,{},world);require(editor.consume_simulation_step()&&!editor.consume_simulation_step(),"step did not advance exactly one frame");
-        editor.execute_command(EditorCommand::OpenAsset, "assets/preview.wav", world);
-        for (int i = 0; i < 100 && editor.media_preview().kind != "Audio"; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.media_preview().kind == "Audio" && editor.media_preview().path == "assets/preview.wav" &&
-                editor.media_preview().available && editor.media_preview().status == "AudioSystem connected",
-                "audio asset did not expose the connected AudioSystem preview state");
-        editor.set_panel_visible("media", false);
-        editor.execute_command(EditorCommand::TogglePage, "media", world); tick();
-        require(region("command:media-play").width > 0 && region("command:media-stop").width > 0,
-                "audio media transport controls were not registered");
-        editor.execute_command(EditorCommand::OpenAsset, "assets/preview.png", world);
-        for (int i = 0; i < 120 && editor.asset_preview().loading; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_preview().kind == "Image", "image asset did not enter the image preview state");
-        if (editor.asset_preview().imageSnapshot) {
-            require(editor.asset_preview().imageSnapshot->valid(),
-                    "image asset produced an invalid decoded thumbnail snapshot");
-        bool imageCommand = false;
-        for (const auto& command : editor.editor_ui().render_list().commands()) {
-            if (command.type == ui::DrawCommandType::Image && command.imageSnapshot) {
-                imageCommand = true;
-                break;
-            }
-        }
-        require(imageCommand, "retained inspector did not submit the image snapshot command");
-        } else {
-            require(editor.asset_preview().status.find("unavailable") != std::string::npos,
-                    "image provider failure was not exposed honestly");
-        }
-        editor.execute_command(EditorCommand::OpenAsset, "assets/preview.avi", world);
-        for (int i = 0; i < 120 && (editor.media_preview().kind != "Video" || editor.media_preview().previewLoading); ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.media_preview().kind == "Video" && editor.media_preview().path == "assets/preview.avi",
-                "video asset did not enter the media preview state");
-        require(!editor.media_preview().videoPreview &&
-                editor.media_preview().previewStatus.find("unavailable") != std::string::npos,
-                "video provider failure was not exposed honestly");
-        editor.set_panel_visible("media", false);
-        editor.execute_command(EditorCommand::TogglePage, "media", world);
-        tick();
-        require(region("command:media-play").width > 0.0f &&
-                region("command:media-pause").width > 0.0f &&
-                region("command:media-stop").width > 0.0f &&
-                region("command:media-loop").width > 0.0f,
-                "video media transport controls were not retained");
-        editor.execute_command(EditorCommand::OpenAsset, "assets/preview.obj", world);
-        for (int i = 0; i < 120 && editor.asset_preview().loading; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_preview().kind == "Mesh" && editor.asset_preview().modelPreview &&
-                editor.asset_preview().modelPreview->valid(),
-                "model asset did not produce a bounded wireframe preview");
-        require(editor.asset_preview().modelPreview->minX == -4.0f &&
-                editor.asset_preview().modelPreview->maxY == 4.0f,
-                "model preview did not consume the AssetSystem structured source artifact");
-        require(editor.asset_preview().modelPreviewScene && editor.asset_preview().modelPreviewScene->valid(),
-                "model asset did not publish an isolated preview scene state");
-        require(region("asset-model-material-prev").width > 0.0f &&
-                region("asset-model-material-next").width > 0.0f &&
-                region("asset-model-texture-prev").width > 0.0f &&
-                region("asset-model-texture-next").width > 0.0f,
-                "model material/texture selector regions were not retained");
-        click("asset-model-material-next");
-        click("asset-model-texture-next");
-        require(editor.asset_preview().modelMaterialIndex == -1 &&
-                editor.asset_preview().modelTextureIndex == -1,
-                "empty model material/texture selectors changed state");
-        const auto worldObjectsBeforeModelOrbit = world.object_count();
-        const auto modelProjectionBeforeOrbit = editor.asset_preview().modelPreviewScene->projectionRevision;
-        const auto modelSurface = region("asset-model-preview");
-        gesture.type = input::InputEventType::MouseButtonDown;
-        gesture.control = "mouse:middle";
-        gesture.position = {modelSurface.x + modelSurface.width * 0.5f, modelSurface.y + modelSurface.height * 0.5f};
-        fake->queue.push_back(gesture); tick();
-        gesture.type = input::InputEventType::MouseMove;
-        gesture.position.x += 28.0f;
-        gesture.position.y -= 12.0f;
-        fake->queue.push_back(gesture); tick();
-        gesture.type = input::InputEventType::MouseButtonUp;
-        fake->queue.push_back(gesture); tick();
-        require(editor.asset_preview().modelPreviewScene->projectionRevision != modelProjectionBeforeOrbit,
-                "model preview orbit did not update the isolated camera");
-        require(world.object_count() == worldObjectsBeforeModelOrbit,
-                "model preview orbit mutated the active world");
-        click("asset-model-preview-reset");
-        require(editor.asset_preview().modelPreviewScene->camera.yaw == 0.55f,
-                "model preview reset did not restore the camera");
-        editor.execute_command(EditorCommand::OpenAsset, "assets/preview.gltf", world);
-        for (int i = 0; i < 240 &&
-             (editor.asset_preview().loading || editor.asset_preview().modelTextureStatus.empty() ||
-              editor.asset_preview().modelTextureStatus.find("Loading") != std::string::npos); ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_preview().modelPreview && editor.asset_preview().modelPreview->valid() &&
-                editor.asset_preview().modelMaterialIndex == 0 &&
-                editor.asset_preview().modelTextureIndex == 0 &&
-                editor.asset_preview().modelTextureImageIndex == 0 &&
-                editor.asset_preview().modelMaterialLabel.find("MaterialA") != std::string::npos &&
-                editor.asset_preview().modelTextureLabel.find("TextureA") != std::string::npos,
-                "GLTF material-to-texture selection was not published");
-        require(editor.asset_preview().modelTextureSnapshot &&
-                editor.asset_preview().modelTextureSnapshot->valid(),
-                "GLTF image artifact was not decoded by the WIC preview seam");
-        require(region("asset-model-animation-prev").width > 0.0f &&
-                region("asset-model-animation-toggle").width > 0.0f &&
-                region("asset-model-animation-next").width > 0.0f &&
-                region("asset-model-animation-timeline").width > 0.0f,
-                "model animation controls were not retained for an imported clip");
-        click("asset-model-material-next");
-        for (int i = 0; i < 120 && editor.asset_preview().modelTextureStatus.find("Loading") != std::string::npos; ++i) {
-            tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        require(editor.asset_preview().modelMaterialIndex == 1 &&
-                editor.asset_preview().modelTextureIndex == 1 &&
-                editor.asset_preview().modelTextureImageIndex == 1 &&
-                editor.asset_preview().modelMaterialLabel.find("MaterialB") != std::string::npos &&
-                editor.asset_preview().modelTextureLabel.find("TextureB") != std::string::npos,
-                "GLTF material selection did not follow its base-color texture reference");
-        const auto cachedModelPreview = editor.asset_preview().modelPreview;
-        const auto cachedModelTexture = editor.asset_preview().modelTextureSnapshot;
-        editor.execute_command(EditorCommand::OpenAsset, "assets/preview.gltf", world);
-        tick();
-        require(editor.asset_preview().modelPreview == cachedModelPreview &&
-                editor.asset_preview().modelTextureSnapshot == cachedModelTexture &&
-                editor.asset_preview().modelMaterialIndex == 1 &&
-                editor.asset_preview().modelTextureIndex == 1 &&
-                editor.asset_preview().status == "Model preview ready",
-                "reselecting a cached model cleared its preview or material selection");
-        struct UiScenario {
-            float width;
-            float height;
-            float dpi;
-            const char* theme;
-        };
-        for (const auto scenario : {
-                 UiScenario{1280.0f, 720.0f, 1.0f, "dark"},
-                 UiScenario{1600.0f, 900.0f, 1.25f, "light"},
-                 UiScenario{1024.0f, 768.0f, 1.25f, "high-contrast"}}) {
-            editor.set_panel_visible("viewport", true);
-            editor.dock_workspace().activate_tab("viewport");
-            editor.set_display_size(scenario.width, scenario.height, scenario.dpi);
-            editor.set_theme(scenario.theme);
-            tick();
-            const auto& scenarioRegions = editor.editor_ui().interaction_regions();
-            const auto viewportIt = scenarioRegions.find("viewport.surface");
-            if (viewportIt == scenarioRegions.end() || viewportIt->second.width <= 0.0f ||
-                viewportIt->second.height <= 0.0f) {
-                throw std::runtime_error("responsive UI scenario lost viewport: " +
-                    std::to_string(static_cast<int>(scenario.width)) + "x" +
-                    std::to_string(static_cast<int>(scenario.height)) + "@" +
-                    std::to_string(scenario.dpi) + " " + scenario.theme +
-                    " show=" + (editor.layout().showViewport ? "1" : "0") +
-                    " panel=" + (editor.panel_visible("viewport") ? "1" : "0") +
-                    " rect=" + std::to_string(editor.editor_ui().viewport_rect().width) + "x" +
-                    std::to_string(editor.editor_ui().viewport_rect().height));
-            }
-            const auto viewportRegion = viewportIt->second;
-            const auto logicalWidth = scenario.width / scenario.dpi;
-            const auto logicalHeight = scenario.height / scenario.dpi;
-            require(viewportRegion.width > 0.0f && viewportRegion.height > 0.0f &&
-                        viewportRegion.x >= 0.0f && viewportRegion.y >= 0.0f &&
-                        viewportRegion.right() <= logicalWidth + 0.5f &&
-                        viewportRegion.bottom() <= logicalHeight + 0.5f,
-                    "responsive UI scenario produced an invalid viewport region");
-            require(editor.editor_ui().render_list().size() > 0 && editor.ui_text_command_count() > 0,
-                    "responsive UI scenario produced an empty retained render list");
-        }
-        editor.execute_command(EditorCommand::OpenAsset,"assets/preview.wav",world);tick();
-        auto audition=editor.asset_settings();audition.pitch=1.5f;audition.pan=-0.5f;audition.volume=0.4f;
-        audition.bus=2;audition.spatialized=true;audition.minDistance=2;audition.maxDistance=30;
-        audition.lowPass=true;audition.reverb=true;audition.loop=true;
-        require(editor.set_asset_settings(audition,true),"audio asset settings did not save");
-        editor.execute_command(EditorCommand::MediaPlay,{},world);tick();
-        require(audioProbe->lastPlay.pitch==1.5f && audioProbe->lastPlay.pan==-0.5f &&
-                audioProbe->lastPlay.bus==audio::AudioBus::Sfx && audioProbe->lastPlay.loop &&
-                audioProbe->effectCount==2 && audioProbe->activeTracks==1,
-                "audition did not apply play parameters and isolated effects via AudioSystem");
-        audition.pitch=0.75f;audition.pan=0.25f;audition.volume=0.6f;
-        require(editor.set_asset_settings(audition),"live audio settings rejected");
-        require(audioProbe->lastPitch==0.75f && audioProbe->lastPan==0.25f && audioProbe->lastVolume==0.6f &&
-                audioProbe->lastSpatial.minDistance==2,"live audition controls did not reach audio API");
-        editor.execute_command(EditorCommand::MediaPause,{},world);tick();
-        audition.bus=1;require(editor.set_asset_settings(audition),"audio bus routing change failed");tick();
-        require(editor.media_preview().playbackState=="paused" && audioProbe->lastPlay.bus==audio::AudioBus::Music &&
-                audioProbe->activeTracks==1,"routing restart lost pause state or leaked an audition track");
-        const auto countBeforeSource=world.object_count();
-        require(editor.create_audio_source_from_asset(world),"audio asset did not create a scene AudioSource");tick();
-        auto* auditionObject=world.find_object(editor.layout().selectedObject);
-        auto* auditionSource=auditionObject?auditionObject->get_component<components::AudioSourceComponent>():nullptr;
-        require(auditionSource && auditionSource->clipPath=="assets/preview.wav" && auditionSource->pitch==0.75f &&
-                auditionSource->bus==1 && auditionSource->minDistance==2,"scene source did not copy supported asset settings");
+        require(std::filesystem::exists(project/"assets/Renamed/Nested/needle.txt"),("file rename redo failed: "+editor.last_status()).c_str());
+        editor.handle_asset_action(EditorAssetAction::NewFolder,"assets","NewFolder");
+        require(std::filesystem::is_directory(project/"assets/NewFolder"),"shared new-folder action failed");
+        editor.handle_asset_action(EditorAssetAction::Delete,"assets/Folder-extra.txt",{});tick();
+        require(!std::filesystem::exists(project/"assets/Folder-extra.txt") && editor.file_history_undo_count()>0,"recoverable delete failed");
+        require(editor.file_system().read_text("assets/Scenes/Unloaded.prefab",prefab,&error2) && prefab.find("assets/Folder-extra.txt")!=std::string::npos,"delete damaged unloaded reference path");
+        FileHistoryDocument history;std::string journal;
+        require(editor.file_system().read_text(".shinkou/file-history.json",journal,&error2) && FileHistoryDocument::from_json(journal,history,error2) && !history.entries.empty(),"file journal was not persisted");
         editor.execute_command(EditorCommand::Undo,{},world);tick();
-        require(world.object_count()==countBeforeSource,"created scene AudioSource was not undoable");
+        require(std::filesystem::exists(project/"assets/Folder-extra.txt"),"recoverable delete undo failed");
+        editor.execute_command(EditorCommand::Redo,{},world);tick();
+        require(!std::filesystem::exists(project/"assets/Folder-extra.txt"),"recoverable delete redo failed");
+
+        editor.set_selected_asset("assets/preview.wav");
+        for(int i=0;i<500 && !editor.media_preview().audioPreview;++i){tick();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+        require(editor.media_preview().audioPreview!=nullptr,"audio preview did not survive presenter removal");
+        auto settings=editor.asset_settings();settings.pitch=1.5f;settings.pan=-0.25f;settings.spatialized=true;
+        settings.positionX=2;settings.positionY=3;settings.positionZ=4;settings.lowPass=true;
+        require(editor.set_asset_settings(settings,true),"shared audio settings could not be saved");
+        editor.execute_command(EditorCommand::MediaPlay,{},world);tick();
+        require(audioProbe->lastPlay.pitch==1.5f && audioProbe->lastPlay.pan==-0.25f,"audio transport bypassed engine settings");
+        editor.execute_command(EditorCommand::MediaPause,{},world);tick();
         editor.execute_command(EditorCommand::MediaStop,{},world);tick();
-        require(audioProbe->activeTracks==0,"stopped preview retained its audio track");
-        editor.execute_command(EditorCommand::OpenAsset,"assets/preview.obj",world);tick();
-        editor.execute_command(EditorCommand::OpenAsset,"assets/preview.wav",world);tick();
-        require(editor.asset_settings().pitch==1.5f && editor.asset_settings().bus==2,
-                "reselecting audio did not restore saved asset preferences");
-        editor.shutdown();
-        audioScene.shutdown(audioSystem);
-        audioSystem.shutdown();
-        resourceSystem.shutdown();
+        require(editor.create_audio_source_from_asset(world),"audio asset could not create an engine component");
+        editor.set_selected_asset("assets/preview.obj");
+        for(int i=0;i<500 && !editor.asset_preview().modelPreview;++i){tick();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+        require(editor.asset_preview().modelPreview!=nullptr,"async model preview no longer works without the UI");
+        require(editor.asset_preview().assetSystemStatus.find("AssetSystem")!=std::string::npos,"asset preview lost resource-system status");
+        // Real factory commands must remain usable in a populated scene and
+        // preserve their renderable data through undo, redo and JSON restore.
+        const auto objectCount=world.object_count();
+        for (const auto* shape:{"Cube","Sphere","Plane"}) {
+            editor.execute_command(EditorCommand::Create3DObject,shape,world);tick();
+            auto* created=world.find_object(editor.layout().selectedObject);
+            require(created && created->name()==shape,"primitive factory did not select its new object");
+            require(created->get_component<components::PrimitiveMeshComponent>() && !created->has_ecs_entity(),"primitive has no serializable mesh component");
+            require(editor_primitive_mesh(shape)->valid(),"primitive geometry is invalid");
+        }
+        require(world.object_count()==objectCount+3,"primitive factory did not create three objects");
+        editor.execute_command(EditorCommand::Undo,{},world);tick();
+        require(world.object_count()==objectCount+2,"primitive creation undo failed");
+        editor.execute_command(EditorCommand::Redo,{},world);tick();
+        require(world.object_count()==objectCount+3,"primitive creation redo failed");
+        EditorDocument scene,loaded;std::string sceneJson,sceneError;
+        require(EditorDocument::capture(world,editor.layout().selectedObject,scene,sceneError),sceneError.c_str());
+        require(scene.to_json(sceneJson,sceneError) && EditorDocument::from_json(sceneJson,loaded,sceneError),"primitive scene JSON round trip failed");
+        World restored;restored.register_component_type<AssetReferenceComponent>("AssetReference");ObjectId restoredSelection{};
+        require(loaded.restore(restored,restoredSelection,sceneError),sceneError.c_str());
+        require(restored.find_object(restoredSelection)->get_component<components::PrimitiveMeshComponent>()->shape()=="Plane","restored primitive lost its shape");
+        std::vector<EditorModelSceneInstance> instances;restored.refresh_transforms();append_editor_primitives(restored,instances);
+        require(instances.size()==3,"restored primitives disappeared from the render extraction");
+        editor.execute_command(EditorCommand::CreateEmpty,{},world);tick();
+        require(world.object_count()==objectCount+4,"empty creation failed in a renderable scene");
+        editor.shutdown(&renderer);audioSystem.shutdown();resourceSystem.shutdown();
         std::filesystem::remove_all(project);
-        std::cout << "Editor document, real filesystem, input routing, inspector, undo and simulation passed\n";
-    } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+        std::cout<<"Editor controller, typed edits, file transactions and media integration passed\n";
+        return 0;
+    }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

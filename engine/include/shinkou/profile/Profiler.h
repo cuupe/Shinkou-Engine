@@ -74,23 +74,24 @@ namespace detail {
 // a shipped build can turn tracing off without recompiling.
 extern std::atomic<bool> g_enabled;
 
-inline bool profiling_enabled() noexcept { return g_enabled.load(std::memory_order_relaxed); }
+inline bool profiling_enabled() noexcept {
+    return g_enabled.load(std::memory_order_relaxed);
+}
 
 inline std::uint64_t clock_ns() noexcept {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
 }
 
 } // namespace detail
 
 class Profiler final {
-public:
-    static Profiler& instance();
+  public:
+    static Profiler &instance();
 
-    Profiler(const Profiler&) = delete;
-    Profiler& operator=(const Profiler&) = delete;
+    Profiler(const Profiler &) = delete;
+    Profiler &operator=(const Profiler &) = delete;
 
     // Interns a name. Safe to call concurrently; a repeated name returns the same
     // id, which is what lets the macros cache the id in a function-local static.
@@ -119,7 +120,7 @@ public:
     // chrome://tracing / Perfetto. The string form exists for tests and for
     // shipping a trace somewhere other than a file.
     std::string chrome_trace_json();
-    bool write_chrome_trace(const std::filesystem::path& path);
+    bool write_chrome_trace(const std::filesystem::path &path);
 
     Stats stats();
 
@@ -135,7 +136,7 @@ public:
     void record_counter(ZoneId zone, double value) noexcept;
     void record_instant(ZoneId zone) noexcept;
 
-private:
+  private:
     Profiler();
     ~Profiler();
 
@@ -143,7 +144,9 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-inline Profiler& profiler() { return Profiler::instance(); }
+inline Profiler &profiler() {
+    return Profiler::instance();
+}
 
 inline ZoneId register_zone(std::string_view name, std::string_view category = {}) {
     return Profiler::instance().register_zone(name, category);
@@ -152,32 +155,35 @@ inline ZoneId register_zone(std::string_view name, std::string_view category = {
 // Counter with a name that is interned on the call: meant for once-per-frame
 // samples (draw calls, entities, queued jobs), not for per-item loops.
 inline void counter(std::string_view name, double value) {
-    if (!detail::profiling_enabled()) return;
-    Profiler& p = Profiler::instance();
+    if (!detail::profiling_enabled())
+        return;
+    Profiler &p = Profiler::instance();
     p.record_counter(p.register_zone(name), value);
 }
 
 // RAII span. Holds no reference to the profiler, so it is harmless to destroy one
 // during static teardown.
 class Scope final {
-public:
+  public:
     explicit Scope(ZoneId zone) noexcept {
-        if (zone == kInvalidZone || !detail::profiling_enabled()) return;
+        if (zone == kInvalidZone || !detail::profiling_enabled())
+            return;
         zone_ = zone;
         startNs_ = detail::clock_ns();
     }
 
     ~Scope() {
-        if (zone_ == kInvalidZone || !detail::profiling_enabled()) return;
+        if (zone_ == kInvalidZone || !detail::profiling_enabled())
+            return;
         Profiler::instance().record_span(zone_, startNs_, detail::clock_ns() - startNs_);
     }
 
-    Scope(const Scope&) = delete;
-    Scope& operator=(const Scope&) = delete;
-    Scope(Scope&&) = delete;
-    Scope& operator=(Scope&&) = delete;
+    Scope(const Scope &) = delete;
+    Scope &operator=(const Scope &) = delete;
+    Scope(Scope &&) = delete;
+    Scope &operator=(Scope &&) = delete;
 
-private:
+  private:
     ZoneId zone_{kInvalidZone};
     std::uint64_t startNs_{0};
 };
@@ -195,27 +201,26 @@ private:
 
 // One span per statement block. The static caches the interned id, so only the
 // first execution of this line pays for the name lookup.
-#define SHINKOU_PROFILE_SCOPE(name)                                                  \
-    static const ::shinkou::profile::ZoneId SHINKOU_PROFILE_CONCAT(shinkou_zone_,    \
-                                                                  __LINE__) =         \
-        ::shinkou::profile::register_zone(name);                                     \
-    ::shinkou::profile::Scope SHINKOU_PROFILE_CONCAT(shinkou_scope_, __LINE__)(      \
+#define SHINKOU_PROFILE_SCOPE(name)                                                                \
+    static const ::shinkou::profile::ZoneId SHINKOU_PROFILE_CONCAT(shinkou_zone_, __LINE__) =      \
+        ::shinkou::profile::register_zone(name);                                                   \
+    ::shinkou::profile::Scope SHINKOU_PROFILE_CONCAT(shinkou_scope_, __LINE__)(                    \
         SHINKOU_PROFILE_CONCAT(shinkou_zone_, __LINE__))
 
-#define SHINKOU_PROFILE_COUNTER(name, value)                                         \
-    do {                                                                             \
-        static const ::shinkou::profile::ZoneId SHINKOU_PROFILE_CONCAT(               \
-            shinkou_counter_, __LINE__) = ::shinkou::profile::register_zone(name);    \
-        ::shinkou::profile::Profiler::instance().record_counter(                      \
-            SHINKOU_PROFILE_CONCAT(shinkou_counter_, __LINE__), (value));             \
+#define SHINKOU_PROFILE_COUNTER(name, value)                                                       \
+    do {                                                                                           \
+        static const ::shinkou::profile::ZoneId SHINKOU_PROFILE_CONCAT(                            \
+            shinkou_counter_, __LINE__) = ::shinkou::profile::register_zone(name);                 \
+        ::shinkou::profile::Profiler::instance().record_counter(                                   \
+            SHINKOU_PROFILE_CONCAT(shinkou_counter_, __LINE__), (value));                          \
     } while (false)
 
-#define SHINKOU_PROFILE_INSTANT(name)                                                \
-    do {                                                                             \
-        static const ::shinkou::profile::ZoneId SHINKOU_PROFILE_CONCAT(               \
-            shinkou_instant_, __LINE__) = ::shinkou::profile::register_zone(name);    \
-        ::shinkou::profile::Profiler::instance().record_instant(                      \
-            SHINKOU_PROFILE_CONCAT(shinkou_instant_, __LINE__));                      \
+#define SHINKOU_PROFILE_INSTANT(name)                                                              \
+    do {                                                                                           \
+        static const ::shinkou::profile::ZoneId SHINKOU_PROFILE_CONCAT(                            \
+            shinkou_instant_, __LINE__) = ::shinkou::profile::register_zone(name);                 \
+        ::shinkou::profile::Profiler::instance().record_instant(                                   \
+            SHINKOU_PROFILE_CONCAT(shinkou_instant_, __LINE__));                                   \
     } while (false)
 
 #else

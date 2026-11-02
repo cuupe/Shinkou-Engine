@@ -8,6 +8,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     include(CTest)
 endif()
 
+if(NOT TARGET shinkou_core)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../core" "${CMAKE_CURRENT_BINARY_DIR}/shinkou_core")
+endif()
 add_library(shinkou_assets STATIC
     src/AssetSystem.cpp
 )
@@ -17,6 +20,7 @@ target_include_directories(shinkou_assets PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 target_compile_features(shinkou_assets PUBLIC cxx_std_17)
+target_link_libraries(shinkou_assets PUBLIC ShinkouEngine::Core)
 
 if(MSVC)
     target_compile_options(shinkou_assets PRIVATE /W4 /permissive-)

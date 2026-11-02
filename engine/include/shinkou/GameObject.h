@@ -5,8 +5,8 @@
 #include <cassert>
 #include <cmath>
 #include <functional>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -21,8 +21,9 @@ class GameObject;
 class World;
 class Component;
 
-using PropertyValue = std::variant<std::monostate, bool, std::int64_t, std::uint64_t, double,
-                                   std::string, math::Vec2, math::Vec3, math::Quat, math::Transform>;
+using PropertyValue =
+    std::variant<std::monostate, bool, std::int64_t, std::uint64_t, double, std::string, math::Vec2,
+                 math::Vec3, math::Quat, math::Transform>;
 
 enum class PropertyType {
     Unknown,
@@ -46,7 +47,8 @@ enum class PropertyFlags : std::uint32_t {
 };
 
 inline PropertyFlags operator|(PropertyFlags lhs, PropertyFlags rhs) noexcept {
-    return static_cast<PropertyFlags>(static_cast<std::uint32_t>(lhs) | static_cast<std::uint32_t>(rhs));
+    return static_cast<PropertyFlags>(static_cast<std::uint32_t>(lhs) |
+                                      static_cast<std::uint32_t>(rhs));
 }
 inline bool has_flag(PropertyFlags value, PropertyFlags flag) noexcept {
     return (static_cast<std::uint32_t>(value) & static_cast<std::uint32_t>(flag)) != 0;
@@ -62,59 +64,89 @@ struct PropertyDescriptor {
     double maximum{0.0};
     double step{0.0};
     std::function<PropertyValue()> get;
-    std::function<bool(const PropertyValue&)> set;
+    std::function<bool(const PropertyValue &)> set;
     PropertyPresentation presentation{PropertyPresentation::Default};
     std::function<PropertyValue()> editorGet;
-    std::function<bool(const PropertyValue&)> editorSet;
+    std::function<bool(const PropertyValue &)> editorSet;
 
-    bool editable() const noexcept { return !has_flag(flags, PropertyFlags::ReadOnly) && static_cast<bool>(set); }
+    bool editable() const noexcept {
+        return !has_flag(flags, PropertyFlags::ReadOnly) && static_cast<bool>(set);
+    }
 };
 
-template<class T>
-struct property_traits { static constexpr PropertyType type = PropertyType::Unknown; };
-template<> struct property_traits<bool> { static constexpr PropertyType type = PropertyType::Bool; };
-template<> struct property_traits<std::int32_t> { static constexpr PropertyType type = PropertyType::Integer; };
-template<> struct property_traits<std::int64_t> { static constexpr PropertyType type = PropertyType::Integer; };
-template<> struct property_traits<std::uint32_t> { static constexpr PropertyType type = PropertyType::UnsignedInteger; };
-template<> struct property_traits<std::uint64_t> { static constexpr PropertyType type = PropertyType::UnsignedInteger; };
-template<> struct property_traits<float> { static constexpr PropertyType type = PropertyType::Number; };
-template<> struct property_traits<double> { static constexpr PropertyType type = PropertyType::Number; };
-template<> struct property_traits<std::string> { static constexpr PropertyType type = PropertyType::String; };
-template<> struct property_traits<math::Vec2> { static constexpr PropertyType type = PropertyType::Vec2; };
-template<> struct property_traits<math::Vec3> { static constexpr PropertyType type = PropertyType::Vec3; };
-template<> struct property_traits<math::Quat> { static constexpr PropertyType type = PropertyType::Quaternion; };
-template<> struct property_traits<math::Transform> { static constexpr PropertyType type = PropertyType::Transform; };
+template <class T> struct property_traits {
+    static constexpr PropertyType type = PropertyType::Unknown;
+};
+template <> struct property_traits<bool> {
+    static constexpr PropertyType type = PropertyType::Bool;
+};
+template <> struct property_traits<std::int32_t> {
+    static constexpr PropertyType type = PropertyType::Integer;
+};
+template <> struct property_traits<std::int64_t> {
+    static constexpr PropertyType type = PropertyType::Integer;
+};
+template <> struct property_traits<std::uint32_t> {
+    static constexpr PropertyType type = PropertyType::UnsignedInteger;
+};
+template <> struct property_traits<std::uint64_t> {
+    static constexpr PropertyType type = PropertyType::UnsignedInteger;
+};
+template <> struct property_traits<float> {
+    static constexpr PropertyType type = PropertyType::Number;
+};
+template <> struct property_traits<double> {
+    static constexpr PropertyType type = PropertyType::Number;
+};
+template <> struct property_traits<std::string> {
+    static constexpr PropertyType type = PropertyType::String;
+};
+template <> struct property_traits<math::Vec2> {
+    static constexpr PropertyType type = PropertyType::Vec2;
+};
+template <> struct property_traits<math::Vec3> {
+    static constexpr PropertyType type = PropertyType::Vec3;
+};
+template <> struct property_traits<math::Quat> {
+    static constexpr PropertyType type = PropertyType::Quaternion;
+};
+template <> struct property_traits<math::Transform> {
+    static constexpr PropertyType type = PropertyType::Transform;
+};
 
-template<class T>
-PropertyValue make_property_value(const T& value) {
-    if constexpr (std::is_same_v<T, bool>) return value;
-    else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) return static_cast<std::int64_t>(value);
-    else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>) return static_cast<std::uint64_t>(value);
-    else if constexpr (std::is_floating_point_v<T>) return static_cast<double>(value);
-    else return value;
+template <class T> PropertyValue make_property_value(const T &value) {
+    if constexpr (std::is_same_v<T, bool>)
+        return value;
+    else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>)
+        return static_cast<std::int64_t>(value);
+    else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>)
+        return static_cast<std::uint64_t>(value);
+    else if constexpr (std::is_floating_point_v<T>)
+        return static_cast<double>(value);
+    else
+        return value;
 }
 
-template<class T>
-bool assign_property_value(T& target, const PropertyValue& value) {
+template <class T> bool assign_property_value(T &target, const PropertyValue &value) {
     if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, std::string> ||
                   std::is_same_v<T, math::Vec2> || std::is_same_v<T, math::Vec3> ||
                   std::is_same_v<T, math::Quat> || std::is_same_v<T, math::Transform>) {
-        if (const auto* exact = std::get_if<T>(&value)) {
+        if (const auto *exact = std::get_if<T>(&value)) {
             target = *exact;
             return true;
         }
     } else if constexpr (std::is_floating_point_v<T>) {
-        if (const auto* number = std::get_if<double>(&value)) {
+        if (const auto *number = std::get_if<double>(&value)) {
             target = static_cast<T>(*number);
             return true;
         }
     } else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) {
-        if (const auto* number = std::get_if<std::int64_t>(&value)) {
+        if (const auto *number = std::get_if<std::int64_t>(&value)) {
             target = static_cast<T>(*number);
             return true;
         }
     } else if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>) {
-        if (const auto* number = std::get_if<std::uint64_t>(&value)) {
+        if (const auto *number = std::get_if<std::uint64_t>(&value)) {
             target = static_cast<T>(*number);
             return true;
         }
@@ -125,12 +157,13 @@ bool assign_property_value(T& target, const PropertyValue& value) {
 class PropertyBuilder {
     std::vector<PropertyDescriptor> properties_;
 
-public:
-    template<class T>
-    void add(std::string name, T* value, PropertyFlags flags = PropertyFlags::Serialized,
+  public:
+    template <class T>
+    void add(std::string name, T *value, PropertyFlags flags = PropertyFlags::Serialized,
              double minimum = 0.0, double maximum = 0.0, double step = 0.0,
              std::string displayName = {}) {
-        if (!value) return;
+        if (!value)
+            return;
         PropertyDescriptor descriptor;
         descriptor.name = std::move(name);
         descriptor.displayName = displayName.empty() ? descriptor.name : std::move(displayName);
@@ -141,14 +174,19 @@ public:
         descriptor.step = step;
         descriptor.get = [value] { return make_property_value(*value); };
         if (!has_flag(flags, PropertyFlags::ReadOnly)) {
-            descriptor.set = [value, minimum, maximum](const PropertyValue& next) {
+            descriptor.set = [value, minimum, maximum](const PropertyValue &next) {
                 if (maximum > minimum) {
                     double number = 0.0;
-                    if (const auto* floating = std::get_if<double>(&next)) number = *floating;
-                    else if (const auto* integer = std::get_if<std::int64_t>(&next)) number = static_cast<double>(*integer);
-                    else if (const auto* unsignedInteger = std::get_if<std::uint64_t>(&next)) number = static_cast<double>(*unsignedInteger);
-                    else return false;
-                    if (!std::isfinite(number) || number < minimum || number > maximum) return false;
+                    if (const auto *floating = std::get_if<double>(&next))
+                        number = *floating;
+                    else if (const auto *integer = std::get_if<std::int64_t>(&next))
+                        number = static_cast<double>(*integer);
+                    else if (const auto *unsignedInteger = std::get_if<std::uint64_t>(&next))
+                        number = static_cast<double>(*unsignedInteger);
+                    else
+                        return false;
+                    if (!std::isfinite(number) || number < minimum || number > maximum)
+                        return false;
                 }
                 return assign_property_value(*value, next);
             };
@@ -157,12 +195,12 @@ public:
     }
 
     void add_custom(std::string name, PropertyType type, std::function<PropertyValue()> getter,
-                    std::function<bool(const PropertyValue&)> setter,
-                    PropertyFlags flags = PropertyFlags::Serialized,
-                    double minimum = 0.0, double maximum = 0.0, double step = 0.0,
-                    std::string displayName = {}, PropertyPresentation presentation = PropertyPresentation::Default,
+                    std::function<bool(const PropertyValue &)> setter,
+                    PropertyFlags flags = PropertyFlags::Serialized, double minimum = 0.0,
+                    double maximum = 0.0, double step = 0.0, std::string displayName = {},
+                    PropertyPresentation presentation = PropertyPresentation::Default,
                     std::function<PropertyValue()> editorGet = {},
-                    std::function<bool(const PropertyValue&)> editorSet = {}) {
+                    std::function<bool(const PropertyValue &)> editorSet = {}) {
         PropertyDescriptor descriptor;
         descriptor.name = std::move(name);
         descriptor.displayName = displayName.empty() ? descriptor.name : std::move(displayName);
@@ -173,13 +211,15 @@ public:
         descriptor.step = step;
         descriptor.get = std::move(getter);
         descriptor.set = has_flag(flags, PropertyFlags::ReadOnly) ? nullptr : std::move(setter);
-        descriptor.presentation=presentation;
-        descriptor.editorGet=std::move(editorGet);descriptor.editorSet=std::move(editorSet);
+        descriptor.presentation = presentation;
+        descriptor.editorGet = std::move(editorGet);
+        descriptor.editorSet = std::move(editorSet);
         properties_.push_back(std::move(descriptor));
     }
 
     void add_read_only(std::string name, PropertyType type, std::function<PropertyValue()> getter,
-                       PropertyFlags flags = PropertyFlags::RuntimeOnly, std::string displayName = {}) {
+                       PropertyFlags flags = PropertyFlags::RuntimeOnly,
+                       std::string displayName = {}) {
         PropertyDescriptor descriptor;
         descriptor.name = std::move(name);
         descriptor.displayName = displayName.empty() ? descriptor.name : std::move(displayName);
@@ -189,72 +229,100 @@ public:
         properties_.push_back(std::move(descriptor));
     }
 
-    std::vector<PropertyDescriptor> take() { return std::move(properties_); }
+    std::vector<PropertyDescriptor> take() {
+        return std::move(properties_);
+    }
 };
 
 struct GameObjectHandle {
-    World* world{nullptr};
+    World *world{nullptr};
     ObjectId id{0};
-    GameObject* get() const noexcept;
+    GameObject *get() const noexcept;
     bool valid() const noexcept;
-    explicit operator bool() const noexcept { return valid(); }
+    explicit operator bool() const noexcept {
+        return valid();
+    }
 };
 
 struct ComponentHandle {
-    World* world{nullptr};
+    World *world{nullptr};
     ComponentId id{0};
-    Component* get() const noexcept;
+    Component *get() const noexcept;
     bool valid() const noexcept;
-    explicit operator bool() const noexcept { return valid(); }
+    explicit operator bool() const noexcept {
+        return valid();
+    }
 };
 
 class Component {
-    GameObject* owner_{nullptr};
+    GameObject *owner_{nullptr};
     ComponentId id_{0};
     std::string registeredName_;
     bool enabled_{true};
     LifecycleState state_{LifecycleState::Constructing};
     ObjectStorage storage_{ObjectStorage::Regular};
-    void (*removeFromEcs_)(World&, Entity) noexcept{nullptr};
 
     friend class GameObject;
     friend class World;
 
     void notify_active_state(bool active) noexcept;
 
-public:
+  public:
     virtual ~Component() = default;
 
-    GameObject& game_object() noexcept;
-    const GameObject& game_object() const noexcept;
-    GameObject* try_game_object() noexcept { return owner_; }
-    const GameObject* try_game_object() const noexcept { return owner_; }
+    GameObject &game_object() noexcept;
+    const GameObject &game_object() const noexcept;
+    GameObject *try_game_object() noexcept {
+        return owner_;
+    }
+    const GameObject *try_game_object() const noexcept {
+        return owner_;
+    }
 
-    bool enabled() const noexcept { return enabled_; }
+    bool enabled() const noexcept {
+        return enabled_;
+    }
     void set_enabled(bool enabled) noexcept;
-    ComponentId id() const noexcept { return id_; }
+    ComponentId id() const noexcept {
+        return id_;
+    }
     ComponentHandle handle() noexcept;
-    LifecycleState lifecycle_state() const noexcept { return state_; }
-    ObjectStorage storage() const noexcept { return storage_; }
-    virtual std::string_view type_name() const noexcept { return "Component"; }
+    LifecycleState lifecycle_state() const noexcept {
+        return state_;
+    }
+    ObjectStorage storage() const noexcept {
+        return storage_;
+    }
+    virtual std::string_view type_name() const noexcept {
+        return "Component";
+    }
     std::string_view registered_type_name() const noexcept {
         return registeredName_.empty() ? type_name() : std::string_view(registeredName_);
     }
     std::vector<PropertyDescriptor> properties();
-    bool set_property(std::string_view name, const PropertyValue& value);
+    bool set_property(std::string_view name, const PropertyValue &value);
 
-protected:
-    virtual void on_attach() {}
-    virtual void on_create() {}
-    virtual void on_detach() {}
-    virtual void on_enable() {}
-    virtual void on_disable() {}
-    virtual void on_destroy_requested() {}
-    virtual void on_destroy() {}
-    virtual void on_update(Seconds) {}
-    virtual void define_properties(PropertyBuilder&) {}
+  protected:
+    virtual void on_attach() {
+    }
+    virtual void on_create() {
+    }
+    virtual void on_detach() {
+    }
+    virtual void on_enable() {
+    }
+    virtual void on_disable() {
+    }
+    virtual void on_destroy_requested() {
+    }
+    virtual void on_destroy() {
+    }
+    virtual void on_update(Seconds) {
+    }
+    virtual void define_properties(PropertyBuilder &) {
+    }
 
-private:
+  private:
     void notify_created() noexcept;
     void notify_destroy_requested() noexcept;
     void notify_destroyed() noexcept;
@@ -270,44 +338,76 @@ class TransformComponent final : public Component {
     bool dirty_{true};
 
     friend class ::shinkou::GameObject;
-    void update_world(const math::Mat4& parentWorld) noexcept;
 
-public:
+  public:
     math::Transform local{};
 
-    const math::Mat4& world_matrix() const noexcept { return worldMatrix_; }
-    std::string_view type_name() const noexcept override { return "Transform"; }
-    void mark_dirty() noexcept { dirty_ = true; }
+    // Recomputes the world matrix when the local transform or the parent world
+    // changed; used by both the hierarchy walk and the chunk transform
+    // pipeline.
+    void update_world(const math::Mat4 &parentWorld) noexcept;
+    // Queues this object (and its subtree, at the next frame) for a transform
+    // refresh.  Only ECS-backed hierarchies need it; regular worlds use the
+    // recursive walk.
+    void notify_transform_changed() noexcept;
+
+    const math::Mat4 &world_matrix() const noexcept {
+        return worldMatrix_;
+    }
+    std::string_view type_name() const noexcept override {
+        return "Transform";
+    }
+    void mark_dirty() noexcept {
+        dirty_ = true;
+    }
+    // True when the local transform or the parent world matrix changed since
+    // the last evaluation.  The chunk transform pipeline uses this to skip
+    // static objects without touching their matrices.
+    bool needs_world_update(const math::Mat4 &parentWorld) const noexcept;
+    // Written by the chunk transform pipeline (parallel, depth-ordered) so the
+    // authoring view and the runtime LocalToWorld array never disagree.
+    void set_world_matrix(const math::Mat4 &matrix) noexcept {
+        worldMatrix_ = matrix;
+        evaluatedLocal_ = local;
+        dirty_ = false;
+    }
     bool set_position(math::Vec3 position) noexcept;
     bool set_rotation(math::Quat rotation) noexcept;
     bool set_scale(math::Vec3 scale) noexcept;
-    bool set_local_transform(const math::Transform& transform) noexcept;
+    bool set_local_transform(const math::Transform &transform) noexcept;
     math::Vec3 euler_degrees() const noexcept;
     bool set_euler_degrees(math::Vec3 degrees) noexcept;
 
-protected:
-    void define_properties(PropertyBuilder& builder) override {
-        builder.add_custom("position", PropertyType::Vec3,
-            [this] { return PropertyValue{local.position}; },
-            [this](const PropertyValue& value) {
-                const auto* next = std::get_if<math::Vec3>(&value);
-                if (!next) return false;
+  protected:
+    void define_properties(PropertyBuilder &builder) override {
+        builder.add_custom(
+            "position", PropertyType::Vec3, [this] { return PropertyValue{local.position}; },
+            [this](const PropertyValue &value) {
+                const auto *next = std::get_if<math::Vec3>(&value);
+                if (!next)
+                    return false;
                 return set_position(*next);
             });
-        builder.add_custom("rotation", PropertyType::Quaternion,
-            [this] { return PropertyValue{local.rotation}; },
-            [this](const PropertyValue& value) {
-                const auto* next = std::get_if<math::Quat>(&value);
-                if (!next) return false;
+        builder.add_custom(
+            "rotation", PropertyType::Quaternion, [this] { return PropertyValue{local.rotation}; },
+            [this](const PropertyValue &value) {
+                const auto *next = std::get_if<math::Quat>(&value);
+                if (!next)
+                    return false;
                 return set_rotation(*next);
-            },PropertyFlags::Serialized,0,0,0,"Rotation",PropertyPresentation::EulerDegrees,
-            [this]{return PropertyValue{euler_degrees()};},
-            [this](const PropertyValue& value){const auto* angles=std::get_if<math::Vec3>(&value);return angles && set_euler_degrees(*angles);});
-        builder.add_custom("scale", PropertyType::Vec3,
-            [this] { return PropertyValue{local.scale}; },
-            [this](const PropertyValue& value) {
-                const auto* next = std::get_if<math::Vec3>(&value);
-                if (!next) return false;
+            },
+            PropertyFlags::Serialized, 0, 0, 0, "Rotation", PropertyPresentation::EulerDegrees,
+            [this] { return PropertyValue{euler_degrees()}; },
+            [this](const PropertyValue &value) {
+                const auto *angles = std::get_if<math::Vec3>(&value);
+                return angles && set_euler_degrees(*angles);
+            });
+        builder.add_custom(
+            "scale", PropertyType::Vec3, [this] { return PropertyValue{local.scale}; },
+            [this](const PropertyValue &value) {
+                const auto *next = std::get_if<math::Vec3>(&value);
+                if (!next)
+                    return false;
                 return set_scale(*next);
             });
     }
@@ -316,22 +416,28 @@ protected:
 class TagComponent final : public Component {
     std::vector<std::string> tags_;
 
-public:
-    std::string_view type_name() const noexcept override { return "Tag"; }
+  public:
+    std::string_view type_name() const noexcept override {
+        return "Tag";
+    }
     bool has(std::string_view tag) const noexcept;
     void add(std::string tag);
     bool remove(std::string_view tag) noexcept;
-    const std::vector<std::string>& tags() const noexcept { return tags_; }
+    const std::vector<std::string> &tags() const noexcept {
+        return tags_;
+    }
 };
 
 class LifetimeComponent final : public Component {
-public:
+  public:
     Seconds remaining{-1.0f};
     bool destroyWhenExpired{true};
-    std::string_view type_name() const noexcept override { return "Lifetime"; }
+    std::string_view type_name() const noexcept override {
+        return "Lifetime";
+    }
 
-protected:
-    void define_properties(PropertyBuilder& builder) override {
+  protected:
+    void define_properties(PropertyBuilder &builder) override {
         builder.add("remaining", &remaining, PropertyFlags::Serialized, -1.0, 3600.0, 0.01);
         builder.add("destroyWhenExpired", &destroyWhenExpired);
     }
@@ -342,7 +448,7 @@ protected:
 // deliberately kept out of the component; AudioSceneSystem owns that session
 // state and releases it when the object, clip or audio device disappears.
 class AudioSourceComponent final : public Component {
-public:
+  public:
     std::string clipPath{};
     std::uint64_t assetId{0};
     std::uint32_t bus{2}; // AudioBus::Sfx without coupling GameObject.h to the audio backend.
@@ -356,61 +462,68 @@ public:
     float rolloff{1.0f};
     bool streaming{false};
 
-    std::string_view type_name() const noexcept override { return "AudioSource"; }
+    std::string_view type_name() const noexcept override {
+        return "AudioSource";
+    }
 
-protected:
-    void define_properties(PropertyBuilder& builder) override {
+  protected:
+    void define_properties(PropertyBuilder &builder) override {
         builder.add("clipPath", &clipPath);
         builder.add("assetId", &assetId, PropertyFlags::Serialized, 0.0, 0.0, 0.0, "Asset Id");
         builder.add("bus", &bus, PropertyFlags::Serialized, 0.0, 5.0, 1.0);
-        builder.add("playOnStart", &playOnStart, PropertyFlags::Serialized, 0.0, 0.0, 0.0, "Play On Start");
+        builder.add("playOnStart", &playOnStart, PropertyFlags::Serialized, 0.0, 0.0, 0.0,
+                    "Play On Start");
         builder.add("loop", &loop, PropertyFlags::Serialized);
         builder.add("volume", &volume, PropertyFlags::Serialized, 0.0, 1.0, 0.01);
         builder.add("pitch", &pitch, PropertyFlags::Serialized, 0.01, 8.0, 0.01);
         builder.add("spatialized", &spatialized, PropertyFlags::Serialized);
-        builder.add("minDistance", &minDistance, PropertyFlags::Serialized, 0.01, 100000.0, 0.01, "Min Distance");
-        builder.add("maxDistance", &maxDistance, PropertyFlags::Serialized, 0.01, 100000.0, 0.01, "Max Distance");
+        builder.add("minDistance", &minDistance, PropertyFlags::Serialized, 0.01, 100000.0, 0.01,
+                    "Min Distance");
+        builder.add("maxDistance", &maxDistance, PropertyFlags::Serialized, 0.01, 100000.0, 0.01,
+                    "Max Distance");
         builder.add("rolloff", &rolloff, PropertyFlags::Serialized, 0.0, 10.0, 0.01);
         builder.add("streaming", &streaming, PropertyFlags::Serialized);
     }
 };
-}
+} // namespace components
 
 class GameObject {
-public:
+  public:
     struct LifecycleCallbacks {
-        std::function<void(GameObject&)> created;
-        std::function<void(GameObject&)> destroyRequested;
-        std::function<void(GameObject&)> destroyed;
+        std::function<void(GameObject &)> created;
+        std::function<void(GameObject &)> destroyRequested;
+        std::function<void(GameObject &)> destroyed;
     };
 
-private:
-    World* world_{nullptr};
+  private:
+    World *world_{nullptr};
     ObjectId id_{0};
     std::string name_;
     ObjectStorage storage_{ObjectStorage::Regular};
-    GameObject* parent_{nullptr};
+    GameObject *parent_{nullptr};
     bool activeSelf_{true};
     bool activeInHierarchy_{false};
     bool destroyRequested_{false};
     LifecycleState state_{LifecycleState::Constructing};
     LifecycleCallbacks lifecycleCallbacks_{};
     std::vector<std::unique_ptr<Component>> components_;
-    // ECS-backed Component instances are owned by the EnTT registry.  The
-    // pointer list is only an update/lifecycle index; it avoids a second
-    // owning allocation and keeps typed registry queries allocation-free.
-    std::vector<Component*> ecsComponents_;
-    std::unordered_map<std::type_index, Component*> componentLookup_;
+    // Authoring Components are always owned here.  Runtime POD data for this
+    // object lives in the ECS chunk store and is reached through ecsEntity_,
+    // never through a cached Component pointer.
+    std::unordered_map<std::type_index, Component *> componentLookup_;
     std::vector<std::unique_ptr<GameObject>> children_;
     Entity ecsEntity_{};
-    components::TransformComponent* transform_{nullptr};
+    components::TransformComponent *transform_{nullptr};
+    std::uint32_t hierarchyDepth_{0};
+    // Set while the object sits in World's per-depth dirty transform list.
+    bool transformQueued_{false};
     std::size_t objectOrderIndex_{0};
     std::size_t storageOrderIndex_{0};
 
     friend class World;
     friend class Component;
 
-    GameObject(World& world, ObjectId id, std::string name, ObjectStorage storage);
+    GameObject(World &world, ObjectId id, std::string name, ObjectStorage storage);
     void refresh_active_state(bool parentActive) noexcept;
     // The hierarchy transform phase is shared by both update pipelines so a
     // mixed regular/ECS tree observes the same parent-to-child transforms.
@@ -418,121 +531,156 @@ private:
     // Component updates are deliberately split.  World dispatches these from
     // independent regular and ECS pipelines in the same frame.
     void update_regular_components(Seconds dt);
-    void update_ecs_components(Seconds dt);
     void dispose() noexcept;
     void request_destroy_recursive() noexcept;
     void update_world_transform() noexcept;
-    void attach_component(Component& component, std::string_view registeredTypeName,
-                          ObjectStorage storage,
-                          void (*removeFromEcs)(World&, Entity) noexcept = nullptr);
-    void remove_component(Component& component) noexcept;
-    void dispose_ecs_components(bool removeFromRegistry = true) noexcept;
+    void update_hierarchy_depth(std::uint32_t depth) noexcept;
+    void attach_component(Component &component, std::string_view registeredTypeName);
+    void remove_component(Component &component) noexcept;
     void initialize() noexcept;
 
-    template<class T, class... Args>
-    T* add_component_internal(std::string_view registeredTypeName, Args&&... args);
+    template <class T, class... Args>
+    T *add_component_internal(std::string_view registeredTypeName, Args &&...args);
 
-    template<class T>
-    T* add_registered_component(std::string_view registeredTypeName);
+    template <class T> T *add_registered_component(std::string_view registeredTypeName);
 
-public:
-    GameObject(const GameObject&) = delete;
-    GameObject& operator=(const GameObject&) = delete;
+  public:
+    GameObject(const GameObject &) = delete;
+    GameObject &operator=(const GameObject &) = delete;
     ~GameObject() = default;
 
-    ObjectId id() const noexcept { return id_; }
-    GameObjectHandle handle() noexcept { return {world_, id_}; }
-    std::string_view name() const noexcept { return name_; }
-    void set_name(std::string name) { name_ = std::move(name); }
-    ObjectStorage storage() const noexcept { return storage_; }
+    ObjectId id() const noexcept {
+        return id_;
+    }
+    GameObjectHandle handle() noexcept {
+        return {world_, id_};
+    }
+    std::string_view name() const noexcept {
+        return name_;
+    }
+    void set_name(std::string name);
+    ObjectStorage storage() const noexcept {
+        return storage_;
+    }
     bool set_storage(ObjectStorage storage);
-    LifecycleState lifecycle_state() const noexcept { return state_; }
-    void set_lifecycle_callbacks(LifecycleCallbacks callbacks) { lifecycleCallbacks_ = std::move(callbacks); }
+    LifecycleState lifecycle_state() const noexcept {
+        return state_;
+    }
+    void set_lifecycle_callbacks(LifecycleCallbacks callbacks) {
+        lifecycleCallbacks_ = std::move(callbacks);
+    }
     std::vector<PropertyDescriptor> properties();
-    bool set_property(std::string_view name, const PropertyValue& value);
+    bool set_property(std::string_view name, const PropertyValue &value);
 
-    World& world() noexcept { return *world_; }
-    const World& world() const noexcept { return *world_; }
-    GameObject* parent() noexcept { return parent_; }
-    const GameObject* parent() const noexcept { return parent_; }
-    bool active_self() const noexcept { return activeSelf_; }
-    bool active_in_hierarchy() const noexcept { return activeInHierarchy_; }
-    bool destroy_requested() const noexcept { return destroyRequested_; }
+    World &world() noexcept {
+        return *world_;
+    }
+    const World &world() const noexcept {
+        return *world_;
+    }
+    // Cached pointer to the authoring transform; equivalent to
+    // get_component<components::TransformComponent>() without the hash lookup.
+    components::TransformComponent *transform_component() noexcept {
+        return transform_;
+    }
+    const components::TransformComponent *transform_component() const noexcept {
+        return transform_;
+    }
+    // Queues this object and its subtree for the next transform refresh.
+    void notify_transform_changed() noexcept;
+    GameObject *parent() noexcept {
+        return parent_;
+    }
+    const GameObject *parent() const noexcept {
+        return parent_;
+    }
+    std::uint32_t hierarchy_depth() const noexcept {
+        return hierarchyDepth_;
+    }
+    bool active_self() const noexcept {
+        return activeSelf_;
+    }
+    bool active_in_hierarchy() const noexcept {
+        return activeInHierarchy_;
+    }
+    bool destroy_requested() const noexcept {
+        return destroyRequested_;
+    }
     void set_active(bool active) noexcept;
     void destroy() noexcept;
-    Component* add_component(std::string_view registeredTypeName);
-    Component* component_at(std::size_t index) noexcept;
-    const Component* component_at(std::size_t index) const noexcept;
+    Component *add_component(std::string_view registeredTypeName);
+    Component *component_at(std::size_t index) noexcept;
+    const Component *component_at(std::size_t index) const noexcept;
     std::size_t component_count() const noexcept;
 
-    template<class Fn>
-    void each_component(Fn&& fn) {
-        for (auto& component : components_) if (component) fn(*component);
-        for (auto* component : ecsComponents_) if (component) fn(*component);
+    template <class Fn> void each_component(Fn &&fn) {
+        for (auto &component : components_)
+            if (component)
+                fn(*component);
     }
 
-    template<class Fn>
-    void each_component(Fn&& fn) const {
-        for (const auto& component : components_) if (component) fn(*component);
-        for (const auto* component : ecsComponents_) if (component) fn(*component);
+    template <class Fn> void each_component(Fn &&fn) const {
+        for (const auto &component : components_)
+            if (component)
+                fn(*component);
     }
 
-    GameObject& create_child(std::string name = {}, ObjectStorage storage = ObjectStorage::Regular);
-    void set_parent(GameObject* parent);
-    const std::vector<std::unique_ptr<GameObject>>& children() const noexcept { return children_; }
+    GameObject &create_child(std::string name = {}, ObjectStorage storage = ObjectStorage::Regular);
+    void set_parent(GameObject *parent);
+    const std::vector<std::unique_ptr<GameObject>> &children() const noexcept {
+        return children_;
+    }
 
-    template<class T, class... Args>
-    T* add_component(Args&&... args);
+    template <class T, class... Args> T *add_component(Args &&...args);
 
-    template<class T, class... Args>
-    T& get_or_add_component(Args&&... args) {
-        if (auto* existing = get_component<T>()) return *existing;
-        auto* created = add_component<T>(std::forward<Args>(args)...);
+    template <class T, class... Args> T &get_or_add_component(Args &&...args) {
+        if (auto *existing = get_component<T>())
+            return *existing;
+        auto *created = add_component<T>(std::forward<Args>(args)...);
         assert(created);
         return *created;
     }
 
-    template<class T>
-    T* get_component() noexcept {
+    template <class T> T *get_component() noexcept {
         static_assert(std::is_base_of_v<Component, T>, "T must derive from shinkou::Component");
         const auto it = componentLookup_.find(std::type_index(typeid(T)));
-        return it == componentLookup_.end() ? nullptr : static_cast<T*>(it->second);
+        return it == componentLookup_.end() ? nullptr : static_cast<T *>(it->second);
     }
 
-    template<class T>
-    const T* get_component() const noexcept {
+    template <class T> const T *get_component() const noexcept {
         static_assert(std::is_base_of_v<Component, T>, "T must derive from shinkou::Component");
         const auto it = componentLookup_.find(std::type_index(typeid(T)));
-        return it == componentLookup_.end() ? nullptr : static_cast<const T*>(it->second);
+        return it == componentLookup_.end() ? nullptr : static_cast<const T *>(it->second);
     }
 
-    template<class T>
-    bool has_component() const noexcept { return get_component<T>() != nullptr; }
+    template <class T> bool has_component() const noexcept {
+        return get_component<T>() != nullptr;
+    }
 
-    template<class T>
-    bool remove_component() noexcept {
+    template <class T> bool remove_component() noexcept {
         const auto it = componentLookup_.find(std::type_index(typeid(T)));
-        if (it == componentLookup_.end()) return false;
+        if (it == componentLookup_.end())
+            return false;
         remove_component(*it->second);
         return true;
     }
 
-    bool has_ecs_entity() const noexcept { return static_cast<bool>(ecsEntity_); }
-    Entity ecs_entity() const noexcept { return ecsEntity_; }
+    bool has_ecs_entity() const noexcept {
+        return static_cast<bool>(ecsEntity_);
+    }
+    Entity ecs_entity() const noexcept {
+        return ecsEntity_;
+    }
     Entity enable_ecs();
     void disable_ecs() noexcept;
 
-    template<class T, class... Args>
-    T& add_ecs_component(Args&&... args);
+    template <class T, class... Args> T &add_ecs_component(Args &&...args);
 
-    template<class T>
-    T* get_ecs_component() noexcept;
+    template <class T> T *get_ecs_component() noexcept;
 
-    template<class T>
-    const T* get_ecs_component() const noexcept;
+    template <class T> const T *get_ecs_component() const noexcept;
 
-    template<class T>
-    void remove_ecs_component() noexcept;
+    template <class T> void remove_ecs_component() noexcept;
 };
 
-}
+} // namespace shinkou

@@ -7,11 +7,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-namespace shinkou::render { class Renderer; }
+namespace shinkou::render {
+class Renderer;
+}
 
 namespace shinkou::editor {
 
@@ -23,6 +26,7 @@ struct EditorModelSceneInstance {
     std::uint64_t objectId{0};
     std::shared_ptr<const EditorModelPreviewSnapshot> snapshot{};
     math::Mat4 model{math::Mat4::Identity()};
+    std::optional<math::Vec3> colorOverride{};
 };
 
 struct EditorModelSceneRenderState {
@@ -33,6 +37,7 @@ struct EditorModelSceneRenderState {
     std::size_t submittedInstances{0};
     std::size_t uploadedAssets{0};
     std::size_t rejectedInstances{0};
+    std::size_t geometryUploadBytes{0}, uniformUploadBytes{0}, materialCreations{0};
     std::uint64_t frameRevision{0};
     std::string status{"GPU model scene not attempted"};
 };
@@ -50,6 +55,11 @@ class EditorModelSceneRenderer final {
         std::size_t vertexBytes{0};
         std::size_t indexBytes{0};
         std::uint32_t indexCount{0};
+        std::shared_ptr<const EditorModelPreviewSnapshot> snapshot{};
+    };
+    struct ObjectResource {
+        render::ResourceHandle buffer{}, material{};
+        std::vector<std::uint8_t> frameBytes;
     };
 
     render::ResourceHandle sceneBuffer_{};
@@ -57,31 +67,34 @@ class EditorModelSceneRenderer final {
     render::ResourceHandle fragmentShader_{};
     render::ResourceHandle pipeline_{};
     std::unordered_map<assets::AssetId, GeometryResource> geometry_;
-    std::unordered_map<std::uint64_t, render::ResourceHandle> objectBuffers_;
+    std::unordered_map<std::uint64_t, ObjectResource> objectBuffers_;
+    std::vector<std::uint8_t> sceneFrameBytes_;
     std::uint64_t sceneRevision_{0};
     std::string pipelineColorFormat_{};
     bool pipelineDepth_{false};
 
-    void clear_pipeline(render::Renderer& renderer) noexcept;
+    void clear_pipeline(render::Renderer &renderer) noexcept;
 
-public:
-    EditorModelSceneRenderState render(
-        render::Renderer& renderer,
-        const std::vector<EditorModelSceneInstance>& instances,
-        const math::Mat4& viewProjection,
-        math::Vec3 cameraPosition,
-        render::ResourceHandle colorTarget = {}, render::ResourceHandle depthTarget = {});
+  public:
+    EditorModelSceneRenderState render(render::Renderer &renderer,
+                                       const std::vector<EditorModelSceneInstance> &instances,
+                                       const math::Mat4 &viewProjection, math::Vec3 cameraPosition,
+                                       render::ResourceHandle colorTarget = {},
+                                       render::ResourceHandle depthTarget = {});
 
     // Called after a frame with the active identities. This makes deletion or
     // replacement of scene references reclaim persistent GPU buffers instead
     // of growing a cache for the lifetime of the editor process.
-    void prune(render::Renderer& renderer,
-               const std::vector<assets::AssetId>& activeAssets,
-               const std::vector<std::uint64_t>& activeObjects) noexcept;
-    void clear(render::Renderer& renderer) noexcept;
+    void prune(render::Renderer &renderer, const std::vector<assets::AssetId> &activeAssets,
+               const std::vector<std::uint64_t> &activeObjects) noexcept;
+    void clear(render::Renderer &renderer) noexcept;
 
-    std::size_t cached_asset_count() const noexcept { return geometry_.size(); }
-    std::size_t cached_object_count() const noexcept { return objectBuffers_.size(); }
+    std::size_t cached_asset_count() const noexcept {
+        return geometry_.size();
+    }
+    std::size_t cached_object_count() const noexcept {
+        return objectBuffers_.size();
+    }
 };
 
 } // namespace shinkou::editor

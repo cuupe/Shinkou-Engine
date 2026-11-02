@@ -41,11 +41,11 @@ struct RenderFeaturePlan {
     std::vector<RenderFeatureDecision> decisions;
     std::vector<RenderFeature> executionOrder;
 
-    const RenderFeatureDecision* decision(RenderFeature feature) const noexcept;
+    const RenderFeatureDecision *decision(RenderFeature feature) const noexcept;
 };
 
-const char* to_string(RenderFeature feature) noexcept;
-RenderFeaturePlan build_render_feature_plan(const RenderCapabilities& capabilities,
-                                            const std::vector<RenderFeatureRequest>& requests);
+const char *to_string(RenderFeature feature) noexcept;
+RenderFeaturePlan build_render_feature_plan(const RenderCapabilities &capabilities,
+                                            const std::vector<RenderFeatureRequest> &requests);
 
 } // namespace shinkou::render

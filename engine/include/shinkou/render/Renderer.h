@@ -6,18 +6,18 @@
 #include <unordered_map>
 #include <vector>
 
-namespace shinkou::ui { class UiRenderList; }
-
 namespace shinkou::render {
 class Renderer {
     std::unique_ptr<IRenderBackend> backend_;
     RenderGraph graph_;
-public:
+
+  public:
     struct PersistentResource {
         ResourceHandle handle;
         ResourceDesc description;
     };
-private:
+
+  private:
     std::vector<PersistentResource> persistentResources_;
     std::unordered_map<std::string, ResourceHandle> pipelineCache_;
     std::unordered_map<std::string, ResourceHandle> shaderCache_;
@@ -32,8 +32,7 @@ private:
     // transient resources (0x80000000..0xffffffff).
     std::uint32_t nextPersistentResource_{0x40000000u};
     std::uint32_t nextPersistentBindlessTable_{0x40000000u};
-    ImDrawData* imguiDrawData_{nullptr};
-    const ::shinkou::ui::UiRenderList* editorUiRenderList_{nullptr};
+    ImDrawData *imguiDrawData_{nullptr};
     bool imguiReady_{false};
     bool initialized_{false};
     bool editorFrameActive_{false};
@@ -42,10 +41,11 @@ private:
     BackendApi api_{BackendApi::Null};
     RenderBackendConfig config_{};
     ResourceHandle allocate_persistent_resource(ResourceKind kind) noexcept;
-    PersistentResource* find_persistent_resource(ResourceHandle handle) noexcept;
-    const PersistentResource* find_persistent_resource(ResourceHandle handle) const noexcept;
-    bool restore_persistent_state(IRenderBackend& backend);
-public:
+    PersistentResource *find_persistent_resource(ResourceHandle handle) noexcept;
+    const PersistentResource *find_persistent_resource(ResourceHandle handle) const noexcept;
+    bool restore_persistent_state(IRenderBackend &backend);
+
+  public:
     explicit Renderer(BackendApi api = BackendApi::Null, RenderBackendConfig config = {});
     ~Renderer();
     bool initialize();
@@ -54,10 +54,11 @@ public:
     void invalidate_imgui_fonts();
     std::uint64_t imgui_texture(ResourceHandle texture);
     void shutdown_imgui();
-    bool imgui_ready() const noexcept { return imguiReady_; }
-    void set_imgui_draw_data(ImDrawData* drawData) noexcept { imguiDrawData_ = drawData; }
-    void set_editor_ui_render_list(const ::shinkou::ui::UiRenderList* renderList) noexcept {
-        editorUiRenderList_ = renderList;
+    bool imgui_ready() const noexcept {
+        return imguiReady_;
+    }
+    void set_imgui_draw_data(ImDrawData *drawData) noexcept {
+        imguiDrawData_ = drawData;
     }
     // Starts a per-frame editor contract. A RenderView integration must call
     // set_editor_viewport() after this and before adding scene passes. The
@@ -66,42 +67,52 @@ public:
     void begin_editor_frame() noexcept;
     bool set_editor_viewport(EditorViewportSeam seam);
     void clear_editor_viewport() noexcept;
-    const EditorViewportSeam& editor_viewport() const noexcept { return editorViewport_; }
-    bool editor_frame_active() const noexcept { return editorFrameActive_; }
+    const EditorViewportSeam &editor_viewport() const noexcept {
+        return editorViewport_;
+    }
+    bool editor_frame_active() const noexcept {
+        return editorFrameActive_;
+    }
     bool recover();
     bool resize(std::uint32_t width, std::uint32_t height);
     void set_config(RenderBackendConfig config);
     void begin_graph();
-    RenderGraph& graph() noexcept { return graph_; }
-    const RenderGraph& graph() const noexcept { return graph_; }
-    ResourceHandle create_texture(const TextureDesc& description);
-    ResourceHandle create_sampler(const SamplerDesc& description);
-    ResourceHandle create_depth_stencil(const TextureDesc& description);
-    ResourceHandle create_buffer(const BufferDesc& description);
-    ResourceHandle create_shader(const ShaderDesc& description);
-    bool reload_shader(ResourceHandle shader, const ShaderDesc& description);
-    ResourceHandle create_pipeline(const PipelineDesc& description);
-    ResourceHandle create_material(const MaterialDesc& description);
-    bool update_material(ResourceHandle material, const MaterialDesc& description);
-    bool update_material_binding(ResourceHandle material, const DescriptorBinding& binding);
-    const ResourceDesc* resource_description(ResourceHandle handle) const noexcept;
+    RenderGraph &graph() noexcept {
+        return graph_;
+    }
+    const RenderGraph &graph() const noexcept {
+        return graph_;
+    }
+    ResourceHandle create_texture(const TextureDesc &description);
+    ResourceHandle create_sampler(const SamplerDesc &description);
+    ResourceHandle create_depth_stencil(const TextureDesc &description);
+    ResourceHandle create_buffer(const BufferDesc &description);
+    ResourceHandle create_shader(const ShaderDesc &description);
+    bool reload_shader(ResourceHandle shader, const ShaderDesc &description);
+    ResourceHandle create_pipeline(const PipelineDesc &description);
+    ResourceHandle create_material(const MaterialDesc &description);
+    bool update_material(ResourceHandle material, const MaterialDesc &description);
+    bool update_material_binding(ResourceHandle material, const DescriptorBinding &binding);
+    const ResourceDesc *resource_description(ResourceHandle handle) const noexcept;
     void destroy_resource(ResourceHandle handle);
-    bool update_buffer(const BufferUpdate& update);
-    bool update_texture(const TextureUpdate& update);
-    bool read_texture(const TextureReadbackRequest& request, TextureReadback& result);
+    bool update_buffer(const BufferUpdate &update);
+    bool update_texture(const TextureUpdate &update);
+    bool read_texture(const TextureReadbackRequest &request, TextureReadback &result);
     bool generate_mips(ResourceHandle texture);
-    BindlessTableHandle create_bindless_table(const BindlessTableDesc& description);
+    BindlessTableHandle create_bindless_table(const BindlessTableDesc &description);
     bool update_bindless(BindlessTableHandle table, std::uint32_t slot, ResourceHandle resource,
                          DescriptorType type = DescriptorType::Texture);
     void destroy_bindless_table(BindlessTableHandle table);
     void bind_bindless_table(BindlessTableHandle table);
-    const std::string& last_error() const noexcept { return lastError_; }
+    const std::string &last_error() const noexcept {
+        return lastError_;
+    }
     const RenderCapabilities capabilities() const noexcept;
     const RenderStats stats() const noexcept;
     // Executes an explicitly supplied graph through the active renderer. This
     // is the public graph seam for tools and tests; callers do not need (and
     // must not obtain) the concrete backend object.
-    bool execute_graph(RenderGraph& graph, std::string* error = nullptr);
+    bool execute_graph(RenderGraph &graph, std::string *error = nullptr);
     // High-level UI capture seam. Upper layers must not reach through the
     // renderer to call backend-specific services directly.
     void request_ui_capture() noexcept;
@@ -111,4 +122,4 @@ public:
     void wait_idle() noexcept;
     void submit();
 };
-}
+} // namespace shinkou::render

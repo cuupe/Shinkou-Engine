@@ -1,50 +1,14 @@
-# Shinkou UI system
+# UI 模块与编辑器的边界
 
-The UI stack is split into four layers so the engine is not coupled to ImGui or
-to a particular desktop backend:
+主编辑器使用 Dear ImGui Docking，通过官方 Win32 输入和 DX11、DX12、Vulkan GPU backend 展示。生命周期、文件事务、资源加载、命令和撤销由 EditorLayer 管理；控件由 EditorImGuiView 及分拆文件实现。完整开发入口见 [UIWorkflow](../../docs/UIWorkflow.md)。
 
-1. **UI runtime** owns the retained widget tree, measurement/arrangement,
-   pointer hit testing, focus/capture and dirty-state accounting.
-2. **Style system** owns semantic colors, metrics and typography. Built-in
-   dark, light and high-contrast themes are data, not renderer code, and can be
-   overridden or loaded from JSON.
-3. **Workspace system** owns editor panels and their dock tree. A workspace is
-   a split/tab/floating tree with minimum-size constraints, active tabs and
-   visibility. Its JSON is versioned and independent from ImGui's ini format.
-4. **Adapters** translate the runtime draw commands and input events to a
-   renderer/backend. The current editor keeps the existing ImGui adapter for
-   compatibility; native and remote adapters can consume the same models.
+engine/include/shinkou/ui 保留通用的独立 UI API：
 
-## Delivery plan and ownership
+- Theme、Style：语义颜色、尺寸、字体及 JSON 配置。
+- Media：引擎音频/视频传输接口。
+- Render：不可变图像、模型、文本等快照及通用命令数据。
+- Ui、Components、InputBridge、ImGuiAdapter：供独立使用者选择的 retained runtime、组件和适配器，保留各自测试，不构成编辑器的回退路径。
 
-| Workstream | Ownership | Output | Integration gate |
-| --- | --- | --- | --- |
-| Runtime | UI runtime worker | `shinkou/ui/Ui.*` and runtime tests | deterministic layout, hit-test and event tests |
-| Theme | Style worker | `shinkou/ui/Theme.*` and theme tests | JSON round-trip and contrast checks |
-| Workspace | Docking worker | `shinkou/editor/DockLayout.*` and workspace tests | malformed-data safety and min-size normalization |
-| Editor integration | engine maintainer | `EditorLayer`, CMake and docs | existing editor model/tests stay green |
-| Verification | engine maintainer | build/CTest and sample smoke test | headless build plus optional ImGui build |
+编辑器不拥有 UiRuntime 或 ComponentDocument，不生成 retained UI 绘制列表，渲染 backend 不再提供 render_editor_ui。增加编辑器功能时复用 EditorImGuiWidgets、EditorAssetBrowser 和控制器 API，避免另建控件树、命中系统或平行状态。
 
-The first milestone intentionally provides deterministic data models and
-headless tests. Rendering adapters can then be added without changing layout,
-theme or persistence formats. Each persisted format carries a schema/version
-field and unknown fields are ignored for forward compatibility.
-
-## Performance rules
-
-- Layout is recomputed only for dirty subtrees; unchanged subtrees reuse their
-  measured size and arranged rectangles. During a parent reflow, a clean child
-  is also reused when its arranged rectangle is unchanged; moved flow/flex
-  siblings still recurse through layout. `UiRuntime::FrameStats::layoutNodeCount`
-  exposes the amount of layout work for regression tests and profiling.
-- Hit testing visits children in reverse paint order and stops at the first
-  captured or consumed target.
-- Workspace operations mutate the dock tree and normalize once at the end,
-  avoiding per-frame allocations.
-- Persistence happens on explicit save/shutdown, never on every frame.
-
-## Persistence locations
-
-Engine-owned editor workspaces live under `Saved/Editor/Layouts/`. The engine
-workspace JSON and backend-specific ini/config files remain separate so a
-backend can be replaced without invalidating editor state.
+EditorUiModel 是反射属性、层级、构建和媒体的展示快照。DockWorkspace 是版本化工作区数据；实际编辑器停靠布局使用 ImGui 的 .imgui.ini。二者都不是 renderer。

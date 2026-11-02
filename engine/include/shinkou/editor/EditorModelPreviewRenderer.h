@@ -9,8 +9,12 @@
 #include <memory>
 #include <string>
 
-namespace shinkou::render { class Renderer; }
-namespace shinkou::ui { struct UiImageSnapshot; }
+namespace shinkou::render {
+class Renderer;
+}
+namespace shinkou::ui {
+struct UiImageSnapshot;
+}
 
 namespace shinkou::editor {
 
@@ -100,23 +104,29 @@ class EditorModelPreviewRenderer final {
     std::uint32_t compositeTextureId_{0};
     std::uint32_t compositeSamplerId_{0};
 
-    void clear_pipeline(render::Renderer& renderer) noexcept;
+    void clear_pipeline(render::Renderer &renderer) noexcept;
 
-public:
-    EditorModelPreviewRenderState render(
-        render::Renderer& renderer,
-        const EditorModelPreviewSnapshot& snapshot,
-        const EditorModelPreviewSceneState& scene,
-        std::int32_t materialIndex,
-        std::shared_ptr<const ui::UiImageSnapshot> textureSnapshot = {},
-        EditorModelPreviewTextureRole textureRole = EditorModelPreviewTextureRole::BaseColor,
-        bool compositeToViewport = true, bool wireframe = false);
+  public:
+    EditorModelPreviewRenderState
+    render(render::Renderer &renderer, const EditorModelPreviewSnapshot &snapshot,
+           const EditorModelPreviewSceneState &scene, std::int32_t materialIndex,
+           std::shared_ptr<const ui::UiImageSnapshot> textureSnapshot = {},
+           EditorModelPreviewTextureRole textureRole = EditorModelPreviewTextureRole::BaseColor,
+           bool compositeToViewport = true, bool wireframe = false);
 
-    void clear(render::Renderer& renderer) noexcept;
-    const render::ResourceHandle& vertex_buffer() const noexcept { return vertexBuffer_; }
-    const render::ResourceHandle& index_buffer() const noexcept { return indexBuffer_; }
-    const render::ResourceHandle& offscreen_color() const noexcept { return offscreenColor_; }
-    const render::ResourceHandle& offscreen_depth() const noexcept { return offscreenDepth_; }
+    void clear(render::Renderer &renderer) noexcept;
+    const render::ResourceHandle &vertex_buffer() const noexcept {
+        return vertexBuffer_;
+    }
+    const render::ResourceHandle &index_buffer() const noexcept {
+        return indexBuffer_;
+    }
+    const render::ResourceHandle &offscreen_color() const noexcept {
+        return offscreenColor_;
+    }
+    const render::ResourceHandle &offscreen_depth() const noexcept {
+        return offscreenDepth_;
+    }
 };
 
 } // namespace shinkou::editor

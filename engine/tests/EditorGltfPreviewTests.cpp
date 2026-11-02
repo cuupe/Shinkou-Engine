@@ -194,7 +194,7 @@ int main() {
            (*gltf.snapshot->textureCoordinates)[1].x == 1.0f &&
            (*gltf.snapshot->textureCoordinates)[2].y == 0.0f &&
            gltf.snapshot->normals && gltf.snapshot->normals->size() == 3 &&
-           (*gltf.snapshot->normals)[0].z == 1.0f &&
+           (*gltf.snapshot->normals)[0].z == -1.0f &&
            gltf.snapshot->images && gltf.snapshot->images->front().mimeType == "image/png" &&
            gltf.snapshot->imageArtifacts && gltf.snapshot->imageArtifacts->size() == 1 &&
            gltf.snapshot->imageArtifacts->front().valid() &&
@@ -212,6 +212,43 @@ int main() {
            (*animated.snapshot->animations)[0].playableChannelCount == 1 &&
            (*animated.snapshot->animations)[0].duration == 1.0f &&
            (*animated.snapshot->animations)[0].cpuClip);
+
+    // Asymmetric source data checks geometry, winding, bind TRS and animated
+    // quaternion in the same left-handed basis, including non-uniform scale.
+    auto basisBytes = animated_triangle_binary();
+    const float sourceZ[]{2.0f, -3.0f, 4.0f};
+    for (std::size_t i = 0; i < 3; ++i)
+        std::memcpy(basisBytes.data() + (i * 3 + 2) * sizeof(float), &sourceZ[i], sizeof(float));
+    const float sourceQuaternion[]{0.5f, 0.5f, 0.5f, 0.5f};
+    std::memcpy(basisBytes.data() + 126, sourceQuaternion, sizeof(sourceQuaternion));
+    {
+        std::ofstream output(root / "assets/basis.bin", std::ios::binary);
+        output.write(reinterpret_cast<const char*>(basisBytes.data()), static_cast<std::streamsize>(basisBytes.size()));
+    }
+    auto basisJson = animated_triangle_json();
+    basisJson.replace(basisJson.find("animated.bin"), std::string("animated.bin").size(), "basis.bin");
+    const std::string node = R"({"name":"TriangleRoot","mesh":0})";
+    basisJson.replace(basisJson.find(node), node.size(),
+        R"({"name":"TriangleRoot","mesh":0,"translation":[1,2,3],"rotation":[0.5,0.5,0.5,0.5],"scale":[2,3,4]})");
+    const auto basis = shinkou::editor::load_editor_gltf_preview_bytes(files, "assets/basis.gltf",
+        std::vector<std::uint8_t>(basisJson.begin(), basisJson.end()), 42, 102);
+    assert(basis.snapshot && basis.snapshot->valid());
+    const auto& positions = *basis.snapshot->vertices;
+    const auto& winding = *basis.snapshot->indices;
+    assert(positions[0].z == -2 && positions[1].z == 3 && positions[2].z == -4);
+    assert(winding[0] == 0 && winding[1] == 2 && winding[2] == 1);
+    const auto& bind = basis.snapshot->animationSkeleton->bindPose[0];
+    assert(bind.position.x == 1 && bind.position.y == 2 && bind.position.z == -3);
+    assert(bind.scale.x == 2 && bind.scale.y == 3 && bind.scale.z == 4);
+    assert(bind.rotation.x == -0.5f && bind.rotation.y == -0.5f && bind.rotation.z == 0.5f && bind.rotation.w == 0.5f);
+    const auto& rotationKey = basis.snapshot->animations->front().cpuClip->track(0).rotations.back().value;
+    assert(rotationKey.x == -0.5f && rotationKey.y == -0.5f && rotationKey.z == 0.5f && rotationKey.w == 0.5f);
+    const auto enginePoint = shinkou::math::TransformPoint(shinkou::math::TransformMatrix(bind), positions[0]);
+    shinkou::math::Transform sourceTransform;
+    sourceTransform.position = {1,2,3}; sourceTransform.rotation = {0.5f,0.5f,0.5f,0.5f}; sourceTransform.scale = {2,3,4};
+    auto sourcePoint = shinkou::math::TransformPoint(shinkou::math::TransformMatrix(sourceTransform), {-1,-1,2});
+    sourcePoint.z = -sourcePoint.z;
+    assert(shinkou::math::Length(enginePoint - sourcePoint) < 1.0e-5f);
 
     const auto glb = shinkou::editor::load_editor_model_preview(files, "assets/triangle.glb", 5, 11);
     assert(glb.snapshot && glb.snapshot->valid());

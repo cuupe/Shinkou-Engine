@@ -9,33 +9,32 @@ namespace {
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
-void hash_bytes(std::uint64_t& hash, const void* data, std::size_t size) noexcept {
-    const auto* bytes = static_cast<const unsigned char*>(data);
+void hash_bytes(std::uint64_t &hash, const void *data, std::size_t size) noexcept {
+    const auto *bytes = static_cast<const unsigned char *>(data);
     for (std::size_t index = 0; index < size; ++index) {
         hash ^= bytes[index];
         hash *= kFnvPrime;
     }
 }
 
-template<class T>
-void hash_value(std::uint64_t& hash, const T& value) noexcept {
+template <class T> void hash_value(std::uint64_t &hash, const T &value) noexcept {
     hash_bytes(hash, &value, sizeof(value));
 }
 
-void hash_string(std::uint64_t& hash, std::string_view value) noexcept {
+void hash_string(std::uint64_t &hash, std::string_view value) noexcept {
     const auto size = static_cast<std::uint64_t>(value.size());
     hash_value(hash, size);
     hash_bytes(hash, value.data(), value.size());
 }
 
-void hash_float(std::uint64_t& hash, float value) noexcept {
+void hash_float(std::uint64_t &hash, float value) noexcept {
     std::uint32_t bits = 0;
     static_assert(sizeof(bits) == sizeof(value));
     std::memcpy(&bits, &value, sizeof(bits));
     hash_value(hash, bits);
 }
 
-void hash_color(std::uint64_t& hash, const shinkou::ui::ThemeColor& color) noexcept {
+void hash_color(std::uint64_t &hash, const shinkou::ui::ThemeColor &color) noexcept {
     hash_float(hash, color.r);
     hash_float(hash, color.g);
     hash_float(hash, color.b);
@@ -47,10 +46,11 @@ void hash_color(std::uint64_t& hash, const shinkou::ui::ThemeColor& color) noexc
 namespace shinkou::ui {
 
 std::uint64_t UiRenderList::content_hash() const noexcept {
-    if (contentHashValid_) return contentHash_;
+    if (contentHashValid_)
+        return contentHash_;
     std::uint64_t hash = kFnvOffset;
     hash_float(hash, dpiScale_);
-    for (const auto& command : commands_) {
+    for (const auto &command : commands_) {
         hash_value(hash, command.type);
         hash_float(hash, command.rect.x);
         hash_float(hash, command.rect.y);
@@ -83,7 +83,7 @@ std::uint64_t UiRenderList::content_hash() const noexcept {
         if (command.pathPoints) {
             const auto count = static_cast<std::uint64_t>(command.pathPoints->size());
             hash_value(hash, count);
-            for (const auto& point : *command.pathPoints) {
+            for (const auto &point : *command.pathPoints) {
                 hash_float(hash, point.x);
                 hash_float(hash, point.y);
             }
@@ -183,8 +183,8 @@ void UiRenderList::image(Rect bounds, std::shared_ptr<const UiImageSnapshot> sna
 }
 
 void UiRenderList::path(Rect bounds, std::shared_ptr<const std::vector<Vec2>> points,
-                        ThemeColor fill, ThemeColor stroke, float thickness,
-                        bool closed, bool normalized) {
+                        ThemeColor fill, ThemeColor stroke, float thickness, bool closed,
+                        bool normalized) {
     UiDrawCommand command;
     command.type = DrawCommandType::Path;
     command.rect = bounds;
@@ -217,13 +217,16 @@ void UiRenderList::end_clip() {
 VirtualRange visible_range(std::size_t itemCount, float itemExtent, float viewportOffset,
                            float viewportExtent, std::size_t overscan) noexcept {
     if (itemCount == 0 || !std::isfinite(itemExtent) || itemExtent <= 0.0f ||
-        !std::isfinite(viewportOffset) || !std::isfinite(viewportExtent) || viewportExtent <= 0.0f) {
-        return {0, 0, itemCount == 0 ? 0.0f : std::max(0.0f, itemExtent) * static_cast<float>(itemCount)};
+        !std::isfinite(viewportOffset) || !std::isfinite(viewportExtent) ||
+        viewportExtent <= 0.0f) {
+        return {0, 0,
+                itemCount == 0 ? 0.0f : std::max(0.0f, itemExtent) * static_cast<float>(itemCount)};
     }
     const float clampedOffset = std::max(0.0f, viewportOffset);
-    const std::size_t first = std::min(itemCount,
-        static_cast<std::size_t>(std::floor(clampedOffset / itemExtent)) > overscan
-            ? static_cast<std::size_t>(std::floor(clampedOffset / itemExtent)) - overscan : 0u);
+    const std::size_t first = std::min(
+        itemCount, static_cast<std::size_t>(std::floor(clampedOffset / itemExtent)) > overscan
+                       ? static_cast<std::size_t>(std::floor(clampedOffset / itemExtent)) - overscan
+                       : 0u);
     const auto visibleCount = static_cast<std::size_t>(std::ceil(viewportExtent / itemExtent));
     const std::size_t last = std::min(itemCount, first + visibleCount + overscan * 2u + 1u);
     return {first, last, itemExtent * static_cast<float>(itemCount)};

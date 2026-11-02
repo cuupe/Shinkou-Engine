@@ -12,7 +12,9 @@ namespace shinkou::render {
 struct RenderDescriptorValidationResult {
     std::vector<std::string> errors;
 
-    bool valid() const noexcept { return errors.empty(); }
+    bool valid() const noexcept {
+        return errors.empty();
+    }
 };
 
 struct IblParameters {
@@ -45,8 +47,8 @@ struct PbrMaterialDesc {
     IblParameters ibl{};
 };
 
-RenderDescriptorValidationResult validate_pbr_material(const PbrMaterialDesc& material);
-RenderDescriptorValidationResult validate_light_component(const LightComponent& light);
+RenderDescriptorValidationResult validate_pbr_material(const PbrMaterialDesc &material);
+RenderDescriptorValidationResult validate_light_component(const LightComponent &light);
 
 struct PbrMeshVertex {
     math::Vec3 position{};
@@ -59,16 +61,21 @@ struct PbrMeshVertex {
 // prefiltered specular mip levels and a two-channel BRDF integration LUT.
 class PbrMaterialLibrary {
     std::vector<ResourceHandle> owned_;
-    ResourceHandle vertex_{},fragment_{},sampler_{},white_{},normal_{},black_{};
-    ResourceHandle scene_{},object_{},lights_{},shadowFrame_{},shadowPipeline_{};
+    ResourceHandle vertex_{}, fragment_{}, sampler_{}, white_{}, normal_{}, black_{};
+    ResourceHandle scene_{}, object_{}, lights_{}, shadowFrame_{}, shadowPipeline_{};
     std::string colorFormat_;
     std::string error_;
-public:
-    bool initialize(Renderer& renderer,std::string colorFormat="rgba16f");
-    ResourceHandle create_material(Renderer& renderer,const PbrMaterialDesc& material);
-    void release(Renderer& renderer);
-    const std::string& last_error() const noexcept { return error_; }
-    ResourceHandle shadow_pipeline() const noexcept { return shadowPipeline_; }
+
+  public:
+    bool initialize(Renderer &renderer, std::string colorFormat = "rgba16f");
+    ResourceHandle create_material(Renderer &renderer, const PbrMaterialDesc &material);
+    void release(Renderer &renderer);
+    const std::string &last_error() const noexcept {
+        return error_;
+    }
+    ResourceHandle shadow_pipeline() const noexcept {
+        return shadowPipeline_;
+    }
 };
 
 struct LightClusterDesc {
@@ -89,8 +96,8 @@ struct LightClusterGrid {
     std::uint64_t clusterCount{0};
 };
 
-RenderDescriptorValidationResult validate_light_cluster_desc(const LightClusterDesc& description);
-LightClusterGrid make_light_cluster_grid(const LightClusterDesc& description);
+RenderDescriptorValidationResult validate_light_cluster_desc(const LightClusterDesc &description);
+LightClusterGrid make_light_cluster_grid(const LightClusterDesc &description);
 
 struct LightClusterBuildResult {
     LightClusterGrid grid{};
@@ -103,14 +110,17 @@ struct LightClusterBuildResult {
     std::size_t overflowLightCount{0};
     RenderDescriptorValidationResult validation;
 
-    bool valid() const noexcept { return validation.valid(); }
+    bool valid() const noexcept {
+        return validation.valid();
+    }
 };
 
 // Produces a deterministic CPU-side cluster layout for validation, tooling,
 // and upload preparation. A backend may replace the actual culling work with
 // the scheduled compute pass without changing this data contract.
-LightClusterBuildResult build_light_clusters(const LightClusterDesc& description,
-    const RenderView& view, const std::vector<LightRenderItem>& lights);
+LightClusterBuildResult build_light_clusters(const LightClusterDesc &description,
+                                             const RenderView &view,
+                                             const std::vector<LightRenderItem> &lights);
 
 struct ClusteredLightingDesc {
     LightClusterDesc grid{};
@@ -136,13 +146,15 @@ struct ClusteredLightingPlan {
     LightClusterBuildResult build;
     RenderDescriptorValidationResult validation;
 
-    bool valid() const noexcept { return scheduled && validation.valid() && build.valid(); }
+    bool valid() const noexcept {
+        return scheduled && validation.valid() && build.valid();
+    }
 };
 
 class ClusteredForwardScheduler {
-public:
-    static ClusteredLightingPlan schedule(RenderGraph& graph, const RenderScene& scene,
-        const ClusteredLightingDesc& description);
+  public:
+    static ClusteredLightingPlan schedule(RenderGraph &graph, const RenderScene &scene,
+                                          const ClusteredLightingDesc &description);
 };
 
-}
+} // namespace shinkou::render

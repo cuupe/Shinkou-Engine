@@ -22,12 +22,14 @@ struct BindlessHandle {
     std::uint32_t pool{0};
     std::uint32_t slot{0};
 
-    explicit operator bool() const noexcept { return index != 0 && generation != 0 && pool != 0; }
-    friend bool operator==(const BindlessHandle& lhs, const BindlessHandle& rhs) noexcept {
-        return lhs.index == rhs.index && lhs.generation == rhs.generation && lhs.type == rhs.type &&
-            lhs.pool == rhs.pool && lhs.slot == rhs.slot;
+    explicit operator bool() const noexcept {
+        return index != 0 && generation != 0 && pool != 0;
     }
-    friend bool operator!=(const BindlessHandle& lhs, const BindlessHandle& rhs) noexcept {
+    friend bool operator==(const BindlessHandle &lhs, const BindlessHandle &rhs) noexcept {
+        return lhs.index == rhs.index && lhs.generation == rhs.generation && lhs.type == rhs.type &&
+               lhs.pool == rhs.pool && lhs.slot == rhs.slot;
+    }
+    friend bool operator!=(const BindlessHandle &lhs, const BindlessHandle &rhs) noexcept {
         return !(lhs == rhs);
     }
 };
@@ -35,11 +37,7 @@ struct BindlessHandle {
 using DescriptorHandle = BindlessHandle;
 using DescriptorPoolId = std::uint32_t;
 
-enum class DescriptorPoolVisibility {
-    CpuOnly,
-    ShaderVisible,
-    CpuAndShaderVisible
-};
+enum class DescriptorPoolVisibility { CpuOnly, ShaderVisible, CpuAndShaderVisible };
 
 enum class DescriptorOperationResult {
     Success,
@@ -66,7 +64,9 @@ struct DescriptorPoolDesc {
 // The allocator never interprets the value.
 struct DescriptorPoolBackendHandle {
     std::uint64_t value{0};
-    explicit operator bool() const noexcept { return value != 0; }
+    explicit operator bool() const noexcept {
+        return value != 0;
+    }
 };
 
 struct DescriptorPoolCreateInfo {
@@ -81,10 +81,10 @@ struct DescriptorPoolCreateInfo {
 // writes remain a renderer/backend concern because D3D12, Vulkan and D3D11
 // expose different write and retirement semantics.
 class IDescriptorPoolBackend {
-public:
+  public:
     virtual ~IDescriptorPoolBackend() = default;
-    virtual bool create_pool(const DescriptorPoolCreateInfo& description,
-                             DescriptorPoolBackendHandle& backendHandle) = 0;
+    virtual bool create_pool(const DescriptorPoolCreateInfo &description,
+                             DescriptorPoolBackendHandle &backendHandle) = 0;
     virtual void destroy_pool(DescriptorPoolBackendHandle backendHandle) noexcept = 0;
 };
 
@@ -95,7 +95,9 @@ struct DescriptorLocation {
     DescriptorType type{DescriptorType::Texture};
     DescriptorPoolBackendHandle backendPool{};
 
-    explicit operator bool() const noexcept { return pool != 0; }
+    explicit operator bool() const noexcept {
+        return pool != 0;
+    }
 };
 
 struct DescriptorPoolStats {
@@ -113,10 +115,10 @@ struct DescriptorAllocatorConfig {
     std::uint32_t initialPoolCapacity{256};
     std::uint32_t growthFactor{2};
     std::uint32_t maxPoolCapacity{65536};
-    std::uint32_t maxPools{0}; // zero means unlimited, subject to the budget.
+    std::uint32_t maxPools{0};         // zero means unlimited, subject to the budget.
     std::uint64_t descriptorBudget{0}; // zero means unlimited reserved capacity.
     DescriptorPoolVisibility visibility{DescriptorPoolVisibility::ShaderVisible};
-    IDescriptorPoolBackend* backend{nullptr}; // non-owning; must outlive allocator.
+    IDescriptorPoolBackend *backend{nullptr}; // non-owning; must outlive allocator.
 };
 
 struct DescriptorAllocatorStats {
@@ -141,12 +143,13 @@ struct DescriptorAllocatorStats {
 // A fixed-size pool. DescriptorAllocator owns and grows a set of these pools;
 // a pool never moves its slots or changes capacity after construction.
 class DescriptorPool final {
-public:
-    DescriptorPool(DescriptorPoolId id, std::uint32_t logicalBaseIndex, DescriptorPoolDesc description);
+  public:
+    DescriptorPool(DescriptorPoolId id, std::uint32_t logicalBaseIndex,
+                   DescriptorPoolDesc description);
     ~DescriptorPool() = default;
 
-    DescriptorPool(const DescriptorPool&) = delete;
-    DescriptorPool& operator=(const DescriptorPool&) = delete;
+    DescriptorPool(const DescriptorPool &) = delete;
+    DescriptorPool &operator=(const DescriptorPool &) = delete;
 
     std::optional<BindlessHandle> allocate();
     DescriptorOperationResult release(BindlessHandle handle);
@@ -154,11 +157,17 @@ public:
     std::optional<DescriptorLocation> resolve(BindlessHandle handle,
                                               DescriptorPoolBackendHandle backendPool = {}) const;
     DescriptorPoolStats stats() const;
-    DescriptorPoolId id() const noexcept { return id_; }
-    const DescriptorPoolDesc& description() const noexcept { return description_; }
-    std::uint32_t logical_base_index() const noexcept { return logicalBaseIndex_; }
+    DescriptorPoolId id() const noexcept {
+        return id_;
+    }
+    const DescriptorPoolDesc &description() const noexcept {
+        return description_;
+    }
+    std::uint32_t logical_base_index() const noexcept {
+        return logicalBaseIndex_;
+    }
 
-private:
+  private:
     struct Slot {
         std::uint32_t generation{1};
         bool allocated{false};
@@ -184,12 +193,12 @@ private:
 // All methods are safe to call concurrently. Backend callbacks are serialized
 // by the allocator mutex and must not re-enter this object.
 class DescriptorAllocator final {
-public:
+  public:
     explicit DescriptorAllocator(DescriptorAllocatorConfig config = {});
     ~DescriptorAllocator();
 
-    DescriptorAllocator(const DescriptorAllocator&) = delete;
-    DescriptorAllocator& operator=(const DescriptorAllocator&) = delete;
+    DescriptorAllocator(const DescriptorAllocator &) = delete;
+    DescriptorAllocator &operator=(const DescriptorAllocator &) = delete;
 
     std::optional<BindlessHandle> allocate(DescriptorType type);
     DescriptorOperationResult release(BindlessHandle handle);
@@ -202,11 +211,11 @@ public:
     std::uint64_t allocated(DescriptorType type) const;
     std::string last_error() const;
 
-private:
-    DescriptorPool* find_pool_unlocked(DescriptorPoolId id) noexcept;
-    const DescriptorPool* find_pool_unlocked(DescriptorPoolId id) const noexcept;
+  private:
+    DescriptorPool *find_pool_unlocked(DescriptorPoolId id) noexcept;
+    const DescriptorPool *find_pool_unlocked(DescriptorPoolId id) const noexcept;
     std::uint32_t next_pool_capacity_unlocked(DescriptorType type) const noexcept;
-    DescriptorPool* create_pool_unlocked(DescriptorType type, std::uint32_t capacity);
+    DescriptorPool *create_pool_unlocked(DescriptorType type, std::uint32_t capacity);
     void set_error_unlocked(DescriptorOperationResult result) const;
 
     const DescriptorAllocatorConfig config_;

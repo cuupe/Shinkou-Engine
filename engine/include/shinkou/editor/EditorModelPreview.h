@@ -120,11 +120,10 @@ struct EditorModelPreviewSnapshot {
     std::shared_ptr<const std::vector<ui::Vec2>> wireSegments{};
 
     bool valid() const noexcept {
-        return revision != 0 && vertexCount > 0 && triangleCount > 0 &&
-            vertices && vertices->size() == vertexCount && indices &&
-            indices->size() >= 3u && indices->size() / 3u == triangleCount &&
-            indices->size() % 3u == 0u && wireSegments &&
-            wireSegments->size() >= 2 && (wireSegments->size() % 2) == 0;
+        return revision != 0 && vertexCount > 0 && triangleCount > 0 && vertices &&
+               vertices->size() == vertexCount && indices && indices->size() >= 3u &&
+               indices->size() / 3u == triangleCount && indices->size() % 3u == 0u &&
+               wireSegments && wireSegments->size() >= 2 && (wireSegments->size() % 2) == 0;
     }
 };
 
@@ -136,32 +135,30 @@ struct EditorModelPreviewResult {
     std::string error;
 };
 
-EditorModelPreviewResult load_editor_model_preview(
-    const FileSystemService& files,
-    std::string_view relativePath,
-    std::uint64_t generation,
-    std::uint64_t sourceStamp,
-    const std::atomic_bool* cancel = nullptr);
+EditorModelPreviewResult load_editor_model_preview(const FileSystemService &files,
+                                                   std::string_view relativePath,
+                                                   std::uint64_t generation,
+                                                   std::uint64_t sourceStamp,
+                                                   const std::atomic_bool *cancel = nullptr);
 
-EditorModelPreviewResult load_editor_fbx_preview(const FileSystemService&, std::string_view,
-    std::uint64_t generation, std::uint64_t sourceStamp, const std::atomic_bool* cancel = nullptr);
+EditorModelPreviewResult load_editor_fbx_preview(const FileSystemService &, std::string_view,
+                                                 std::uint64_t generation,
+                                                 std::uint64_t sourceStamp,
+                                                 const std::atomic_bool *cancel = nullptr);
 
 // AssetSystem can supply the immutable typed source payload directly. The
 // GLTF/GLB overload still resolves project-relative external buffers/images
 // through FileSystemService, while the model container itself is not reopened.
-EditorModelPreviewResult load_editor_obj_preview_bytes(
-    std::string_view relativePath,
-    const std::vector<std::uint8_t>& sourceBytes,
-    std::uint64_t generation,
-    std::uint64_t sourceStamp,
-    const std::atomic_bool* cancel = nullptr);
+EditorModelPreviewResult load_editor_obj_preview_bytes(std::string_view relativePath,
+                                                       const std::vector<std::uint8_t> &sourceBytes,
+                                                       std::uint64_t generation,
+                                                       std::uint64_t sourceStamp,
+                                                       const std::atomic_bool *cancel = nullptr);
 
-EditorModelPreviewResult load_editor_gltf_preview_bytes(
-    const FileSystemService& files,
-    std::string_view relativePath,
-    const std::vector<std::uint8_t>& sourceBytes,
-    std::uint64_t generation,
-    std::uint64_t sourceStamp,
-    const std::atomic_bool* cancel = nullptr);
+EditorModelPreviewResult
+load_editor_gltf_preview_bytes(const FileSystemService &files, std::string_view relativePath,
+                               const std::vector<std::uint8_t> &sourceBytes,
+                               std::uint64_t generation, std::uint64_t sourceStamp,
+                               const std::atomic_bool *cancel = nullptr);
 
 } // namespace shinkou::editor

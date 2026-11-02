@@ -1,0 +1,33 @@
+
+BasedOnStyle: LLVM
+
+# 4空格缩进
+IndentWidth: 4
+UseTab: Never
+
+# 每行最长100字符
+ColumnLimit: 100
+
+# 禁止短循环写成一行
+AllowShortLoopsOnASingleLine: false
+
+# 禁止短代码块写成一行
+AllowShortBlocksOnASingleLine: Never
+
+# 禁止if语句写成一行
+AllowShortIfStatementsOnASingleLine: Never
+
+# 禁止函数写成一行
+AllowShortFunctionsOnASingleLine: None
+
+# 禁止switch的case语句合并
+AllowShortCaseLabelsOnASingleLine: false
+
+# 大括号放在同行
+BreakBeforeBraces: Attach
+
+# 最多保留1个连续空行
+MaxEmptyLinesToKeep: 1
+
+# 指针符号靠近变量
+PointerAlignment: Right

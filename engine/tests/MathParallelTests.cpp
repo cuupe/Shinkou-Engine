@@ -108,6 +108,29 @@ int main() {
     }, 16);
     if (nestedVisits.load(std::memory_order_relaxed) != 256) return 16;
 
+    // All three participants enter nested work simultaneously. A waiter that
+    // cannot help the queue deadlocks when both workers are in child jobs.
+    std::atomic<unsigned> entered{0};
+    std::atomic<unsigned> saturatedVisits{0};
+    executor.for_each(3, [&](std::size_t) {
+        entered.fetch_add(1, std::memory_order_release);
+        while (entered.load(std::memory_order_acquire) != 3)
+            std::this_thread::yield();
+        executor.for_each(16, [&](std::size_t) {
+            saturatedVisits.fetch_add(1, std::memory_order_relaxed);
+        }, 1);
+    }, 1);
+    if (saturatedVisits.load(std::memory_order_relaxed) != 48) return 161;
+
+    // Exercise completion while a submitter transitions into its wait.
+    for (unsigned iteration = 0; iteration < 1000; ++iteration) {
+        std::atomic<unsigned> completions{0};
+        executor.for_each(3, [&](std::size_t) {
+            completions.fetch_add(1, std::memory_order_relaxed);
+        }, 1);
+        if (completions.load(std::memory_order_relaxed) != 3) return 162;
+    }
+
     bool caught = false;
     try {
         executor.for_each(256, [&](std::size_t index) {

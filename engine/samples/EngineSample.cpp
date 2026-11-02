@@ -1,6 +1,7 @@
 #include "shinkou/Engine.h"
 #include "shinkou/physics/SimplePhysicsWorld.h"
 #include "shinkou/render/RenderScene.h"
+#include "shinkou/components/PrimitiveMeshComponent.h"
 #include "shinkou/render/StandardRenderPipeline.h"
 #include <chrono>
 #include <cstdint>
@@ -115,6 +116,7 @@ int main(int argc, char** argv) {
         editorRequested |= argument == "--editor";
         if (argument == "--sample" || argument == "--no-editor") editorRequested = false;
         if (argument == "--audio-fixture") audioFixtureRequested = true;
+        if (argument == "--render-validation") config.enableRenderValidation = true;
         if (argument == "--project" && i + 1 < argc) projectRoot = argv[++i];
         if (argument == "--theme" && i + 1 < argc) { editorTheme = argv[++i]; themeRequested = true; }
         if (argument == "--asset-view" && i + 1 < argc) {
@@ -168,6 +170,9 @@ int main(int argc, char** argv) {
     if (audioFixtureRequested) config.audio.startDevice = false;
     if (editorRequested && !framesRequested) requestedFrames = 0;
     config.editor = editorRequested;
+    // The native swapchain already paces presentation with vsync. A second
+    // sleep_for limiter adds scheduler jitter and can miss the next refresh.
+    if (editorRequested) config.targetFrameRate=0;
     config.window.maximized=editorRequested;
     if (config.editor) config.window.title = "ShinkouEngine Editor";
     shinkou::Engine engine(config);
@@ -213,8 +218,6 @@ int main(int argc, char** argv) {
     // RenderView, selection model and Details panel have live engine data on
     // the first frame instead of an empty placeholder.
     auto& demoScene = engine.world().create_object("Demo Scene");
-    demoScene.create_child("Editor Camera");
-    demoScene.create_child("Directional Light");
     auto& demoMesh=demoScene.create_child("Demo Mesh");
     auto entity = engine.world().ecs().create();
     engine.world().ecs().emplace<Velocity>(entity, Velocity{shinkou::math::Vec3{1, 0, 0}});
@@ -359,20 +362,6 @@ int main(int argc, char** argv) {
     const auto presentMaterial = engine.renderer().create_material({"present_material", displayPipeline, {{"color", color, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
 
     auto meshMaterial = engine.renderer().create_material({"mesh_material", meshPipeline, {{"albedo", spriteTexture, shinkou::render::DescriptorType::Texture, 0, 0}, {"sampler", spriteSampler, shinkou::render::DescriptorType::Sampler, 1, 0}}, false});
-    shinkou::render::PbrMaterialLibrary editorMaterials;
-    shinkou::render::ResourceHandle companionMaterial{},groundMaterial{};
-    if (editorRequested && api==shinkou::render::BackendApi::DirectX11) {
-        if (!editorMaterials.initialize(engine.renderer(),"bgra8")) {std::cerr<<editorMaterials.last_error();return 10;}
-        shinkou::render::PbrMaterialDesc pbr;
-        pbr.name="editor_world_material";pbr.baseColorFactor={0.32f,0.56f,0.82f,1};
-        pbr.metallic=0.15f;pbr.roughness=0.45f;pbr.doubleSided=true;
-        meshMaterial=editorMaterials.create_material(engine.renderer(),pbr);
-        if (!meshMaterial) {std::cerr<<editorMaterials.last_error();return 10;}
-        pbr.name="editor_companion_material";pbr.baseColorFactor={0.8f,0.36f,0.13f,1};pbr.metallic=0.05f;
-        companionMaterial=editorMaterials.create_material(engine.renderer(),pbr);
-        pbr.name="editor_ground_material";pbr.baseColorFactor={0.26f,0.28f,0.31f,1};pbr.metallic=0;pbr.roughness=0.9f;
-        groundMaterial=editorMaterials.create_material(engine.renderer(),pbr);
-    }
     shinkou::render::StandardRenderPipeline standardPipeline;
     if (!editorRequested) {
         shinkou::render::StandardRenderPipelineDesc description;
@@ -384,6 +373,7 @@ int main(int argc, char** argv) {
         }
         shinkou::render::PbrMaterialDesc pbr;
         pbr.name="sample_pbr_material";pbr.baseColorFactor={0.2f,0.5f,0.9f,1};pbr.metallic=0.25f;pbr.roughness=0.4f;pbr.doubleSided=true;
+        engine.renderer().destroy_resource(meshMaterial);
         meshMaterial=standardPipeline.create_material(engine.renderer(),pbr);
         if (!meshMaterial) {std::cerr<<standardPipeline.last_error()<<'\n';return 10;}
         const auto lightEntity=engine.world().ecs().create();
@@ -391,52 +381,20 @@ int main(int argc, char** argv) {
         shinkou::render::LightComponent light;light.intensity=3;light.castsShadow=true;
         engine.world().ecs().emplace<shinkou::render::LightComponent>(lightEntity,light);
     }
-    auto meshEntity = editorRequested ? demoMesh.enable_ecs() : engine.world().ecs().create();
-    shinkou::render::TransformComponent meshTransform;
-    meshTransform.local.position = {0.0f, 0.0f, 0.0f};
-    engine.world().ecs().emplace<shinkou::render::TransformComponent>(meshEntity, meshTransform);
-    engine.world().ecs().emplace<shinkou::render::MeshRendererComponent>(meshEntity,
-        shinkou::render::MeshRendererComponent{vertexBuffer, indexBuffer, meshMaterial, 3, true});
-    if (editorRequested && api==shinkou::render::BackendApi::DirectX11) {
-        using shinkou::math::Vec3;
-        const Vec3 corners[]={{-0.7f,-0.7f,-0.7f},{0.7f,-0.7f,-0.7f},{0.7f,0.7f,-0.7f},{-0.7f,0.7f,-0.7f},
-            {-0.7f,-0.7f,0.7f},{0.7f,-0.7f,0.7f},{0.7f,0.7f,0.7f},{-0.7f,0.7f,0.7f}};
-        const std::uint32_t faces[][4]={{0,3,2,1},{5,6,7,4},{4,7,3,0},{1,2,6,5},{3,7,6,2},{4,0,1,5}};
-        std::vector<shinkou::render::PbrMeshVertex> cubeVertices;
-        std::vector<std::uint32_t> cubeIndices;
-        for (const auto& face:faces) {
-            const auto normal=shinkou::math::Normalize(shinkou::math::Cross(corners[face[1]]-corners[face[0]],corners[face[2]]-corners[face[0]]));
-            const auto base=static_cast<std::uint32_t>(cubeVertices.size());
-            for (const auto corner:face) cubeVertices.push_back({corners[corner],{0,0},normal});
-            for (auto index:{0u,1u,2u,0u,2u,3u}) cubeIndices.push_back(base+index);
-        }
-        shinkou::render::BufferDesc vertices;
-        vertices.size=cubeVertices.size()*sizeof(cubeVertices[0]);vertices.stride=sizeof(cubeVertices[0]);vertices.vertexBuffer=true;
-        vertices.initialData.resize(vertices.size);std::memcpy(vertices.initialData.data(),cubeVertices.data(),vertices.size);
-        shinkou::render::BufferDesc indices;
-        indices.size=cubeIndices.size()*4;indices.stride=4;indices.indexBuffer=true;
-        indices.initialData.resize(indices.size);std::memcpy(indices.initialData.data(),cubeIndices.data(),indices.size);
-        const auto vb=engine.renderer().create_buffer(vertices),ib=engine.renderer().create_buffer(indices);
-        const auto attach=[&](shinkou::GameObject& object,shinkou::math::Vec3 position,shinkou::math::Vec3 scale,shinkou::render::ResourceHandle surface) {
+    if (!editorRequested) {
+        const auto meshEntity=engine.world().ecs().create();
+        engine.world().ecs().emplace<shinkou::render::TransformComponent>(meshEntity,shinkou::render::TransformComponent{});
+        engine.world().ecs().emplace<shinkou::render::MeshRendererComponent>(meshEntity,
+            shinkou::render::MeshRendererComponent{vertexBuffer,indexBuffer,meshMaterial,3,true});
+    } else {
+        const auto attach=[](shinkou::GameObject& object,shinkou::math::Vec3 position,shinkou::math::Vec3 scale,shinkou::math::Vec3 color) {
             object.get_component<shinkou::components::TransformComponent>()->set_position(position);
             object.get_component<shinkou::components::TransformComponent>()->set_scale(scale);
-            const auto e=object.enable_ecs();
-            engine.world().ecs().emplace<shinkou::render::TransformComponent>(e,shinkou::render::TransformComponent{});
-            engine.world().ecs().emplace<shinkou::render::MeshRendererComponent>(e,
-                shinkou::render::MeshRendererComponent{vb,ib,surface,36,true,false,{},1.22f});
+            object.add_component<shinkou::components::PrimitiveMeshComponent>()->set_color(color);
         };
-        // Replace the old sample triangle with real editable World geometry.
-        engine.world().ecs().remove<shinkou::render::TransformComponent>(meshEntity);
-        engine.world().ecs().remove<shinkou::render::MeshRendererComponent>(meshEntity);
-        attach(demoMesh,{-1.0f,0.7f,0},{1,1,1},meshMaterial);
-        auto& second=demoScene.create_child("Companion Mesh");attach(second,{1.1f,0.5f,0.7f},{0.7f,0.7f,0.7f},companionMaterial);
-        auto& floor=demoScene.create_child("Ground");attach(floor,{0,-0.12f,2},{6,0.12f,6},groundMaterial);
-        const auto light=engine.world().ecs().create();
-        shinkou::render::TransformComponent lightTransform;
-        lightTransform.local.rotation=shinkou::math::FromEulerXYZ({0.65f,-0.6f,0});
-        engine.world().ecs().emplace<shinkou::render::TransformComponent>(light,lightTransform);
-        shinkou::render::LightComponent lighting;lighting.intensity=4;
-        engine.world().ecs().emplace<shinkou::render::LightComponent>(light,lighting);
+        attach(demoMesh,{-1.0f,0.7f,0},{1,1,1},{0.32f,0.56f,0.82f});
+        auto& second=demoScene.create_child("Companion Mesh");attach(second,{1.1f,0.5f,0.7f},{0.7f,0.7f,0.7f},{0.8f,0.36f,0.13f});
+        auto& floor=demoScene.create_child("Ground");attach(floor,{0,-0.12f,2},{6,0.12f,6},{0.26f,0.28f,0.31f});
     }
     auto spriteEntity = engine.world().ecs().create();
     shinkou::render::TransformComponent spriteTransform;
@@ -448,7 +406,10 @@ int main(int argc, char** argv) {
     auto cameraEntity = engine.world().ecs().create();
     shinkou::render::TransformComponent cameraTransform;
     cameraTransform.local.position = {0.0f, 0.0f, -5.0f};
-    if (editorRequested) {cameraTransform.local.position={3,2.4f,-6};cameraTransform.local.rotation=shinkou::math::FromEulerXYZ({0.25f,-0.42f,0});}
+    if (editorRequested) {
+        cameraTransform.local.position={3,2.4f,-6};
+        cameraTransform.local.rotation=shinkou::math::FromAxisAngle({0,1,0},-.42f)*shinkou::math::FromAxisAngle({1,0,0},.25f);
+    }
     engine.world().ecs().emplace<shinkou::render::TransformComponent>(cameraEntity, cameraTransform);
     engine.world().ecs().emplace<shinkou::render::CameraComponent>(cameraEntity, shinkou::render::CameraComponent{});
 
@@ -534,7 +495,7 @@ int main(int argc, char** argv) {
     if (editorRequested) {
         const auto viewport = engine.editor().ui_viewport_rect();
         std::cerr << "editor-ui-commands=" << engine.editor().ui_command_count()
-                  << " editor-ui-text=" << engine.editor().ui_text_command_count()
+                  << " editor-ui-labeled-controls=" << engine.editor().ui_labeled_control_count()
                   << " editor-ui-assets=" << engine.editor().ui_asset_file_count()
                   << " editor-ui-visible-assets=" << engine.editor().ui_visible_asset_file_count()
                   << " editor-ui-asset-dir=" << engine.editor().ui_asset_directory()
@@ -555,9 +516,10 @@ int main(int argc, char** argv) {
         }
     }
     if (bindlessTable) engine.renderer().destroy_bindless_table(bindlessTable);
-    engine.renderer().destroy_resource(persistentTexture);
     engine.renderer().destroy_resource(presentMaterial);
     engine.renderer().destroy_resource(material);
+    engine.renderer().destroy_resource(persistentTexture);
+    engine.renderer().destroy_resource(displayPipeline);
     engine.renderer().destroy_resource(meshMaterial);
     engine.renderer().destroy_resource(meshPipeline);
     engine.renderer().destroy_resource(meshVertexShader);
@@ -576,7 +538,7 @@ int main(int argc, char** argv) {
     const auto stats = engine.renderer().stats();
     std::cout << "device-ready=" << capabilities.deviceReady
               << " bindless=" << capabilities.supportsBindless
-              << " native-ui=" << capabilities.supportsNativeUi
+              << " imgui=" << capabilities.supportsImGui
               << " viewport-scissor=" << capabilities.supportsEditorViewportScissor
               << " frames=" << stats.frames
               << " passes=" << stats.passes
@@ -584,6 +546,8 @@ int main(int argc, char** argv) {
 
     const auto& renderGraph = engine.renderer().graph();
     const auto& diagnostics = renderGraph.diagnostics();
+    if(!engine.renderer().last_error().empty())std::cerr<<"renderer-error="<<engine.renderer().last_error()<<'\n';
+    if(!diagnostics.lastError.empty())std::cerr<<"graph-error="<<diagnostics.lastError<<'\n';
     std::cout << "render-graph passes=" << diagnostics.passCount
               << " resources=" << diagnostics.resourceCount
               << " physical-textures=" << diagnostics.physicalTextureCount

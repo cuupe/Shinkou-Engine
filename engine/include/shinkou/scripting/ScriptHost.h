@@ -9,7 +9,7 @@ namespace shinkou::scripting {
 enum class Language { CSharp, Lua, Python, Native };
 
 class IScriptRuntime {
-public:
+  public:
     virtual ~IScriptRuntime() = default;
     virtual Language language() const noexcept = 0;
     virtual bool initialize() = 0;
@@ -20,7 +20,8 @@ public:
 
 class ScriptHost {
     std::unique_ptr<IScriptRuntime> runtime_;
-public:
+
+  public:
     explicit ScriptHost(std::unique_ptr<IScriptRuntime> runtime);
     bool initialize();
     bool load(std::string_view module);
@@ -30,4 +31,4 @@ public:
 };
 
 std::unique_ptr<IScriptRuntime> create_runtime(Language language);
-}
+} // namespace shinkou::scripting

@@ -43,8 +43,7 @@ click "world-object:Demo Mesh"
 object-name "Demo Mesh"
 framebuffer-native
 capture world-scaled
-click "toolbar.panels"
-click "window:settings"
+click "tab:settings"
 click "settings.reset-scale"
 wait 400
 resize 1440x900

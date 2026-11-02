@@ -35,10 +35,10 @@ struct LineGeometry {
 // Appends one non-degenerate, finite line segment without touching the
 // destination when validation fails. Returns false for invalid input or when
 // the 32-bit index space would overflow.
-bool append_line_segment(LineGeometry& geometry, math::Vec3 start, math::Vec3 end) noexcept;
+bool append_line_segment(LineGeometry &geometry, math::Vec3 start, math::Vec3 end) noexcept;
 
 // Rebuilds geometry as an indexed line list. This is transactional: an
 // invalid segment leaves the caller's existing geometry unchanged.
-bool build_line_geometry(const std::vector<LineSegment>& segments, LineGeometry& geometry);
+bool build_line_geometry(const std::vector<LineSegment> &segments, LineGeometry &geometry);
 
-}
+} // namespace shinkou::render

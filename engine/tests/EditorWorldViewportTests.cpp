@@ -11,6 +11,11 @@ bool near(math::Vec3 a,math::Vec3 b) {return math::Length(a-b)<0.001f;}
 }
 int main() {
     render::CameraComponent camera;
+    math::Transform level;level.rotation=math::FromAxisAngle({0,1,0},-.42f)*math::FromAxisAngle({1,0,0},.25f);
+    const auto levelForward=math::Rotate(level.rotation,{0,0,1});float levelFocus=5;
+    navigate_editor_camera(camera,level,ViewportNavigation::Orbit,{1,1},900,1.5f,levelFocus);
+    assert(math::Length(math::Rotate(level.rotation,{0,0,1})-levelForward)<.01f);
+    assert(std::abs(math::Rotate(level.rotation,{1,0,0}).y)<.00001f);
     math::Transform pose;pose.position={2,3,-5};pose.rotation=math::FromEulerXYZ({0.4f,0.7f,0});
     const auto start=pose;const auto forward=math::Rotate(pose.rotation,{0,0,1});float focus=5;
     navigate_editor_camera(camera,pose,ViewportNavigation::Pan,{120,-45},900,1.5f,focus);
@@ -25,6 +30,14 @@ int main() {
     const auto turned=math::Rotate(pose.rotation,{0,0,1});
     pose=start;
     navigate_editor_camera(camera,pose,ViewportNavigation::Orbit,{180,30},1800,3,focus2);
+    assert(near(turned,math::Rotate(pose.rotation,{0,0,1})));
+    const auto held=pose.rotation;
+    for (int i=0;i<120;++i)
+        navigate_editor_camera(camera,pose,ViewportNavigation::Orbit,{0,0},900,1.5f,focus);
+    assert(near(math::Rotate(held,{0,0,1}),math::Rotate(pose.rotation,{0,0,1})));
+    pose=start;
+    for (int i=0;i<90;++i)
+        navigate_editor_camera(camera,pose,ViewportNavigation::Orbit,{1,1.0f/6},900,1.5f,focus);
     assert(near(turned,math::Rotate(pose.rotation,{0,0,1})));
     navigate_editor_camera(camera,pose,ViewportNavigation::Orbit,{0,100000},1800,3,focus2);
     assert(std::abs(math::Rotate(pose.rotation,{0,0,1}).y)<1);

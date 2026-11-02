@@ -1560,6 +1560,7 @@ void ImGui_ImplVulkanH_CreateWindowSwapChain(VkPhysicalDevice physical_device, V
         info.imageColorSpace = wd->SurfaceFormat.colorSpace;
         info.imageArrayLayers = 1;
         info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if(cap.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)info.imageUsage|=VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;           // Assume that graphics family == present family
         info.preTransform = (cap.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : cap.currentTransform;
         info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -1961,7 +1962,9 @@ static void ImGui_ImplVulkan_RenderWindow(ImGuiViewport* viewport, void*)
             info.commandBufferCount = 1;
             info.pCommandBuffers = &fd->CommandBuffer;
             info.signalSemaphoreCount = 1;
-            info.pSignalSemaphores = &fsd->RenderCompleteSemaphore;
+            // Presentation completion belongs to the acquired swapchain image,
+            // not the rotating acquire-semaphore slot (Khronos reuse guidance).
+            info.pSignalSemaphores = &wd->FrameSemaphores[wd->FrameIndex].RenderCompleteSemaphore;
 
             err = vkEndCommandBuffer(fd->CommandBuffer);
             check_vk_result(err);
@@ -1986,11 +1989,10 @@ static void ImGui_ImplVulkan_SwapBuffers(ImGuiViewport* viewport, void*)
     VkResult err;
     uint32_t present_index = wd->FrameIndex;
 
-    ImGui_ImplVulkanH_FrameSemaphores* fsd = &wd->FrameSemaphores[wd->SemaphoreIndex];
     VkPresentInfoKHR info = {};
     info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     info.waitSemaphoreCount = 1;
-    info.pWaitSemaphores = &fsd->RenderCompleteSemaphore;
+    info.pWaitSemaphores = &wd->FrameSemaphores[wd->FrameIndex].RenderCompleteSemaphore;
     info.swapchainCount = 1;
     info.pSwapchains = &wd->Swapchain;
     info.pImageIndices = &present_index;
@@ -2005,6 +2007,21 @@ static void ImGui_ImplVulkan_SwapBuffers(ImGuiViewport* viewport, void*)
     else
         check_vk_result(err);
     wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Now we can use the next set of semaphores
+}
+
+bool ImGui_ImplVulkan_GetViewportBackBuffer(ImGuiViewport* viewport,VkImage* image,VkFormat* format,VkExtent2D* extent)
+{
+    auto* data=viewport?static_cast<ImGui_ImplVulkan_ViewportData*>(viewport->RendererUserData):nullptr;
+    if(!data || !data->WindowOwned || data->SwapChainNeedRebuild || !image || !format || !extent)return false;
+    auto& window=data->Window;
+    VkSurfaceCapabilitiesKHR capabilities{};
+    const auto* backend=ImGui_ImplVulkan_GetBackendData();
+    if(!backend || vkGetPhysicalDeviceSurfaceCapabilitiesKHR(backend->VulkanInitInfo.PhysicalDevice,window.Surface,&capabilities)!=VK_SUCCESS ||
+       !(capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))return false;
+    if(window.Frames.empty() || window.FrameIndex>=window.ImageCount)return false;
+    *image=window.Frames[window.FrameIndex].Backbuffer;*format=window.SurfaceFormat.format;
+    *extent={static_cast<uint32_t>(window.Width),static_cast<uint32_t>(window.Height)};
+    return *image!=VK_NULL_HANDLE;
 }
 
 void ImGui_ImplVulkan_InitMultiViewportSupport()

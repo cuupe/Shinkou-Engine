@@ -59,7 +59,7 @@ struct TextureCapabilities {
     std::uint32_t maxMipLevels{0};
     std::vector<TextureFormatCapabilities> formats;
 
-    const TextureFormatCapabilities* format_capabilities(TextureFormat format) const noexcept;
+    const TextureFormatCapabilities *format_capabilities(TextureFormat format) const noexcept;
     bool supports_format(TextureFormat format) const noexcept;
     bool supports_sample_count(TextureFormat format, std::uint32_t sampleCount) const noexcept;
     static TextureCapabilities common();
@@ -84,24 +84,28 @@ enum class TextureValidationCode {
 struct TextureValidationResult {
     TextureValidationCode code{TextureValidationCode::None};
     std::string message;
-    bool valid() const noexcept { return code == TextureValidationCode::None; }
-    explicit operator bool() const noexcept { return valid(); }
+    bool valid() const noexcept {
+        return code == TextureValidationCode::None;
+    }
+    explicit operator bool() const noexcept {
+        return valid();
+    }
 };
 
 TextureFormat texture_format_from_name(std::string_view name) noexcept;
-TextureFormat texture_format_of(const TextureDesc& description) noexcept;
+TextureFormat texture_format_of(const TextureDesc &description) noexcept;
 std::string_view texture_format_name(TextureFormat format) noexcept;
 std::size_t texture_format_bytes_per_pixel(TextureFormat format) noexcept;
 bool texture_format_is_depth(TextureFormat format) noexcept;
 bool texture_format_is_hdr(TextureFormat format) noexcept;
 bool texture_format_is_compressed(TextureFormat format) noexcept;
-std::uint32_t texture_full_mip_count(const TextureDesc& description) noexcept;
-std::uint32_t texture_physical_layer_count(const TextureDesc& description) noexcept;
+std::uint32_t texture_full_mip_count(const TextureDesc &description) noexcept;
+std::uint32_t texture_physical_layer_count(const TextureDesc &description) noexcept;
 
-TextureValidationResult validate_texture_desc(const TextureDesc& description,
-                                              const TextureCapabilities& capabilities);
-TextureValidationResult validate_texture_view(const TextureDesc& texture,
-                                              const TextureViewDesc& view,
-                                              const TextureCapabilities& capabilities);
+TextureValidationResult validate_texture_desc(const TextureDesc &description,
+                                              const TextureCapabilities &capabilities);
+TextureValidationResult validate_texture_view(const TextureDesc &texture,
+                                              const TextureViewDesc &view,
+                                              const TextureCapabilities &capabilities);
 
 } // namespace shinkou::render

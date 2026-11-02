@@ -16,6 +16,31 @@ constexpr std::array kTranslations{
     Translation{"Assets", "资源"},
     Translation{"Build", "构建"},
     Translation{"GameObject", "游戏对象"},
+    Translation{"Preferences", "偏好设置"},
+    Translation{"Preferences...", "偏好设置…"},
+    Translation{"Camera", "相机"},
+    Translation{"Duplicate", "复制副本"},
+    Translation{"Copy Object", "复制对象"},
+    Translation{"Paste Object", "粘贴对象"},
+    Translation{"Command Search", "搜索命令"},
+    Translation{"Select Tool", "选择工具"},
+    Translation{"Move Tool", "移动工具"},
+    Translation{"Rotate Tool", "旋转工具"},
+    Translation{"Scale Tool", "缩放工具"},
+    Translation{"Local / World", "局部/世界坐标"},
+    Translation{"Toggle Snapping", "切换吸附"},
+    Translation{"Toggle Grid", "切换网格"},
+    Translation{"Move Forward", "向前移动"},
+    Translation{"Move Backward", "向后移动"},
+    Translation{"Move Left", "向左移动"},
+    Translation{"Move Right", "向右移动"},
+    Translation{"Move Up", "向上移动"},
+    Translation{"Move Down", "向下移动"},
+    Translation{"Fast Movement", "加速移动"},
+    Translation{"Precise Movement", "精细移动"},
+    Translation{"Cube", "立方体"},
+    Translation{"Sphere", "球体"},
+    Translation{"Plane", "平面"},
     Translation{"Component", "组件"},
     Translation{"Window", "窗口"},
     Translation{"Theme", "主题"},
@@ -185,7 +210,8 @@ constexpr std::array kTranslations{
     Translation{"No retained panel content is registered.", "未注册保留式面板内容。"},
     Translation{"No media preview provider is registered.", "未注册媒体预览提供程序。"},
     Translation{"Perspective", "透视"},
-    Translation{"MMB orbit · Shift+MMB pan · Wheel zoom · F frame", "中键旋转 · Shift+中键平移 · 滚轮缩放 · F 聚焦"},
+    Translation{"MMB orbit · Shift+MMB pan · Wheel zoom · F frame",
+                "中键旋转 · Shift+中键平移 · 滚轮缩放 · F 聚焦"},
     Translation{"Resource is no longer available", "资源已不可用"},
     Translation{"Delete this asset?", "删除此资源？"},
 };
@@ -201,9 +227,11 @@ bool EditorLocalization::supported(std::string_view language) noexcept {
 }
 
 std::string_view EditorLocalization::text(std::string_view english) const noexcept {
-    if (!is_chinese()) return english;
-    for (const auto& translation : kTranslations) {
-        if (translation.english == english) return translation.chinese;
+    if (!is_chinese())
+        return english;
+    for (const auto &translation : kTranslations) {
+        if (translation.english == english)
+            return translation.chinese;
     }
     return english;
 }

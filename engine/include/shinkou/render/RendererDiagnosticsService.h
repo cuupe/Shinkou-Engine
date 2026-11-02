@@ -53,25 +53,27 @@ struct RendererDiagnosticsFrame {
 class RendererDiagnosticsService;
 
 class RendererDiagnosticsScope {
-public:
+  public:
     RendererDiagnosticsScope() = default;
     ~RendererDiagnosticsScope();
 
-    RendererDiagnosticsScope(const RendererDiagnosticsScope&) = delete;
-    RendererDiagnosticsScope& operator=(const RendererDiagnosticsScope&) = delete;
-    RendererDiagnosticsScope(RendererDiagnosticsScope&& other) noexcept;
-    RendererDiagnosticsScope& operator=(RendererDiagnosticsScope&& other) noexcept;
+    RendererDiagnosticsScope(const RendererDiagnosticsScope &) = delete;
+    RendererDiagnosticsScope &operator=(const RendererDiagnosticsScope &) = delete;
+    RendererDiagnosticsScope(RendererDiagnosticsScope &&other) noexcept;
+    RendererDiagnosticsScope &operator=(RendererDiagnosticsScope &&other) noexcept;
 
     void close() noexcept;
-    bool active() const noexcept { return active_; }
+    bool active() const noexcept {
+        return active_;
+    }
 
-private:
+  private:
     friend class RendererDiagnosticsService;
-    RendererDiagnosticsScope(RendererDiagnosticsService* owner, std::string name,
+    RendererDiagnosticsScope(RendererDiagnosticsService *owner, std::string name,
                              std::string category, std::uint64_t frameIndex,
                              RenderQueue queue) noexcept;
 
-    RendererDiagnosticsService* owner_{nullptr};
+    RendererDiagnosticsService *owner_{nullptr};
     std::string name_;
     std::string category_;
     std::uint64_t frameIndex_{0};
@@ -80,12 +82,12 @@ private:
 };
 
 class RendererDiagnosticsService {
-public:
+  public:
     explicit RendererDiagnosticsService(RendererDiagnosticsServiceConfig config = {});
     ~RendererDiagnosticsService();
 
-    RendererDiagnosticsService(const RendererDiagnosticsService&) = delete;
-    RendererDiagnosticsService& operator=(const RendererDiagnosticsService&) = delete;
+    RendererDiagnosticsService(const RendererDiagnosticsService &) = delete;
+    RendererDiagnosticsService &operator=(const RendererDiagnosticsService &) = delete;
 
     // These calls are deliberately non-blocking. False means the frame was
     // already open, the service is shutting down, or the internal lock/queue
@@ -93,19 +95,16 @@ public:
     bool begin_frame(std::uint64_t frameIndex, BackendApi api = BackendApi::Null);
     bool end_frame(RendererDiagnosticsFrameCallbacks callbacks = {});
     bool begin_scope(std::string_view name, std::string_view category = {},
-                     std::uint64_t frameIndex = 0,
-                     RenderQueue queue = RenderQueue::Graphics);
+                     std::uint64_t frameIndex = 0, RenderQueue queue = RenderQueue::Graphics);
     bool end_scope(std::string_view name = {}, std::string_view category = {},
-                   std::uint64_t frameIndex = 0,
-                   RenderQueue queue = RenderQueue::Graphics);
-    bool marker(std::string_view name, std::string_view category = {},
-                std::uint64_t frameIndex = 0,
+                   std::uint64_t frameIndex = 0, RenderQueue queue = RenderQueue::Graphics);
+    bool marker(std::string_view name, std::string_view category = {}, std::uint64_t frameIndex = 0,
                 RenderQueue queue = RenderQueue::Graphics);
     RendererDiagnosticsScope scope(std::string_view name, std::string_view category = {},
                                    std::uint64_t frameIndex = 0,
                                    RenderQueue queue = RenderQueue::Graphics);
 
-    bool begin_external_capture(const RenderExternalCaptureRequest& request = {});
+    bool begin_external_capture(const RenderExternalCaptureRequest &request = {});
     bool end_external_capture();
 
     bool notify_device_lost(DeviceFaultDiagnostic fault);
@@ -116,14 +115,18 @@ public:
 
     std::shared_ptr<const RendererDiagnosticsFrame> latest() const noexcept;
     std::shared_ptr<const DeviceRecoveryStatus> recovery_status() const noexcept;
-    std::uint64_t dropped_frame_count() const noexcept { return droppedFrames_.load(); }
-    std::uint64_t dropped_marker_count() const noexcept { return droppedMarkers_.load(); }
+    std::uint64_t dropped_frame_count() const noexcept {
+        return droppedFrames_.load();
+    }
+    std::uint64_t dropped_marker_count() const noexcept {
+        return droppedMarkers_.load();
+    }
     bool frame_open() const noexcept;
 
     // Intended for shutdown/tests/tools, never required by the render loop.
     void wait_until_idle();
 
-private:
+  private:
     struct PendingFrame {
         std::uint64_t sequence{0};
         std::uint64_t frameIndex{0};
@@ -137,7 +140,7 @@ private:
 
     void worker_loop();
     void process(PendingFrame pending);
-    bool update_recovery(const std::function<bool(DeviceRecoveryStateMachine&)>& operation);
+    bool update_recovery(const std::function<bool(DeviceRecoveryStateMachine &)> &operation);
     void publish_recovery();
 
     RendererDiagnosticsServiceConfig config_;

@@ -1,3 +1,6 @@
+#include "shinkou/core/Path.h"
+#include "shinkou/core/Hash.h"
+#include "shinkou/data/Json.h"
 #include "shinkou/assets/AssetSystem.h"
 
 #include <algorithm>
@@ -14,6 +17,8 @@
 
 namespace shinkou::assets {
 namespace {
+using ManifestJsonValue = data::Value;
+using ManifestJsonParser = data::JsonParser;
 
 constexpr std::uint32_t CacheVersion = 6;
 constexpr char CacheMagic[] = "SHINKOUAC1";
@@ -141,19 +146,7 @@ bool write_cache_atomically(const std::filesystem::path& path, const AssetKey& k
 }
 
 std::string json_escape(std::string_view value) {
-    std::string result;
-    result.reserve(value.size() + 8);
-    for (const char character : value) {
-        switch (character) {
-        case '\\': result += "\\\\"; break;
-        case '"': result += "\\\""; break;
-        case '\n': result += "\\n"; break;
-        case '\r': result += "\\r"; break;
-        case '\t': result += "\\t"; break;
-        default: result += character; break;
-        }
-    }
-    return result;
+    return data::escape_json(value);
 }
 
 class RawProcessor final : public IAssetProcessor {
@@ -390,34 +383,19 @@ struct AssetSystem::Record {
 
 std::size_t AssetKeyHash::operator()(const AssetKey& key) const noexcept {
     const auto hash_string = [](std::string_view value) {
-        std::size_t hash = 1469598103934665603ull;
-        for (const auto character : value) {
-            hash ^= static_cast<unsigned char>(character);
-            hash *= 1099511628211ull;
-        }
-        return hash;
-    };
+        return static_cast<std::size_t>(core::hash_string(value, core::legacyFnvOffset));
+};
     const auto uriHash = hash_string(key.uri);
     const auto typeHash = hash_string(key.type);
     return uriHash ^ (typeHash + static_cast<std::size_t>(0x9e3779b9u) + (uriHash << 6u) + (uriHash >> 2u));
 }
 
 std::uint64_t hash_bytes(const std::vector<std::uint8_t>& bytes) noexcept {
-    std::uint64_t hash = 1469598103934665603ull;
-    for (const auto byte : bytes) {
-        hash ^= byte;
-        hash *= 1099511628211ull;
-    }
-    return hash;
+    return core::hash_bytes(bytes.data(), bytes.size(), core::legacyFnvOffset);
 }
 
 std::uint64_t hash_string(std::string_view value) noexcept {
-    std::uint64_t hash = 1469598103934665603ull;
-    for (const auto character : value) {
-        hash ^= static_cast<unsigned char>(character);
-        hash *= 1099511628211ull;
-    }
-    return hash;
+    return core::hash_string(value, core::legacyFnvOffset);
 }
 
 AssetSystem::AssetSystem(AssetSystemConfig config) : config_(std::move(config)) {
@@ -1474,233 +1452,20 @@ std::vector<AssetManifestEntry> AssetSystem::scan_sources() const {
     return result;
 }
 
-struct ManifestJsonValue {
-    enum class Kind : std::uint8_t { Null, Boolean, Number, String, Object, Array };
-    Kind kind{Kind::Null};
-    bool boolean{false};
-    double number{0.0};
-    std::string numberText;
-    std::string string;
-    std::map<std::string, ManifestJsonValue, std::less<>> object;
-    std::vector<ManifestJsonValue> array;
-};
-
-class ManifestJsonParser final {
-    std::string_view input_;
-    std::size_t position_{0};
-
-    static constexpr std::size_t MaxDepth = 32;
-    static constexpr std::size_t MaxMembers = 4096;
-    static constexpr std::size_t MaxArrayItems = 65536;
-    static constexpr std::size_t MaxStringBytes = 1u * 1024u * 1024u;
-
-    void whitespace() noexcept {
-        while (position_ < input_.size()) {
-            const auto value = static_cast<unsigned char>(input_[position_]);
-            if (value != ' ' && value != '\t' && value != '\r' && value != '\n') break;
-            ++position_;
-        }
-    }
-
-    bool consume(char value) noexcept {
-        whitespace();
-        if (position_ >= input_.size() || input_[position_] != value) return false;
-        ++position_;
-        return true;
-    }
-
-    static bool hex_digit(char value, std::uint32_t& output) noexcept {
-        if (value >= '0' && value <= '9') { output = static_cast<std::uint32_t>(value - '0'); return true; }
-        if (value >= 'a' && value <= 'f') { output = static_cast<std::uint32_t>(value - 'a' + 10); return true; }
-        if (value >= 'A' && value <= 'F') { output = static_cast<std::uint32_t>(value - 'A' + 10); return true; }
-        return false;
-    }
-
-    static void append_utf8(std::string& output, std::uint32_t codepoint) {
-        if (codepoint <= 0x7fu) output.push_back(static_cast<char>(codepoint));
-        else if (codepoint <= 0x7ffu) {
-            output.push_back(static_cast<char>(0xc0u | (codepoint >> 6u)));
-            output.push_back(static_cast<char>(0x80u | (codepoint & 0x3fu)));
-        } else if (codepoint <= 0xffffu) {
-            output.push_back(static_cast<char>(0xe0u | (codepoint >> 12u)));
-            output.push_back(static_cast<char>(0x80u | ((codepoint >> 6u) & 0x3fu)));
-            output.push_back(static_cast<char>(0x80u | (codepoint & 0x3fu)));
-        } else {
-            output.push_back(static_cast<char>(0xf0u | (codepoint >> 18u)));
-            output.push_back(static_cast<char>(0x80u | ((codepoint >> 12u) & 0x3fu)));
-            output.push_back(static_cast<char>(0x80u | ((codepoint >> 6u) & 0x3fu)));
-            output.push_back(static_cast<char>(0x80u | (codepoint & 0x3fu)));
-        }
-    }
-
-    bool string_value(std::string& output, std::string& error) {
-        whitespace();
-        if (position_ >= input_.size() || input_[position_] != '"') {
-            error = "manifest JSON string is missing";
-            return false;
-        }
-        ++position_;
-        output.clear();
-        while (position_ < input_.size()) {
-            const auto value = static_cast<unsigned char>(input_[position_++]);
-            if (value == '"') return true;
-            if (value < 0x20u) { error = "manifest JSON string contains a control character"; return false; }
-            if (value != '\\') {
-                output.push_back(static_cast<char>(value));
-            } else {
-                if (position_ >= input_.size()) { error = "manifest JSON escape is truncated"; return false; }
-                const char escaped = input_[position_++];
-                switch (escaped) {
-                case '"': output.push_back('"'); break;
-                case '\\': output.push_back('\\'); break;
-                case '/': output.push_back('/'); break;
-                case 'b': output.push_back('\b'); break;
-                case 'f': output.push_back('\f'); break;
-                case 'n': output.push_back('\n'); break;
-                case 'r': output.push_back('\r'); break;
-                case 't': output.push_back('\t'); break;
-                case 'u': {
-                    std::uint32_t codepoint = 0;
-                    for (int index = 0; index < 4; ++index) {
-                        if (position_ >= input_.size()) { error = "manifest unicode escape is truncated"; return false; }
-                        std::uint32_t digit = 0;
-                        if (!hex_digit(input_[position_++], digit)) { error = "manifest unicode escape is invalid"; return false; }
-                        codepoint = (codepoint << 4u) | digit;
-                    }
-                    if (codepoint >= 0xd800u && codepoint <= 0xdfffu) {
-                        error = "manifest surrogate unicode escapes are unsupported";
-                        return false;
-                    }
-                    append_utf8(output, codepoint);
-                    break;
-                }
-                default: error = "manifest JSON escape is invalid"; return false;
-                }
-            }
-            if (output.size() > MaxStringBytes) { error = "manifest JSON string exceeds the size limit"; return false; }
-        }
-        error = "manifest JSON string is unterminated";
-        return false;
-    }
-
-    bool number_value(ManifestJsonValue& output, std::string& error) {
-        whitespace();
-        const auto begin = position_;
-        if (position_ < input_.size() && input_[position_] == '-') ++position_;
-        if (position_ >= input_.size()) { error = "manifest JSON number is truncated"; return false; }
-        if (input_[position_] == '0') {
-            ++position_;
-            if (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9') {
-                error = "manifest JSON number has a leading zero";
-                return false;
-            }
-        } else {
-            if (input_[position_] < '1' || input_[position_] > '9') { error = "manifest JSON number is invalid"; return false; }
-            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9') ++position_;
-        }
-        if (position_ < input_.size() && input_[position_] == '.') {
-            ++position_;
-            const auto fractionBegin = position_;
-            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9') ++position_;
-            if (fractionBegin == position_) { error = "manifest JSON fraction is invalid"; return false; }
-        }
-        if (position_ < input_.size() && (input_[position_] == 'e' || input_[position_] == 'E')) {
-            ++position_;
-            if (position_ < input_.size() && (input_[position_] == '+' || input_[position_] == '-')) ++position_;
-            const auto exponentBegin = position_;
-            while (position_ < input_.size() && input_[position_] >= '0' && input_[position_] <= '9') ++position_;
-            if (exponentBegin == position_) { error = "manifest JSON exponent is invalid"; return false; }
-        }
-        output.numberText = std::string(input_.substr(begin, position_ - begin));
-        char* parsedEnd = nullptr;
-        const auto parsed = std::strtod(output.numberText.c_str(), &parsedEnd);
-        if (parsedEnd != output.numberText.c_str() + output.numberText.size() || !std::isfinite(parsed)) {
-            error = "manifest JSON number is not finite";
-            return false;
-        }
-        output.kind = ManifestJsonValue::Kind::Number;
-        output.number = parsed;
-        return true;
-    }
-
-    bool value(ManifestJsonValue& output, std::string& error, std::size_t depth) {
-        if (depth > MaxDepth) { error = "manifest JSON nesting exceeds the limit"; return false; }
-        whitespace();
-        if (position_ >= input_.size()) { error = "manifest JSON value is missing"; return false; }
-        switch (input_[position_]) {
-        case '"': output.kind = ManifestJsonValue::Kind::String; return string_value(output.string, error);
-        case '{': return object_value(output, error, depth + 1);
-        case '[': return array_value(output, error, depth + 1);
-        case 't': if (input_.substr(position_, 4) == "true") { position_ += 4; output.kind = ManifestJsonValue::Kind::Boolean; output.boolean = true; return true; } break;
-        case 'f': if (input_.substr(position_, 5) == "false") { position_ += 5; output.kind = ManifestJsonValue::Kind::Boolean; output.boolean = false; return true; } break;
-        case 'n': if (input_.substr(position_, 4) == "null") { position_ += 4; output.kind = ManifestJsonValue::Kind::Null; return true; } break;
-        default: if (input_[position_] == '-' || (input_[position_] >= '0' && input_[position_] <= '9')) return number_value(output, error);
-        }
-        error = "manifest JSON value is invalid";
-        return false;
-    }
-
-    bool object_value(ManifestJsonValue& output, std::string& error, std::size_t depth) {
-        if (!consume('{')) { error = "manifest JSON object is invalid"; return false; }
-        output.kind = ManifestJsonValue::Kind::Object;
-        whitespace();
-        if (consume('}')) return true;
-        for (std::size_t count = 0; count < MaxMembers; ++count) {
-            std::string key;
-            if (!string_value(key, error) || !consume(':')) { if (error.empty()) error = "manifest JSON object member is invalid"; return false; }
-            ManifestJsonValue child;
-            if (!value(child, error, depth)) return false;
-            if (!output.object.emplace(std::move(key), std::move(child)).second) { error = "manifest JSON object contains a duplicate key"; return false; }
-            if (consume('}')) return true;
-            if (!consume(',')) { error = "manifest JSON object separator is missing"; return false; }
-        }
-        error = "manifest JSON object has too many members";
-        return false;
-    }
-
-    bool array_value(ManifestJsonValue& output, std::string& error, std::size_t depth) {
-        if (!consume('[')) { error = "manifest JSON array is invalid"; return false; }
-        output.kind = ManifestJsonValue::Kind::Array;
-        whitespace();
-        if (consume(']')) return true;
-        for (std::size_t count = 0; count < MaxArrayItems; ++count) {
-            ManifestJsonValue child;
-            if (!value(child, error, depth)) return false;
-            output.array.push_back(std::move(child));
-            if (consume(']')) return true;
-            if (!consume(',')) { error = "manifest JSON array separator is missing"; return false; }
-        }
-        error = "manifest JSON array has too many values";
-        return false;
-    }
-
-public:
-    explicit ManifestJsonParser(std::string_view input) : input_(input) {}
-
-    bool parse(ManifestJsonValue& output, std::string& error) {
-        if (!value(output, error, 0)) return false;
-        whitespace();
-        if (position_ != input_.size()) { error = "manifest JSON has trailing data"; return false; }
-        return true;
-    }
-};
-
 const ManifestJsonValue* manifest_member(const ManifestJsonValue& value, std::string_view name) {
-    if (value.kind != ManifestJsonValue::Kind::Object) return nullptr;
-    const auto found = value.object.find(std::string(name));
-    return found == value.object.end() ? nullptr : &found->second;
+    if (value.kind() != ManifestJsonValue::Kind::Object) return nullptr;
+    const auto found = value.object_items().find(std::string(name));
+    return found == value.object_items().end() ? nullptr : &found->second;
 }
 
 bool manifest_uint(const ManifestJsonValue* value, std::uint64_t& output) {
-    if (!value || value->kind != ManifestJsonValue::Kind::Number || value->numberText.empty() ||
-        value->numberText.find_first_of(".eE") != std::string::npos || value->numberText.front() == '-') return false;
-    const auto parsed = std::from_chars(value->numberText.data(), value->numberText.data() + value->numberText.size(), output);
-    return parsed.ec == std::errc{} && parsed.ptr == value->numberText.data() + value->numberText.size();
+    return value && value->kind() == ManifestJsonValue::Kind::Number &&
+        value->is_unsigned_integer() && value->to_uint64(output);
 }
 
 bool manifest_string(const ManifestJsonValue* value, std::string& output) {
-    if (!value || value->kind != ManifestJsonValue::Kind::String || value->string.empty()) return false;
-    output = value->string;
+    if (!value || value->kind() != ManifestJsonValue::Kind::String || value->string_or().empty()) return false;
+    output = value->string_or();
     return true;
 }
 
@@ -1750,7 +1515,7 @@ AssetManifestReadResult AssetSystem::read_manifest(const std::filesystem::path& 
     }
 
     ManifestJsonValue root;
-    if (!ManifestJsonParser(json).parse(root, result.error) || root.kind != ManifestJsonValue::Kind::Object) {
+    if (!ManifestJsonParser(json, data::JsonLimits{16u*1024u*1024u, 32, 1000000, 1024u*1024u, 65536, 4096}).parse(root, result.error) || root.kind() != ManifestJsonValue::Kind::Object) {
         if (result.error.empty()) result.error = "manifest root must be a JSON object";
         return result;
     }
@@ -1760,17 +1525,17 @@ AssetManifestReadResult AssetSystem::read_manifest(const std::filesystem::path& 
         return result;
     }
     const auto* assets = manifest_member(root, "assets");
-    if (!assets || assets->kind != ManifestJsonValue::Kind::Array || assets->array.size() > maxEntries) {
+    if (!assets || assets->kind() != ManifestJsonValue::Kind::Array || assets->array_items().size() > maxEntries) {
         result.error = "manifest assets array is missing or too large";
         return result;
     }
 
     std::unordered_set<AssetKey, AssetKeyHash> keys;
     std::unordered_set<AssetId> ids;
-    result.entries.reserve(assets->array.size());
-    for (std::size_t index = 0; index < assets->array.size(); ++index) {
-        const auto& item = assets->array[index];
-        if (item.kind != ManifestJsonValue::Kind::Object) {
+    result.entries.reserve(assets->array_items().size());
+    for (std::size_t index = 0; index < assets->array_items().size(); ++index) {
+        const auto& item = assets->array_items()[index];
+        if (item.kind() != ManifestJsonValue::Kind::Object) {
             result.error = "manifest asset entry is not an object at index " + std::to_string(index);
             return result;
         }
@@ -1805,7 +1570,7 @@ AssetManifestReadResult AssetSystem::read_manifest(const std::filesystem::path& 
             result.error = "manifest contains a duplicate asset identity at index " + std::to_string(index);
             return result;
         }
-        result.entries.push_back({id, key, std::filesystem::path(source), sourceHash,
+        result.entries.push_back({id, key, core::path_from_utf8(source), sourceHash,
                                   sourceTimestamp, static_cast<std::uintmax_t>(sourceSize)});
     }
     result.valid = true;
@@ -1849,7 +1614,7 @@ bool AssetSystem::write_manifest(const std::filesystem::path& path) const {
     for (std::size_t index = 0; index < entries.size(); ++index) {
         const auto& entry = entries[index];
         output << "    {\"id\": " << entry.id << ", \"uri\": \"" << json_escape(entry.key.uri) << "\", \"type\": \""
-               << json_escape(entry.key.type) << "\", \"source\": \"" << json_escape(entry.sourcePath.generic_string())
+               << json_escape(entry.key.type) << "\", \"source\": \"" << json_escape(core::path_to_utf8(entry.sourcePath))
                << "\", \"hash\": " << entry.sourceHash << ", \"timestamp\": " << entry.sourceTimestamp
                << ", \"size\": " << entry.sourceSize << "}" << (index + 1 == entries.size() ? "\n" : ",\n");
     }

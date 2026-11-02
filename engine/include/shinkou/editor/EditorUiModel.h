@@ -1,13 +1,14 @@
 #pragma once
 
-#include "shinkou/Types.h"
 #include "shinkou/GameObject.h"
+#include "shinkou/Types.h"
 #include "shinkou/ui/Render.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -83,6 +84,10 @@ enum class EditorCommand : std::uint8_t {
     SetUiScale,
     ToggleCompact,
     ToggleDocking,
+    DuplicateObject,
+    CopyObject,
+    PasteObject,
+    CreateCamera,
 };
 
 struct EditorMenuItemModel {
@@ -137,7 +142,7 @@ struct EditorInspectorField {
     PropertyPresentation presentation{PropertyPresentation::Default};
     ComponentId componentId{0};
     std::string componentName{};
-    double minimum{0},maximum{0},step{0};
+    double minimum{0}, maximum{0}, step{0};
 };
 
 struct EditorBuildToolModel {
@@ -168,35 +173,34 @@ struct EditorAssetPreviewUiState {
     std::string status;
     bool loading{false};
     bool truncated{false};
-    std::vector<std::string> textLines;
     std::shared_ptr<const EditorTextPreviewSnapshot> textPreview;
     std::uint32_t imageWidth{0};
-      std::uint32_t imageHeight{0};
-      std::shared_ptr<const ui::UiImageSnapshot> imageSnapshot{};
-      std::shared_ptr<const EditorModelPreviewSnapshot> modelPreview{};
-      std::shared_ptr<const EditorModelPreviewSceneState> modelPreviewScene{};
-      std::uint32_t modelTextureWidth{0};
-      std::uint32_t modelTextureHeight{0};
-      std::shared_ptr<const ui::UiImageSnapshot> modelTextureSnapshot{};
-      std::string modelTextureStatus{};
-      std::int32_t modelMaterialIndex{-1};
-      std::int32_t modelTextureIndex{-1};
-      std::int32_t modelTextureImageIndex{-1};
-      std::string modelMaterialLabel{};
-      std::string modelTextureLabel{};
-      std::string modelTextureRole{};
-      bool modelGpuPreviewReady{false};
-      bool modelGpuMaterialApplied{false};
-      bool modelGpuMaterialFactorsApplied{false};
-      bool modelGpuTextureRoleApplied{false};
-      bool modelGpuBaseColorTextureSampled{false};
-      bool modelGpuNormalTextureSampled{false};
-      bool modelGpuMetallicRoughnessTextureSampled{false};
-      bool modelGpuTextureSampled{false};
-      bool modelGpuOffscreenTargetReady{false};
-      bool modelGpuDepthTargetReady{false};
-      bool modelGpuOffscreenCompositeApplied{false};
-      std::string modelGpuPreviewStatus{};
+    std::uint32_t imageHeight{0};
+    std::shared_ptr<const ui::UiImageSnapshot> imageSnapshot{};
+    std::shared_ptr<const EditorModelPreviewSnapshot> modelPreview{};
+    std::shared_ptr<const EditorModelPreviewSceneState> modelPreviewScene{};
+    std::uint32_t modelTextureWidth{0};
+    std::uint32_t modelTextureHeight{0};
+    std::shared_ptr<const ui::UiImageSnapshot> modelTextureSnapshot{};
+    std::string modelTextureStatus{};
+    std::int32_t modelMaterialIndex{-1};
+    std::int32_t modelTextureIndex{-1};
+    std::int32_t modelTextureImageIndex{-1};
+    std::string modelMaterialLabel{};
+    std::string modelTextureLabel{};
+    std::string modelTextureRole{};
+    bool modelGpuPreviewReady{false};
+    bool modelGpuMaterialApplied{false};
+    bool modelGpuMaterialFactorsApplied{false};
+    bool modelGpuTextureRoleApplied{false};
+    bool modelGpuBaseColorTextureSampled{false};
+    bool modelGpuNormalTextureSampled{false};
+    bool modelGpuMetallicRoughnessTextureSampled{false};
+    bool modelGpuTextureSampled{false};
+    bool modelGpuOffscreenTargetReady{false};
+    bool modelGpuDepthTargetReady{false};
+    bool modelGpuOffscreenCompositeApplied{false};
+    std::string modelGpuPreviewStatus{};
     // The AssetSystem bridge is intentionally presentation-only. Providers
     // remain responsible for decoded previews, while this state exposes the
     // canonical resource load/cache result to the editor inspector.
@@ -305,9 +309,14 @@ class EditorUiModel {
     bool paused_{false};
     bool treeDirty_{true};
     std::uint64_t revision_{0};
-    const World* syncedWorld_{nullptr};
-    std::size_t syncedObjectCount_{0};
-    std::uint64_t treeSignature_{0};
+    const World *syncedWorld_{nullptr};
+    std::uint64_t syncedWorldId_{0};
+    std::uint64_t syncedHierarchyRevision_{0};
+    std::uint64_t syncedComponentTypesRevision_{0};
+    std::uint64_t hierarchyRevision_{0};
+    std::unordered_map<ObjectId, EditorObjectTreeNode *> hierarchyNodes_;
+    bool selectionDirty_{true};
+    ObjectId displayedSelection_{0};
     std::vector<EditorInspectorField> inspectorFields_;
     std::vector<std::string> componentTypes_;
     std::string inspectorSignature_;
@@ -325,24 +334,30 @@ class EditorUiModel {
     EditorAssetPreviewUiState assetPreview_{};
     EditorMediaUiState mediaState_{};
 
-    static EditorObjectTreeNode make_tree_node(const GameObject& object, std::string_view filter,
+    static EditorObjectTreeNode make_tree_node(const GameObject &object, std::string_view filter,
                                                ObjectId selected);
-    static bool contains_object(const EditorObjectTreeNode& node, ObjectId id) noexcept;
     void build_default_menus();
     void build_default_pages();
 
-public:
+  public:
     EditorUiModel();
 
-    void sync(World& world);
-    void invalidate() noexcept { treeDirty_ = true; }
-    void select_object(ObjectId id) noexcept {
-        if (selectedObject_ == id) return;
-        selectedObject_ = id;
+    void sync(World &world);
+    void invalidate() noexcept {
         treeDirty_ = true;
     }
+    void invalidate_inspector() noexcept {
+        inspectorSignature_.clear();
+    }
+    void select_object(ObjectId id) noexcept {
+        if (selectedObject_ == id)
+            return;
+        selectedObject_ = id;
+        selectionDirty_ = true;
+    }
     void set_object_filter(std::string filter) {
-        if (objectFilter_ == filter) return;
+        if (objectFilter_ == filter)
+            return;
         objectFilter_ = std::move(filter);
         treeDirty_ = true;
     }
@@ -360,30 +375,74 @@ public:
                                     double durationSeconds = 0.0, bool durationKnown = false);
     void set_audio_transport_preview(std::shared_ptr<const EditorAudioPreviewSnapshot> preview);
     void execute(EditorCommand command) noexcept;
-    const std::vector<EditorInspectorField>& inspector_fields() const noexcept { return inspectorFields_; }
-    const std::vector<std::string>& component_types() const noexcept { return componentTypes_; }
+    const std::vector<EditorInspectorField> &inspector_fields() const noexcept {
+        return inspectorFields_;
+    }
+    const std::vector<std::string> &component_types() const noexcept {
+        return componentTypes_;
+    }
 
-    const std::vector<EditorMenuModel>& menus() const noexcept { return menus_; }
-    const std::vector<EditorPageModel>& pages() const noexcept { return pages_; }
-    const std::vector<EditorObjectTreeNode>& object_roots() const noexcept { return objectRoots_; }
-    ObjectId selected_object() const noexcept { return selectedObject_; }
-    const std::string& object_filter() const noexcept { return objectFilter_; }
-    const std::string& active_page() const noexcept { return activePage_; }
-    EditorCommand last_command() const noexcept { return lastCommand_; }
-    bool playing() const noexcept { return playing_; }
-    bool paused() const noexcept { return paused_; }
-    const EditorBuildUiState& build_state() const noexcept { return buildState_; }
-    const EditorFileRecoveryUiState& file_recovery_state() const noexcept { return fileRecoveryState_; }
-    const EditorAssetPreviewUiState& asset_preview() const noexcept { return assetPreview_; }
-    const EditorMediaUiState& media_state() const noexcept { return mediaState_; }
-    double audio_transport_cursor() const noexcept { return audioTransportCursor_; }
-    double audio_transport_duration() const noexcept { return audioTransportDuration_; }
-    bool audio_transport_cursor_supported() const noexcept { return audioTransportCursorSupported_; }
-    bool audio_transport_duration_known() const noexcept { return audioTransportDurationKnown_; }
-    const std::shared_ptr<const EditorAudioPreviewSnapshot>& audio_transport_preview() const noexcept {
+    const std::vector<EditorMenuModel> &menus() const noexcept {
+        return menus_;
+    }
+    const std::vector<EditorPageModel> &pages() const noexcept {
+        return pages_;
+    }
+    const std::vector<EditorObjectTreeNode> &object_roots() const noexcept {
+        return objectRoots_;
+    }
+    ObjectId selected_object() const noexcept {
+        return selectedObject_;
+    }
+    const std::string &object_filter() const noexcept {
+        return objectFilter_;
+    }
+    const std::string &active_page() const noexcept {
+        return activePage_;
+    }
+    EditorCommand last_command() const noexcept {
+        return lastCommand_;
+    }
+    bool playing() const noexcept {
+        return playing_;
+    }
+    bool paused() const noexcept {
+        return paused_;
+    }
+    const EditorBuildUiState &build_state() const noexcept {
+        return buildState_;
+    }
+    const EditorFileRecoveryUiState &file_recovery_state() const noexcept {
+        return fileRecoveryState_;
+    }
+    const EditorAssetPreviewUiState &asset_preview() const noexcept {
+        return assetPreview_;
+    }
+    const EditorMediaUiState &media_state() const noexcept {
+        return mediaState_;
+    }
+    double audio_transport_cursor() const noexcept {
+        return audioTransportCursor_;
+    }
+    double audio_transport_duration() const noexcept {
+        return audioTransportDuration_;
+    }
+    bool audio_transport_cursor_supported() const noexcept {
+        return audioTransportCursorSupported_;
+    }
+    bool audio_transport_duration_known() const noexcept {
+        return audioTransportDurationKnown_;
+    }
+    const std::shared_ptr<const EditorAudioPreviewSnapshot> &
+    audio_transport_preview() const noexcept {
         return audioTransportPreview_;
     }
-    std::uint64_t revision() const noexcept { return revision_; }
+    std::uint64_t revision() const noexcept {
+        return revision_;
+    }
+    std::uint64_t hierarchy_revision() const noexcept {
+        return hierarchyRevision_;
+    }
 };
 
 } // namespace editor

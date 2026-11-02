@@ -10,16 +10,7 @@
 
 namespace shinkou::render {
 
-enum class PostProcessStageKind {
-    Custom,
-    Exposure,
-    Bloom,
-    SSAO,
-    TAA,
-    SSR,
-    ToneMap,
-    MotionBlur
-};
+enum class PostProcessStageKind { Custom, Exposure, Bloom, SSAO, TAA, SSR, ToneMap, MotionBlur };
 
 enum class ExposureMetering { LogAverage, Histogram };
 
@@ -75,13 +66,16 @@ struct MotionBlurStageParameters {
     std::uint32_t sampleCount{12};
 };
 
-using PostProcessStageParameters = std::variant<std::monostate, ExposureStageParameters,
-    BloomStageParameters, SsaoStageParameters, TaaStageParameters, SsrStageParameters,MotionBlurStageParameters>;
+using PostProcessStageParameters =
+    std::variant<std::monostate, ExposureStageParameters, BloomStageParameters, SsaoStageParameters,
+                 TaaStageParameters, SsrStageParameters, MotionBlurStageParameters>;
 
 struct PostProcessValidationResult {
     std::vector<std::string> errors;
 
-    bool valid() const noexcept { return errors.empty(); }
+    bool valid() const noexcept {
+        return errors.empty();
+    }
 };
 
 struct PostProcessStageDesc {
@@ -132,21 +126,25 @@ struct PostProcessChainDesc {
 class PostProcessPipeline {
     std::vector<PostProcessStageDesc> stages_;
 
-public:
+  public:
     std::size_t add_stage(PostProcessStageDesc stage);
-    void clear() noexcept { stages_.clear(); }
-    std::size_t stage_count() const noexcept { return stages_.size(); }
-    const std::vector<PostProcessStageDesc>& stages() const noexcept { return stages_; }
+    void clear() noexcept {
+        stages_.clear();
+    }
+    std::size_t stage_count() const noexcept {
+        return stages_.size();
+    }
+    const std::vector<PostProcessStageDesc> &stages() const noexcept {
+        return stages_;
+    }
 
-    ResourceHandle build(RenderGraph& graph,
-                          ResourceHandle source,
-                          const TextureDesc& sourceDescription,
-                          ResourceHandle finalTarget = {},
-                          const TextureDesc& finalDescription = {} ) const;
-    ResourceHandle build(RenderGraph& graph, const PostProcessChainDesc& chain) const;
+    ResourceHandle build(RenderGraph &graph, ResourceHandle source,
+                         const TextureDesc &sourceDescription, ResourceHandle finalTarget = {},
+                         const TextureDesc &finalDescription = {}) const;
+    ResourceHandle build(RenderGraph &graph, const PostProcessChainDesc &chain) const;
 };
 
-bool validate_post_process_parameters(const PostProcessStageDesc& stage,std::string& error);
-PostProcessValidationResult validate_post_process_stage(const PostProcessStageDesc& stage);
-PostProcessValidationResult validate_post_process_chain(const PostProcessChainDesc& chain);
-}
+bool validate_post_process_parameters(const PostProcessStageDesc &stage, std::string &error);
+PostProcessValidationResult validate_post_process_stage(const PostProcessStageDesc &stage);
+PostProcessValidationResult validate_post_process_chain(const PostProcessChainDesc &chain);
+} // namespace shinkou::render

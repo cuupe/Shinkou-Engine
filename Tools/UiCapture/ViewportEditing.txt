@@ -1,0 +1,84 @@
+# Actual viewport gizmo input, creation, undo, stationary RMB, and pan.
+wait 700
+framebuffer-native
+state "scene-ready=1 "
+click "world-object:Demo Mesh"
+object-name "Demo Mesh"
+remember-property "Transform:position"
+axis-drag "viewport.gizmo-center" 65 -30
+property-changed "Transform:position"
+state "scene-geometry-bytes=0 "
+state "scene-material-creations=0"
+object-name "Demo Mesh"
+capture translated
+down 17
+key 90
+up 17
+property-unchanged "Transform:position"
+down 17
+key 89
+up 17
+property-changed "Transform:position"
+# Uniform scale and rotation must use actual ImGuizmo mouse gestures too.
+click "viewport.operation:2"
+remember-property "Transform:scale"
+axis-drag "viewport.gizmo-center" 60 0
+property-changed "Transform:scale"
+down 17
+key 90
+up 17
+property-unchanged "Transform:scale"
+click "viewport.operation:1"
+remember-property "Transform:Rotation"
+gizmo-rotate
+property-changed "Transform:Rotation"
+down 17
+key 90
+up 17
+property-unchanged "Transform:Rotation"
+click "viewport.operation:0"
+remember-property "Transform:position"
+axis-drag-cancel "viewport.gizmo-center" -30 -25
+property-unchanged "Transform:position"
+# A new renderable in the real sample must not be rejected by checkpoint.
+click "menu:game-object"
+click "menu-item:create-3d"
+object-name "Cube"
+typed "PrimitiveMesh:shape" "Cube"
+remember-property "Transform:position"
+axis-drag "viewport.gizmo-center" -45 20
+property-changed "Transform:position"
+capture created-cube
+down 17
+key 90
+up 17
+property-unchanged "Transform:position"
+down 17
+key 90
+up 17
+object-name "Demo Mesh"
+down 17
+key 89
+up 17
+object-name "Cube"
+typed "PrimitiveMesh:shape" "Cube"
+click "menu:game-object"
+click "menu-item:create-sphere"
+object-name "Sphere"
+typed "PrimitiveMesh:shape" "Sphere"
+capture created-sphere
+click "menu:game-object"
+click "menu-item:create-plane"
+object-name "Plane"
+typed "PrimitiveMesh:shape" "Plane"
+click "command:create-empty"
+object-name "GameObject"
+click-at "viewport.surface" 0.95 0.05
+object-name ""
+remember-camera
+look-hold 65 25
+camera-look
+remember-camera
+pan 70 -35
+camera-pan-plane
+capture final

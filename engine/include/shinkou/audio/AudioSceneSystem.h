@@ -11,8 +11,12 @@
 namespace shinkou {
 class World;
 class GameObject;
-namespace assets { class AssetSystem; }
-namespace components { class AudioSourceComponent; }
+namespace assets {
+class AssetSystem;
+}
+namespace components {
+class AudioSourceComponent;
+}
 
 namespace audio {
 
@@ -62,40 +66,46 @@ class AudioSceneSystem final {
     std::uint64_t revision_{0};
     AudioSceneDiagnostics diagnostics_{};
 
-    AudioAssetId acquire_clip(AudioSystem& audio, const std::string& path, bool streaming);
-    void release_clip(AudioSystem& audio, const std::string& path, AudioAssetId asset);
-    void stop_source(AudioSystem& audio, SourceBinding& binding);
-    void sync_listener(World& world, AudioSystem& audio);
-    bool start_source(GameObject& object, components::AudioSourceComponent& source,
-                      SourceBinding& binding, AudioSystem& audio,
-                      const assets::AssetSystem* assetSystem);
+    AudioAssetId acquire_clip(AudioSystem &audio, const std::string &path, bool streaming);
+    void release_clip(AudioSystem &audio, const std::string &path, AudioAssetId asset);
+    void stop_source(AudioSystem &audio, SourceBinding &binding);
+    void sync_listener(World &world, AudioSystem &audio);
+    bool start_source(GameObject &object, components::AudioSourceComponent &source,
+                      SourceBinding &binding, AudioSystem &audio,
+                      const assets::AssetSystem *assetSystem);
 
-public:
+  public:
     AudioSceneSystem() = default;
-    AudioSceneSystem(const AudioSceneSystem&) = delete;
-    AudioSceneSystem& operator=(const AudioSceneSystem&) = delete;
+    AudioSceneSystem(const AudioSceneSystem &) = delete;
+    AudioSceneSystem &operator=(const AudioSceneSystem &) = delete;
 
-    void sync(World& world, AudioSystem& audio, const assets::AssetSystem* assetSystem = nullptr);
-    bool play(World& world, ObjectId object, AudioSystem& audio,
-              const assets::AssetSystem* assetSystem = nullptr);
-    bool pause(ObjectId object, AudioSystem& audio);
-    bool resume(ObjectId object, AudioSystem& audio);
-    void stop(ObjectId object, AudioSystem& audio);
-    void shutdown(AudioSystem& audio);
+    void sync(World &world, AudioSystem &audio, const assets::AssetSystem *assetSystem = nullptr);
+    bool play(World &world, ObjectId object, AudioSystem &audio,
+              const assets::AssetSystem *assetSystem = nullptr);
+    bool pause(ObjectId object, AudioSystem &audio);
+    bool resume(ObjectId object, AudioSystem &audio);
+    void stop(ObjectId object, AudioSystem &audio);
+    void shutdown(AudioSystem &audio);
 
     // Presentation-facing transport state. Runtime voice/asset handles stay
     // private to this bridge; the editor only receives a bounded semantic
     // state string for the selected source.
-    std::string transport_state(ObjectId object, const AudioSystem& audio) const;
-    bool supports_cursor(ObjectId object, const AudioSystem& audio) const;
-    double cursor_seconds(ObjectId object, const AudioSystem& audio) const;
+    std::string transport_state(ObjectId object, const AudioSystem &audio) const;
+    bool supports_cursor(ObjectId object, const AudioSystem &audio) const;
+    double cursor_seconds(ObjectId object, const AudioSystem &audio) const;
     bool has_duration(ObjectId object) const;
     double duration_seconds(ObjectId object) const;
-    bool seek(ObjectId object, double seconds, AudioSystem& audio);
+    bool seek(ObjectId object, double seconds, AudioSystem &audio);
 
-    const AudioSceneDiagnostics& diagnostics() const noexcept { return diagnostics_; }
-    std::size_t source_count() const noexcept { return sources_.size(); }
-    std::size_t clip_count() const noexcept { return clips_.size(); }
+    const AudioSceneDiagnostics &diagnostics() const noexcept {
+        return diagnostics_;
+    }
+    std::size_t source_count() const noexcept {
+        return sources_.size();
+    }
+    std::size_t clip_count() const noexcept {
+        return clips_.size();
+    }
 };
 
 } // namespace audio

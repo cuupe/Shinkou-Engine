@@ -5,6 +5,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <thread>
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -266,6 +267,27 @@ int main() {
     assert(!files.exists("assets/materials/renamed.mat"));
     assert(files.remove("assets/materials", &error));
     assert(!files.exists("assets/materials"));
+
+#if defined(_WIN32)
+    assert(files.write_text_atomic("assets/locked/file.txt", "reader", &error));
+    auto handle = CreateFileW((root / "assets/locked/file.txt").c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    assert(handle != INVALID_HANDLE_VALUE);
+    std::thread reader([handle] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CloseHandle(handle);
+    });
+    const bool renamedAfterRead = files.rename("assets/locked", "assets/unlocked", &error);
+    reader.join();
+    assert(renamedAfterRead && files.exists("assets/unlocked/file.txt"));
+    handle = CreateFileW((root / "assets/unlocked/file.txt").c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    assert(handle != INVALID_HANDLE_VALUE);
+    assert(!files.rename("assets/unlocked", "assets/still-locked", &error));
+    assert(!error.empty() && files.exists("assets/unlocked/file.txt"));
+    CloseHandle(handle);
+    assert(files.rename("assets/unlocked", "assets/still-locked", &error));
+#endif
 
     test_scan_boundaries(root / "scan-boundaries");
     test_io_boundaries(root / "io-boundaries");

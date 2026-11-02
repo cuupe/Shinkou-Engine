@@ -69,18 +69,27 @@ typedef struct ShinkouInputEvent {
     char text[256];
 } ShinkouInputEvent;
 
-SHINKOU_INPUT_API ShinkouInputHandle* SHINKOU_INPUT_CALL shinkou_input_create(void* native_window);
-SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_destroy(ShinkouInputHandle* input);
-SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_initialize(ShinkouInputHandle* input);
-SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_shutdown(ShinkouInputHandle* input);
-SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_attach_window(ShinkouInputHandle* input, void* native_window);
-SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_poll(ShinkouInputHandle* input);
-SHINKOU_INPUT_API float SHINKOU_INPUT_CALL shinkou_input_control_value(const ShinkouInputHandle* input, const char* control);
-SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_get_mouse(const ShinkouInputHandle* input, ShinkouInputMouseState* state);
-SHINKOU_INPUT_API uint32_t SHINKOU_INPUT_CALL shinkou_input_gamepad_count(const ShinkouInputHandle* input);
-SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_get_gamepad(const ShinkouInputHandle* input, uint32_t index, ShinkouInputGamepadState* state);
-SHINKOU_INPUT_API uint32_t SHINKOU_INPUT_CALL shinkou_input_event_count(const ShinkouInputHandle* input);
-SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_get_event(const ShinkouInputHandle* input, uint32_t index, ShinkouInputEvent* event);
+SHINKOU_INPUT_API ShinkouInputHandle *SHINKOU_INPUT_CALL shinkou_input_create(void *native_window);
+SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_destroy(ShinkouInputHandle *input);
+SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_initialize(ShinkouInputHandle *input);
+SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_shutdown(ShinkouInputHandle *input);
+SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_attach_window(ShinkouInputHandle *input,
+                                                                      void *native_window);
+SHINKOU_INPUT_API void SHINKOU_INPUT_CALL shinkou_input_poll(ShinkouInputHandle *input);
+SHINKOU_INPUT_API float SHINKOU_INPUT_CALL
+shinkou_input_control_value(const ShinkouInputHandle *input, const char *control);
+SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_get_mouse(const ShinkouInputHandle *input,
+                                                                 ShinkouInputMouseState *state);
+SHINKOU_INPUT_API uint32_t SHINKOU_INPUT_CALL
+shinkou_input_gamepad_count(const ShinkouInputHandle *input);
+SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_get_gamepad(const ShinkouInputHandle *input,
+                                                                   uint32_t index,
+                                                                   ShinkouInputGamepadState *state);
+SHINKOU_INPUT_API uint32_t SHINKOU_INPUT_CALL
+shinkou_input_event_count(const ShinkouInputHandle *input);
+SHINKOU_INPUT_API int SHINKOU_INPUT_CALL shinkou_input_get_event(const ShinkouInputHandle *input,
+                                                                 uint32_t index,
+                                                                 ShinkouInputEvent *event);
 
 #ifdef __cplusplus
 }

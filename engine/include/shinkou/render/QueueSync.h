@@ -79,14 +79,14 @@ struct QueueSyncPlan {
 };
 
 class QueueSyncPlanner {
-public:
+  public:
     // Compatibility overload: true models distinct families for logical
     // queues, false models all queues sharing one family.
-    static QueueSyncPlan build(const std::vector<QueueSyncRequest>& requests,
+    static QueueSyncPlan build(const std::vector<QueueSyncRequest> &requests,
                                bool queueFamiliesDiffer);
-    static QueueSyncPlan build(const std::vector<QueueSyncRequest>& requests,
-                               const QueueFamilyMap& queueFamilies);
-    static bool validate(const QueueSyncPlan& plan, std::string* error = nullptr);
+    static QueueSyncPlan build(const std::vector<QueueSyncRequest> &requests,
+                               const QueueFamilyMap &queueFamilies);
+    static bool validate(const QueueSyncPlan &plan, std::string *error = nullptr);
 };
 
 // These values mirror legacy Vulkan 1.x barrier bits. Integer masks keep the
@@ -154,15 +154,19 @@ struct VulkanQueueSyncPlan {
     std::vector<VulkanQueueFamilyOwnershipTransfer> releaseBarriers;
     std::vector<VulkanQueueFamilyOwnershipTransfer> acquireBarriers;
 
-    bool requiresQueueSync() const noexcept { return logical.requiresQueueSync; }
-    bool requiresOwnershipTransfer() const noexcept { return logical.requiresOwnershipTransfer; }
+    bool requiresQueueSync() const noexcept {
+        return logical.requiresQueueSync;
+    }
+    bool requiresOwnershipTransfer() const noexcept {
+        return logical.requiresOwnershipTransfer;
+    }
 };
 
 class VulkanQueueSyncPlanner {
-public:
-    static VulkanQueueSyncPlan build(const std::vector<QueueSyncRequest>& requests,
-                                     const QueueFamilyMap& queueFamilies);
-    static bool validate(const VulkanQueueSyncPlan& plan, std::string* error = nullptr);
+  public:
+    static VulkanQueueSyncPlan build(const std::vector<QueueSyncRequest> &requests,
+                                     const QueueFamilyMap &queueFamilies);
+    static bool validate(const VulkanQueueSyncPlan &plan, std::string *error = nullptr);
 };
 
 } // namespace shinkou::render

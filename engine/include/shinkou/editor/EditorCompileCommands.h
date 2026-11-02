@@ -22,18 +22,18 @@ struct EditorCompileCommandsResult {
 };
 
 class EditorCompileCommands final {
-public:
+  public:
     // Parse the clangd/compile_commands.json format. Relative paths are
     // resolved against each command's directory and must stay under the
     // optional project root.
     static EditorCompileCommandsResult parse(std::string_view json,
-                                             const std::filesystem::path& projectRoot = {});
+                                             const std::filesystem::path &projectRoot = {});
 
     // Serialize normalized commands in the portable arguments-array form.
     // The result is suitable for clangd and other language tooling.
-    static bool serialize(const std::vector<EditorCompileCommand>& commands,
-                          const std::filesystem::path& projectRoot,
-                          std::string& json, std::string* error = nullptr);
+    static bool serialize(const std::vector<EditorCompileCommand> &commands,
+                          const std::filesystem::path &projectRoot, std::string &json,
+                          std::string *error = nullptr);
 };
 
 } // namespace shinkou::editor

@@ -51,25 +51,27 @@ struct GpuMemoryBudgetAggregate {
 };
 
 class RenderBudgetService {
-public:
+  public:
     explicit RenderBudgetService(std::size_t capacity = 120);
 
     void set_capacity(std::size_t capacity);
-    std::size_t capacity() const noexcept { return capacity_.load(std::memory_order_relaxed); }
+    std::size_t capacity() const noexcept {
+        return capacity_.load(std::memory_order_relaxed);
+    }
     void clear() noexcept;
 
     // Records a copy, so platform-owned query buffers can be reused after the
     // call. Invalid samples remain in the window for observability.
     void record(GpuMemoryBudgetSnapshot snapshot, std::uint64_t frameIndex = 0);
-    bool sample(const RenderDiagnosticsHooks& hooks, BackendApi api = BackendApi::Null,
+    bool sample(const RenderDiagnosticsHooks &hooks, BackendApi api = BackendApi::Null,
                 std::uint64_t frameIndex = 0);
-    void ingest(const RenderDiagnosticsSnapshot& snapshot, std::uint64_t frameIndex = 0);
+    void ingest(const RenderDiagnosticsSnapshot &snapshot, std::uint64_t frameIndex = 0);
 
     GpuMemoryBudgetAggregate aggregate() const;
     GpuMemoryBudgetSnapshot latest_snapshot() const;
     std::deque<GpuMemoryBudgetSample> samples() const;
 
-private:
+  private:
     std::atomic<std::size_t> capacity_{120};
     std::deque<GpuMemoryBudgetSample> samples_;
     mutable std::mutex mutex_;
@@ -86,8 +88,8 @@ struct DeviceRecoveryStatus {
 };
 
 class DeviceRecoveryStateMachine {
-public:
-    using StateChangedCallback = std::function<void(const DeviceRecoveryStatus&)>;
+  public:
+    using StateChangedCallback = std::function<void(const DeviceRecoveryStatus &)>;
 
     explicit DeviceRecoveryStateMachine(StateChangedCallback callback = {});
 
@@ -97,27 +99,33 @@ public:
     bool mark_failed(std::string error);
     bool reset();
 
-    DeviceRecoveryState state() const noexcept { return status_.state; }
-    const DeviceRecoveryStatus& status() const noexcept { return status_; }
-    void set_callback(StateChangedCallback callback) { callback_ = std::move(callback); }
+    DeviceRecoveryState state() const noexcept {
+        return status_.state;
+    }
+    const DeviceRecoveryStatus &status() const noexcept {
+        return status_;
+    }
+    void set_callback(StateChangedCallback callback) {
+        callback_ = std::move(callback);
+    }
 
-private:
+  private:
     bool transition(DeviceRecoveryState next, std::string error = {});
 
     DeviceRecoveryStatus status_;
     StateChangedCallback callback_;
 };
 
-const char* to_string(DeviceRecoveryState state) noexcept;
+const char *to_string(DeviceRecoveryState state) noexcept;
 
-GpuMemoryBudgetSnapshot to_memory_snapshot(const GpuMemoryBudgetAggregate& aggregate);
-RenderBudgetFaultCorrelation correlate_budget_fault(const GpuMemoryBudgetAggregate& aggregate,
-                                                    const DeviceFaultDiagnostic& fault);
-DeviceFaultDiagnostic to_device_fault(const DeviceRecoveryStatus& status,
+GpuMemoryBudgetSnapshot to_memory_snapshot(const GpuMemoryBudgetAggregate &aggregate);
+RenderBudgetFaultCorrelation correlate_budget_fault(const GpuMemoryBudgetAggregate &aggregate,
+                                                    const DeviceFaultDiagnostic &fault);
+DeviceFaultDiagnostic to_device_fault(const DeviceRecoveryStatus &status,
                                       BackendApi api = BackendApi::Null);
-RenderDiagnosticsSnapshot to_diagnostics_snapshot(const RenderGraph& graph,
-                                                  const GpuMemoryBudgetAggregate& aggregate,
-                                                  const DeviceRecoveryStatus& recovery,
+RenderDiagnosticsSnapshot to_diagnostics_snapshot(const RenderGraph &graph,
+                                                  const GpuMemoryBudgetAggregate &aggregate,
+                                                  const DeviceRecoveryStatus &recovery,
                                                   std::vector<RenderCaptureMarker> markers = {},
                                                   BackendApi api = BackendApi::Null);
 

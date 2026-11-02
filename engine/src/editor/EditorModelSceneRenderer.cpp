@@ -1,7 +1,7 @@
 #include "shinkou/editor/EditorModelSceneRenderer.h"
 
-#include "shinkou/render/Renderer.h"
 #include "shinkou/render/BuiltinShaders.h"
+#include "shinkou/render/Renderer.h"
 
 #include <algorithm>
 #include <array>
@@ -24,8 +24,8 @@ struct SceneFrame {
 
 struct ObjectFrame {
     math::Mat4 model{math::Mat4::Identity()};
-    math::Vec4 baseColor{0.24f,0.62f,0.95f,1.0f};
-    math::Vec4 surface{0.0f,0.5f,0.0f,0.0f};
+    math::Vec4 baseColor{0.24f, 0.62f, 0.95f, 1.0f};
+    math::Vec4 surface{0.0f, 0.5f, 0.0f, 0.0f};
 };
 
 struct DrawItem {
@@ -94,75 +94,96 @@ float4 main(FragmentInput input) : SV_Target
 }
 )hlsl";
 
-bool finite_matrix(const math::Mat4& value) noexcept {
-    for (float component : value.m) if (!math::IsFinite(component)) return false;
+bool finite_matrix(const math::Mat4 &value) noexcept {
+    for (float component : value.m)
+        if (!math::IsFinite(component))
+            return false;
     return true;
 }
 
-bool finite_vec3(const math::Vec3& value) noexcept {
+bool finite_vec3(const math::Vec3 &value) noexcept {
     return math::IsFinite(value.x) && math::IsFinite(value.y) && math::IsFinite(value.z);
 }
 
-std::vector<std::uint8_t> copy_bytes(const void* source, std::size_t bytes) {
+std::vector<std::uint8_t> copy_bytes(const void *source, std::size_t bytes) {
     std::vector<std::uint8_t> output(bytes);
-    if (bytes != 0) std::memcpy(output.data(), source, bytes);
+    if (bytes != 0)
+        std::memcpy(output.data(), source, bytes);
     return output;
 }
 
-bool valid_buffer_description(const render::Renderer& renderer,
-                              render::ResourceHandle handle, std::size_t bytes,
-                              bool vertex, bool index) noexcept {
-    const auto* description = renderer.resource_description(handle);
-    const auto* buffer = description ? std::get_if<render::BufferDesc>(description) : nullptr;
+bool valid_buffer_description(const render::Renderer &renderer, render::ResourceHandle handle,
+                              std::size_t bytes, bool vertex, bool index) noexcept {
+    const auto *description = renderer.resource_description(handle);
+    const auto *buffer = description ? std::get_if<render::BufferDesc>(description) : nullptr;
     return buffer && buffer->size >= bytes && buffer->vertexBuffer == vertex &&
-        buffer->indexBuffer == index;
+           buffer->indexBuffer == index;
 }
 
 std::string backend_label(render::BackendApi api) {
     switch (api) {
-    case render::BackendApi::DirectX11: return "D3D11";
-    case render::BackendApi::DirectX12: return "D3D12";
-    case render::BackendApi::Vulkan: return "Vulkan";
-    case render::BackendApi::Null: break;
+    case render::BackendApi::DirectX11:
+        return "D3D11";
+    case render::BackendApi::DirectX12:
+        return "D3D12";
+    case render::BackendApi::Vulkan:
+        return "Vulkan";
+    case render::BackendApi::Null:
+        break;
     }
     return "Null";
 }
 
 } // namespace
 
-void EditorModelSceneRenderer::clear_pipeline(render::Renderer& renderer) noexcept {
-    if (pipeline_) renderer.destroy_resource(pipeline_);
-    if (fragmentShader_) renderer.destroy_resource(fragmentShader_);
-    if (vertexShader_) renderer.destroy_resource(vertexShader_);
+void EditorModelSceneRenderer::clear_pipeline(render::Renderer &renderer) noexcept {
+    for (auto &[id, object] : objectBuffers_) {
+        (void)id;
+        if (object.material)
+            renderer.destroy_resource(object.material);
+        object.material = {};
+    }
+    if (pipeline_)
+        renderer.destroy_resource(pipeline_);
+    if (fragmentShader_)
+        renderer.destroy_resource(fragmentShader_);
+    if (vertexShader_)
+        renderer.destroy_resource(vertexShader_);
     pipeline_ = {};
     fragmentShader_ = {};
     vertexShader_ = {};
     pipelineColorFormat_.clear();
 }
 
-void EditorModelSceneRenderer::clear(render::Renderer& renderer) noexcept {
-    for (auto& [assetId, geometry] : geometry_) {
+void EditorModelSceneRenderer::clear(render::Renderer &renderer) noexcept {
+    for (auto &[assetId, geometry] : geometry_) {
         (void)assetId;
-        if (geometry.vertexBuffer) renderer.destroy_resource(geometry.vertexBuffer);
-        if (geometry.indexBuffer) renderer.destroy_resource(geometry.indexBuffer);
+        if (geometry.vertexBuffer)
+            renderer.destroy_resource(geometry.vertexBuffer);
+        if (geometry.indexBuffer)
+            renderer.destroy_resource(geometry.indexBuffer);
     }
-    for (auto& [objectId, buffer] : objectBuffers_) {
+    for (auto &[objectId, object] : objectBuffers_) {
         (void)objectId;
-        if (buffer) renderer.destroy_resource(buffer);
+        if (object.material)
+            renderer.destroy_resource(object.material);
+        if (object.buffer)
+            renderer.destroy_resource(object.buffer);
     }
     geometry_.clear();
     objectBuffers_.clear();
-    if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
+    if (sceneBuffer_)
+        renderer.destroy_resource(sceneBuffer_);
     sceneBuffer_ = {};
+    sceneFrameBytes_.clear();
     sceneRevision_ = 0;
     clear_pipeline(renderer);
 }
 
 EditorModelSceneRenderState EditorModelSceneRenderer::render(
-    render::Renderer& renderer,
-    const std::vector<EditorModelSceneInstance>& instances,
-    const math::Mat4& viewProjection,
-    math::Vec3 cameraPosition, render::ResourceHandle colorTarget, render::ResourceHandle depthTarget) {
+    render::Renderer &renderer, const std::vector<EditorModelSceneInstance> &instances,
+    const math::Mat4 &viewProjection, math::Vec3 cameraPosition, render::ResourceHandle colorTarget,
+    render::ResourceHandle depthTarget) {
     EditorModelSceneRenderState state;
     const auto capabilities = renderer.capabilities();
     state.backend = capabilities.api;
@@ -173,16 +194,15 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
     }
     if (!capabilities.deviceReady) {
         state.status = "GPU model scene unavailable: " + backend_label(capabilities.api) +
-            " device is not ready";
+                       " device is not ready";
         return state;
     }
     if (!capabilities.supportsEditorModelRendering) {
         state.status = "GPU model scene fallback: " + backend_label(capabilities.api) +
-            " scene shader path is pending; references remain in the World";
+                       " scene shader path is pending; references remain in the World";
         return state;
     }
-    if (!renderer.editor_viewport().enabled ||
-        !renderer.editor_viewport().viewport.valid() ||
+    if (!renderer.editor_viewport().enabled || !renderer.editor_viewport().viewport.valid() ||
         !capabilities.supportsEditorViewportScissor) {
         state.status = "GPU model scene fallback: editor viewport seam is unavailable";
         return state;
@@ -193,7 +213,8 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
     }
 
     const std::string colorFormat = "bgra8";
-    if (!pipeline_ || pipelineColorFormat_ != colorFormat || pipelineDepth_ != static_cast<bool>(depthTarget)) {
+    if (!pipeline_ || pipelineColorFormat_ != colorFormat ||
+        pipelineDepth_ != static_cast<bool>(depthTarget)) {
         clear_pipeline(renderer);
         render::ShaderDesc vertexDescription;
         vertexDescription.stage = render::ShaderStage::Vertex;
@@ -206,7 +227,8 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         render::ShaderDesc fragmentDescription;
         fragmentDescription.stage = render::ShaderStage::Fragment;
         fragmentDescription.name = "editor_model_scene_fragment";
-        fragmentDescription.source = std::string(render::pbr_shader_library()) + std::string(kSceneFragmentShader);
+        fragmentDescription.source =
+            std::string(render::pbr_shader_library()) + std::string(kSceneFragmentShader);
         fragmentDescription.profile = "ps_5_0";
         fragmentDescription.revision = 1;
         fragmentShader_ = renderer.create_shader(fragmentDescription);
@@ -217,7 +239,8 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         }
 
         render::PipelineDesc pipelineDescription;
-        pipelineDescription.name = "editor_model_scene_pipeline_" + colorFormat + (depthTarget ? "_depth" : "_overlay");
+        pipelineDescription.name =
+            "editor_model_scene_pipeline_" + colorFormat + (depthTarget ? "_depth" : "_overlay");
         pipelineDescription.vertexShader = vertexShader_.id;
         pipelineDescription.fragmentShader = fragmentShader_.id;
         pipelineDescription.depthTest = static_cast<bool>(depthTarget);
@@ -243,136 +266,188 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
 
     SceneFrame sceneFrame;
     sceneFrame.viewProjection = viewProjection;
-    sceneFrame.cameraPositionAndFlags = {cameraPosition.x, cameraPosition.y, cameraPosition.z, 0.0f};
+    sceneFrame.cameraPositionAndFlags = {cameraPosition.x, cameraPosition.y, cameraPosition.z,
+                                         0.0f};
     if (!valid_buffer_description(renderer, sceneBuffer_, sizeof(SceneFrame), false, false)) {
-        if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
+        for (auto &[id, object] : objectBuffers_) {
+            (void)id;
+            if (object.material)
+                renderer.destroy_resource(object.material);
+            object.material = {};
+        }
+        if (sceneBuffer_)
+            renderer.destroy_resource(sceneBuffer_);
         render::BufferDesc description;
         description.size = sizeof(SceneFrame);
         description.uniformBuffer = true;
         description.initialData = copy_bytes(&sceneFrame, sizeof(SceneFrame));
         sceneBuffer_ = renderer.create_buffer(description);
-        sceneRevision_ = 0;
+        sceneFrameBytes_ = description.initialData;
+        state.uniformUploadBytes += sizeof(SceneFrame);
+        sceneRevision_ = 1;
     }
     if (!sceneBuffer_) {
         state.status = "GPU model scene camera upload failed: " + renderer.last_error();
         return state;
     }
-    {
-        if (!renderer.update_buffer({sceneBuffer_, 0, copy_bytes(&sceneFrame, sizeof(SceneFrame))})) {
+    if (sceneFrameBytes_.size() != sizeof(SceneFrame) ||
+        std::memcmp(sceneFrameBytes_.data(), &sceneFrame, sizeof(SceneFrame)) != 0) {
+        if (!renderer.update_buffer(
+                {sceneBuffer_, 0, copy_bytes(&sceneFrame, sizeof(SceneFrame))})) {
             state.status = "GPU model scene camera upload failed: " + renderer.last_error();
             return state;
         }
-        // The scene frame changes with editor camera motion. Uploading this
-        // small bounded buffer once per frame keeps the preview responsive;
-        // model geometry remains cached by AssetId and revision.
+        // Camera changes update this small buffer; stationary frames reuse it.
         ++sceneRevision_;
+        sceneFrameBytes_ = copy_bytes(&sceneFrame, sizeof(SceneFrame));
+        state.uniformUploadBytes += sizeof(SceneFrame);
     }
     state.sceneBufferReady = true;
 
     std::vector<DrawItem> draws;
     draws.reserve(std::min<std::size_t>(instances.size(), 256u));
     std::unordered_set<assets::AssetId> uploadedAssets;
-    for (const auto& instance : instances) {
+    for (const auto &instance : instances) {
         if (instance.assetId == 0 || instance.objectId == 0 || !instance.snapshot ||
             !instance.snapshot->valid() || !finite_matrix(instance.model)) {
             ++state.rejectedInstances;
             continue;
         }
-        const auto& snapshot = *instance.snapshot;
+        const auto &snapshot = *instance.snapshot;
         if (snapshot.vertices->size() > kMaxSceneVertices ||
             snapshot.indices->size() > kMaxSceneIndices ||
-            snapshot.vertices->size() > std::numeric_limits<std::size_t>::max() / sizeof(math::Vec3) ||
-            snapshot.indices->size() > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
+            snapshot.vertices->size() >
+                std::numeric_limits<std::size_t>::max() / sizeof(math::Vec3) ||
+            snapshot.indices->size() >
+                std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
             ++state.rejectedInstances;
             continue;
         }
-        bool validGeometry = true;
-        for (const auto& vertex : *snapshot.vertices) {
-            if (!finite_vec3(vertex)) { validGeometry = false; break; }
-        }
-        if (validGeometry) for (const auto index : *snapshot.indices) {
-            if (index >= snapshot.vertices->size()) { validGeometry = false; break; }
-        }
-        if (!validGeometry) {
-            ++state.rejectedInstances;
-            continue;
-        }
-
-        auto geometryIt = geometry_.find(instance.assetId);
-        if (geometryIt == geometry_.end()) geometryIt = geometry_.emplace(instance.assetId, GeometryResource{}).first;
-        auto& geometry = geometryIt->second;
+        auto &geometry = geometry_[instance.assetId];
         const auto vertexBytes = snapshot.vertices->size() * sizeof(math::Vec3);
         const auto indexBytes = snapshot.indices->size() * sizeof(std::uint32_t);
-        const auto vertexData = copy_bytes(snapshot.vertices->data(), vertexBytes);
-        const auto indexData = copy_bytes(snapshot.indices->data(), indexBytes);
-        if (!valid_buffer_description(renderer, geometry.vertexBuffer, vertexBytes, true, false)) {
-            if (geometry.vertexBuffer) renderer.destroy_resource(geometry.vertexBuffer);
-            render::BufferDesc description;
-            description.size = vertexBytes;
-            description.stride = sizeof(math::Vec3);
-            description.vertexBuffer = true;
-            description.initialData = vertexData;
-            geometry.vertexBuffer = renderer.create_buffer(description);
-            geometry.vertexBytes = geometry.vertexBuffer ? vertexBytes : 0;
-            geometry.revision = 0;
-        } else if (geometry.revision != snapshot.revision) {
-            if (!renderer.update_buffer({geometry.vertexBuffer, 0, vertexData})) {
+        const bool dirty =
+            geometry.snapshot != instance.snapshot || geometry.revision != snapshot.revision;
+        const bool validVertex =
+            valid_buffer_description(renderer, geometry.vertexBuffer, vertexBytes, true, false);
+        const bool validIndex =
+            valid_buffer_description(renderer, geometry.indexBuffer, indexBytes, false, true);
+        if (dirty || !validVertex || !validIndex) {
+            bool validGeometry = true;
+            for (const auto &vertex : *snapshot.vertices) {
+                if (!finite_vec3(vertex)) {
+                    validGeometry = false;
+                    break;
+                }
+            }
+            if (validGeometry)
+                for (const auto index : *snapshot.indices) {
+                    if (index >= snapshot.vertices->size()) {
+                        validGeometry = false;
+                        break;
+                    }
+                }
+            if (!validGeometry) {
                 ++state.rejectedInstances;
                 continue;
             }
-        }
-        if (!valid_buffer_description(renderer, geometry.indexBuffer, indexBytes, false, true)) {
-            if (geometry.indexBuffer) renderer.destroy_resource(geometry.indexBuffer);
-            render::BufferDesc description;
-            description.size = indexBytes;
-            description.stride = sizeof(std::uint32_t);
-            description.indexBuffer = true;
-            description.initialData = indexData;
-            geometry.indexBuffer = renderer.create_buffer(description);
-            geometry.indexBytes = geometry.indexBuffer ? indexBytes : 0;
-            geometry.revision = 0;
-        } else if (geometry.revision != snapshot.revision) {
-            if (!renderer.update_buffer({geometry.indexBuffer, 0, indexData})) {
+
+            const auto vertexData = copy_bytes(snapshot.vertices->data(), vertexBytes);
+            const auto indexData = copy_bytes(snapshot.indices->data(), indexBytes);
+            if (!validVertex) {
+                if (geometry.vertexBuffer)
+                    renderer.destroy_resource(geometry.vertexBuffer);
+                render::BufferDesc description;
+                description.size = vertexBytes;
+                description.stride = sizeof(math::Vec3);
+                description.vertexBuffer = true;
+                description.initialData = vertexData;
+                geometry.vertexBuffer = renderer.create_buffer(description);
+                geometry.vertexBytes = geometry.vertexBuffer ? vertexBytes : 0;
+                geometry.revision = 0;
+            } else if (dirty) {
+                if (!renderer.update_buffer({geometry.vertexBuffer, 0, vertexData})) {
+                    ++state.rejectedInstances;
+                    continue;
+                }
+            }
+            if (!validIndex) {
+                if (geometry.indexBuffer)
+                    renderer.destroy_resource(geometry.indexBuffer);
+                render::BufferDesc description;
+                description.size = indexBytes;
+                description.stride = sizeof(std::uint32_t);
+                description.indexBuffer = true;
+                description.initialData = indexData;
+                geometry.indexBuffer = renderer.create_buffer(description);
+                geometry.indexBytes = geometry.indexBuffer ? indexBytes : 0;
+                geometry.revision = 0;
+            } else if (dirty) {
+                if (!renderer.update_buffer({geometry.indexBuffer, 0, indexData})) {
+                    ++state.rejectedInstances;
+                    continue;
+                }
+            }
+            if (!geometry.vertexBuffer || !geometry.indexBuffer) {
                 ++state.rejectedInstances;
                 continue;
             }
+            geometry.revision = snapshot.revision;
+            geometry.snapshot = instance.snapshot;
+            geometry.indexCount = static_cast<std::uint32_t>(snapshot.indices->size());
+            state.geometryUploadBytes += vertexBytes + indexBytes;
         }
-        if (!geometry.vertexBuffer || !geometry.indexBuffer) {
-            ++state.rejectedInstances;
-            continue;
-        }
-        geometry.revision = snapshot.revision;
-        geometry.indexCount = static_cast<std::uint32_t>(snapshot.indices->size());
         uploadedAssets.insert(instance.assetId);
 
         ObjectFrame objectFrame;
         objectFrame.model = instance.model;
         if (snapshot.materials && !snapshot.materials->empty()) {
-            const auto& material = snapshot.materials->front();
-            objectFrame.baseColor = {material.baseColorFactor[0],material.baseColorFactor[1],material.baseColorFactor[2],material.baseColorFactor[3]};
-            objectFrame.surface = {material.metallicFactor,std::max(0.04f,material.roughnessFactor),0,0};
+            const auto &material = snapshot.materials->front();
+            objectFrame.baseColor = {material.baseColorFactor[0], material.baseColorFactor[1],
+                                     material.baseColorFactor[2], material.baseColorFactor[3]};
+            objectFrame.surface = {material.metallicFactor,
+                                   std::max(0.04f, material.roughnessFactor), 0, 0};
+        }
+        if (instance.colorOverride) {
+            const auto color = *instance.colorOverride;
+            objectFrame.baseColor = {color.x, color.y, color.z, 1};
         }
         auto objectIt = objectBuffers_.find(instance.objectId);
-        if (objectIt == objectBuffers_.end()) objectIt = objectBuffers_.emplace(instance.objectId, render::ResourceHandle{}).first;
-        auto& objectBuffer = objectIt->second;
+        if (objectIt == objectBuffers_.end())
+            objectIt = objectBuffers_.emplace(instance.objectId, ObjectResource{}).first;
+        auto &object = objectIt->second;
+        auto &objectBuffer = object.buffer;
         if (!valid_buffer_description(renderer, objectBuffer, sizeof(ObjectFrame), false, false)) {
-            if (objectBuffer) renderer.destroy_resource(objectBuffer);
+            if (objectBuffer)
+                renderer.destroy_resource(objectBuffer);
             render::BufferDesc description;
             description.size = sizeof(ObjectFrame);
             description.uniformBuffer = true;
             description.initialData = copy_bytes(&objectFrame, sizeof(ObjectFrame));
             objectBuffer = renderer.create_buffer(description);
-        } else if (!renderer.update_buffer({objectBuffer, 0, copy_bytes(&objectFrame, sizeof(ObjectFrame))})) {
-            ++state.rejectedInstances;
-            continue;
+            object.frameBytes = description.initialData;
+            state.uniformUploadBytes += sizeof(ObjectFrame);
+            if (object.material)
+                renderer.destroy_resource(object.material);
+            object.material = {};
+        } else if (object.frameBytes.size() != sizeof(ObjectFrame) ||
+                   std::memcmp(object.frameBytes.data(), &objectFrame, sizeof(ObjectFrame)) != 0) {
+            auto bytes = copy_bytes(&objectFrame, sizeof(ObjectFrame));
+            if (!renderer.update_buffer({objectBuffer, 0, bytes})) {
+                ++state.rejectedInstances;
+                continue;
+            }
+            object.frameBytes = std::move(bytes);
+            state.uniformUploadBytes += sizeof(ObjectFrame);
         }
         if (!objectBuffer) {
             ++state.rejectedInstances;
             continue;
         }
         auto import_resource = [&](render::ResourceHandle handle) {
-            const auto* description = renderer.resource_description(handle);
-            if (!description) return false;
+            const auto *description = renderer.resource_description(handle);
+            if (!description)
+                return false;
             renderer.graph().import_resource(handle, *description);
             return true;
         };
@@ -381,15 +456,40 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
             ++state.rejectedInstances;
             continue;
         }
-        const auto material = renderer.graph().create_material({
-            "editor_model_scene_material_" + std::to_string(instance.objectId), pipeline_,
-            {{"SceneFrame", sceneBuffer_, render::DescriptorType::UniformBuffer, 2, 0, 1, false, {}},
-             {"ObjectFrame", objectBuffer, render::DescriptorType::UniformBuffer, 3, 0, 1, false, {}}}, false});
+        if (!object.material) {
+            object.material = renderer.create_material(
+                {"editor_model_scene_material_" + std::to_string(instance.objectId),
+                 pipeline_,
+                 {{"SceneFrame",
+                   sceneBuffer_,
+                   render::DescriptorType::UniformBuffer,
+                   2,
+                   0,
+                   1,
+                   false,
+                   {}},
+                  {"ObjectFrame",
+                   objectBuffer,
+                   render::DescriptorType::UniformBuffer,
+                   3,
+                   0,
+                   1,
+                   false,
+                   {}}},
+                 false});
+            ++state.materialCreations;
+        }
+        const auto material = object.material;
+        if (material && !import_resource(material)) {
+            ++state.rejectedInstances;
+            continue;
+        }
         if (!material) {
             ++state.rejectedInstances;
             continue;
         }
-        draws.push_back({material, geometry.vertexBuffer, geometry.indexBuffer, objectBuffer, geometry.indexCount});
+        draws.push_back({material, geometry.vertexBuffer, geometry.indexBuffer, objectBuffer,
+                         geometry.indexCount});
         ++state.submittedInstances;
     }
 
@@ -398,54 +498,76 @@ EditorModelSceneRenderState EditorModelSceneRenderer::render(
         state.status = "GPU model scene waiting: no valid model geometry is ready";
         return state;
     }
-    std::vector<render::ResourceAccess> accesses{{sceneBuffer_, render::ResourceUsage::UniformBuffer}};
-    for (const auto target : {colorTarget,depthTarget}) {
-        if (target) if (const auto* description=renderer.resource_description(target))
-            renderer.graph().import_resource(target,*description);
+    std::vector<render::ResourceAccess> accesses{
+        {sceneBuffer_, render::ResourceUsage::UniformBuffer}};
+    for (const auto target : {colorTarget, depthTarget}) {
+        if (target)
+            if (const auto *description = renderer.resource_description(target))
+                renderer.graph().import_resource(target, *description);
     }
-    if (colorTarget) accesses.push_back({colorTarget,render::ResourceUsage::ColorAttachment});
-    if (depthTarget) accesses.push_back({depthTarget,render::ResourceUsage::DepthStencil});
+    if (colorTarget)
+        accesses.push_back({colorTarget, render::ResourceUsage::ColorAttachment});
+    if (depthTarget)
+        accesses.push_back({depthTarget, render::ResourceUsage::DepthStencil});
     std::unordered_set<std::uint32_t> accessed{sceneBuffer_.id};
-    const auto append_access=[&](render::ResourceHandle resource,render::ResourceUsage usage) {
-        if (accessed.insert(resource.id).second) accesses.push_back({resource,usage});
+    const auto append_access = [&](render::ResourceHandle resource, render::ResourceUsage usage) {
+        if (accessed.insert(resource.id).second)
+            accesses.push_back({resource, usage});
     };
-    for (const auto& draw : draws) {
+    for (const auto &draw : draws) {
         append_access(draw.material, render::ResourceUsage::ShaderRead);
         append_access(draw.vertexBuffer, render::ResourceUsage::VertexBuffer);
         append_access(draw.indexBuffer, render::ResourceUsage::IndexBuffer);
         append_access(draw.objectBuffer, render::ResourceUsage::UniformBuffer);
     }
-    renderer.graph().add_pass("editor_model_scene", std::move(accesses),
-        [draws = std::move(draws), scene = sceneBuffer_, colorTarget, depthTarget](auto& backend, const auto&) {
-            if (!backend.bind_editor_render_target(colorTarget, depthTarget, false)) return;
-            for (const auto& draw : draws) {
+    renderer.graph().add_pass(
+        "editor_model_scene", std::move(accesses),
+        [draws = std::move(draws), scene = sceneBuffer_, colorTarget, depthTarget](auto &backend,
+                                                                                   const auto &) {
+            if (!backend.bind_editor_render_target(colorTarget, depthTarget, false))
+                return;
+            for (const auto &draw : draws) {
                 backend.bind_material(draw.material);
                 backend.bind_uniform_buffer(scene, 2, 0);
                 backend.bind_uniform_buffer(draw.objectBuffer, 3, 0);
-                backend.draw_mesh({draw.vertexBuffer, draw.indexBuffer, draw.indexCount, math::Mat4::Identity()});
+                backend.draw_mesh(
+                    {draw.vertexBuffer, draw.indexBuffer, draw.indexCount, math::Mat4::Identity()});
             }
-        }, render::RenderQueue::Graphics, true, false);
+        },
+        render::RenderQueue::Graphics, true, false);
     state.rendererReady = true;
     state.frameRevision = sceneRevision_;
-    state.status = "GPU model scene ready (D3D11): " + std::to_string(state.submittedInstances) +
-        " AssetId-backed instance(s) submitted";
+    state.status = "GPU model scene ready (" + backend_label(capabilities.api) +
+                   "): " + std::to_string(state.submittedInstances) +
+                   " AssetId-backed instance(s) submitted";
     return state;
 }
 
-void EditorModelSceneRenderer::prune(render::Renderer& renderer,
-                                     const std::vector<assets::AssetId>& activeAssets,
-                                     const std::vector<std::uint64_t>& activeObjects) noexcept {
+void EditorModelSceneRenderer::prune(render::Renderer &renderer,
+                                     const std::vector<assets::AssetId> &activeAssets,
+                                     const std::vector<std::uint64_t> &activeObjects) noexcept {
     const std::unordered_set<assets::AssetId> assets(activeAssets.begin(), activeAssets.end());
     for (auto it = geometry_.begin(); it != geometry_.end();) {
-        if (assets.find(it->first) != assets.end()) { ++it; continue; }
-        if (it->second.vertexBuffer) renderer.destroy_resource(it->second.vertexBuffer);
-        if (it->second.indexBuffer) renderer.destroy_resource(it->second.indexBuffer);
+        if (assets.find(it->first) != assets.end()) {
+            ++it;
+            continue;
+        }
+        if (it->second.vertexBuffer)
+            renderer.destroy_resource(it->second.vertexBuffer);
+        if (it->second.indexBuffer)
+            renderer.destroy_resource(it->second.indexBuffer);
         it = geometry_.erase(it);
     }
     const std::unordered_set<std::uint64_t> objects(activeObjects.begin(), activeObjects.end());
     for (auto it = objectBuffers_.begin(); it != objectBuffers_.end();) {
-        if (objects.find(it->first) != objects.end()) { ++it; continue; }
-        if (it->second) renderer.destroy_resource(it->second);
+        if (objects.find(it->first) != objects.end()) {
+            ++it;
+            continue;
+        }
+        if (it->second.material)
+            renderer.destroy_resource(it->second.material);
+        if (it->second.buffer)
+            renderer.destroy_resource(it->second.buffer);
         it = objectBuffers_.erase(it);
     }
 }

@@ -10,6 +10,18 @@
 #include <vector>
 
 int main() {
+    {
+        shinkou::render::BufferDesc source{4096,16,true,false,std::vector<std::uint8_t>(4096,7)};
+        source.structuredBuffer=true;source.storageBuffer=true;source.uniformBuffer=true;
+        shinkou::render::RenderGraph imports;
+        const shinkou::render::ResourceHandle buffer{0x40000001,shinkou::render::ResourceKind::Buffer};
+        imports.import_resource(buffer,source);
+        const auto& metadata=std::get<shinkou::render::BufferDesc>(imports.resources().front().description);
+        if (!metadata.initialData.empty() || source.initialData.size()!=4096 || metadata.size!=source.size ||
+            metadata.stride!=16 || !metadata.vertexBuffer || !metadata.structuredBuffer || !metadata.storageBuffer || !metadata.uniformBuffer) {
+            std::cerr<<"External imports copied creation payloads or lost buffer metadata\n";return 80;
+        }
+    }
     shinkou::math::Transform transform;
     transform.position = {3.0f, 4.0f, 5.0f};
     transform.scale = {2.0f, 2.0f, 2.0f};

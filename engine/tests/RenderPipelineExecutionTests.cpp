@@ -101,6 +101,7 @@ void image_pipeline(Renderer& renderer) {
         if (std::none_of(dependencies.begin(),dependencies.end(),[&](const auto& resource){return resource.handle.id==binding.resource.id;}))
             dependencies.push_back({binding.resource,*renderer.resource_description(binding.resource)});
     const bool canRead=renderer.capabilities().supportsTextureReadback;
+    const bool canObserve=renderer.capabilities().supportsInPassTextureReadback;
     TextureDesc targetDescription;
     targetDescription.width=targetDescription.height=32; targetDescription.renderTarget=true;
     const auto target=renderer.create_texture(targetDescription);
@@ -143,7 +144,7 @@ void image_pipeline(Renderer& renderer) {
         require(images.install(description),"image programs install");
         std::map<RenderFeatureGraphStage,std::array<float,4>> observed;
         for (auto& executor:description.executors) {
-            if (!canRead || !executor.prepare || executor.stage==RenderFeatureGraphStage::Opaque) continue;
+            if (!canObserve || !executor.prepare || executor.stage==RenderFeatureGraphStage::Opaque) continue;
             const auto prepare=executor.prepare;
             executor.prepare=[prepare,&observed,stage=executor.stage](auto& graph,const auto& contract) {
                 auto commands=prepare(graph,contract);
@@ -178,14 +179,16 @@ void image_pipeline(Renderer& renderer) {
         require(renderer.read_texture({target},readback),"pixel readback: "+renderer.last_error());
         const auto offset=(readback.height/2)*readback.rowPitch+(readback.width/2)*4;
         const auto red=readback.data[offset],green=readback.data[offset+1],blue=readback.data[offset+2];
+        if (canObserve) {
         require(std::abs(observed.at(RenderFeatureGraphStage::SSAO)[0]-1.0f)<0.01f,"a planar surface must remain unoccluded");
         require(std::abs(observed.at(RenderFeatureGraphStage::Exposure)[0]-0.1481f)<0.005f,"automatic exposure used the wrong luminance/parameters");
         require(std::abs(observed.at(RenderFeatureGraphStage::Bloom)[0]-2.4f)<0.02f,"bloom threshold/intensity parameters were not applied");
+        }
         require(red>green && green>blue && red>100 && blue>5,"HDR/effects/tone mapping did not reach final pixels: "+
             std::to_string(red)+","+std::to_string(green)+","+std::to_string(blue)+" frame="+std::to_string(frame));
         }
         require(graph.diagnostics().executedPassCount>=9,"image stages were not executed");
-        if (!canRead) require(graph.diagnostics().recordedPassCount>=7,"image command recording did not participate in execution");
+        if (!canObserve) require(graph.diagnostics().recordedPassCount>=7,"image command recording did not participate in execution");
         history.advance();
     }
     require(history.input().id!=initialHistory.id,"history did not ping-pong");

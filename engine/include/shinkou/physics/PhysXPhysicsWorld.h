@@ -6,33 +6,37 @@
 namespace shinkou::physics {
 
 class PhysXPhysicsWorld final : public IPhysicsWorld {
-public:
+  public:
     // Definition remains private to the implementation file; the forward
     // declaration is public only so internal helper functions can be kept
     // out of the public API without exposing PhysX headers.
     struct Impl;
 
-private:
+  private:
     std::unique_ptr<Impl> impl_;
 
-public:
-    explicit PhysXPhysicsWorld(const PhysicsWorldConfig& config = {});
+  public:
+    explicit PhysXPhysicsWorld(const PhysicsWorldConfig &config = {});
     ~PhysXPhysicsWorld() override;
 
-    PhysXPhysicsWorld(const PhysXPhysicsWorld&) = delete;
-    PhysXPhysicsWorld& operator=(const PhysXPhysicsWorld&) = delete;
+    PhysXPhysicsWorld(const PhysXPhysicsWorld &) = delete;
+    PhysXPhysicsWorld &operator=(const PhysXPhysicsWorld &) = delete;
 
-    PhysicsBackend backend() const noexcept override { return PhysicsBackend::PhysX; }
+    PhysicsBackend backend() const noexcept override {
+        return PhysicsBackend::PhysX;
+    }
     bool is_available() const noexcept override;
-    const char* backend_name() const noexcept override { return "PhysX"; }
-    const std::string& last_error() const noexcept override;
+    const char *backend_name() const noexcept override {
+        return "PhysX";
+    }
+    const std::string &last_error() const noexcept override;
 
-    BodyId create_body(const BodyDesc&) override;
+    BodyId create_body(const BodyDesc &) override;
     void destroy_body(BodyId) override;
     bool is_valid(BodyId) const noexcept override;
-    bool get_body_state(BodyId, BodyState&) const noexcept override;
-    void get_body_ids(std::vector<BodyId>&) const override;
-    void get_body_states(std::vector<BodyState>&) const override;
+    bool get_body_state(BodyId, BodyState &) const noexcept override;
+    void get_body_ids(std::vector<BodyId> &) const override;
+    void get_body_states(std::vector<BodyState> &) const override;
 
     bool set_body_transform(BodyId, math::Vec3 position, math::Quat rotation,
                             bool wake = true) override;
@@ -46,10 +50,10 @@ public:
     math::Vec3 gravity() const noexcept override;
     void step(float dt) override;
 
-    bool raycast(const RaycastQuery&, RaycastHit&) const override;
+    bool raycast(const RaycastQuery &, RaycastHit &) const override;
     void set_contact_listener(ContactListener listener) override;
-    void drain_contact_events(std::vector<ContactEvent>& output) override;
-    const PhysicsStatistics& statistics() const noexcept override;
+    void drain_contact_events(std::vector<ContactEvent> &output) override;
+    const PhysicsStatistics &statistics() const noexcept override;
 };
 
 } // namespace shinkou::physics

@@ -1,0 +1,22 @@
+# Repeatable 4K native viewport workload. Record UI metrics via environment.
+wait 700
+resize 3840x2160
+wait 1000
+click "world-object:Demo Mesh"
+axis-drag "viewport.gizmo-center" 80 -20
+axis-drag "viewport.gizmo-center" -80 20
+axis-drag "viewport.gizmo-center" 80 -20
+axis-drag "viewport.gizmo-center" -80 20
+axis-drag "viewport.gizmo-center" 80 -20
+axis-drag "viewport.gizmo-center" -80 20
+remember-camera
+look-hold 50 15
+camera-look
+remember-camera
+pan 25 -15
+camera-pan-plane
+wait 1500
+capture final
+resize 1440x900
+wait 700
+capture restored

@@ -20,6 +20,54 @@
       "cacheVariables": {
         "SHINKOU_BUILD_SAMPLE": "ON"
       }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug (platform layer)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/out/build/linux-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SHINKOU_BUILD_SAMPLE": "OFF",
+        "SHINKOU_BUILD_EDITOR": "OFF",
+        "SHINKOU_BUILD_PHYSICS_VISUALIZER": "OFF",
+        "SHINKOU_BUILD_SHADER_SCENE_TEST": "OFF",
+        "SHINKOU_BUILD_PHYSICS_EXAMPLE": "OFF",
+        "SHINKOU_BUILD_PHYSICS_PERFORMANCE_TEST": "OFF",
+        "SHINKOU_BUILD_AUDIO_MIXER_TEST": "OFF",
+        "SHINKOU_ENABLE_SDL3_INPUT": "OFF",
+        "SHINKOU_ENABLE_IMGUI": "OFF",
+        "SHINKOU_ENABLE_MINIAUDIO": "OFF",
+        "SHINKOU_ENABLE_PHYSX": "OFF",
+        "SHINKOU_ENABLE_LUA": "OFF",
+        "SHINKOU_ENABLE_PYTHON": "OFF",
+        "SHINKOU_ENABLE_CSHARP": "OFF",
+        "SHINKOU_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "macOS Debug (platform layer)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/out/build/macos-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SHINKOU_BUILD_SAMPLE": "OFF",
+        "SHINKOU_BUILD_EDITOR": "OFF",
+        "SHINKOU_BUILD_PHYSICS_VISUALIZER": "OFF",
+        "SHINKOU_BUILD_SHADER_SCENE_TEST": "OFF",
+        "SHINKOU_BUILD_PHYSICS_EXAMPLE": "OFF",
+        "SHINKOU_BUILD_PHYSICS_PERFORMANCE_TEST": "OFF",
+        "SHINKOU_BUILD_AUDIO_MIXER_TEST": "OFF",
+        "SHINKOU_ENABLE_SDL3_INPUT": "OFF",
+        "SHINKOU_ENABLE_IMGUI": "OFF",
+        "SHINKOU_ENABLE_MINIAUDIO": "OFF",
+        "SHINKOU_ENABLE_PHYSX": "OFF",
+        "SHINKOU_ENABLE_LUA": "OFF",
+        "SHINKOU_ENABLE_PYTHON": "OFF",
+        "SHINKOU_ENABLE_CSHARP": "OFF",
+        "SHINKOU_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -31,6 +79,14 @@
       "name": "windows-vs-debug",
       "configurePreset": "windows-vs",
       "configuration": "Debug"
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug"
     }
   ]
 }

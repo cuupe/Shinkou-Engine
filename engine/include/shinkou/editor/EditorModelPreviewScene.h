@@ -33,8 +33,8 @@ struct EditorModelPreviewSceneState {
     bool animationPlayable{false};
 
     bool valid() const noexcept {
-        return geometryRevision != 0 && projectionRevision != 0 && camera.valid() &&
-            wireSegments && wireSegments->size() >= 2 && (wireSegments->size() % 2) == 0;
+        return geometryRevision != 0 && projectionRevision != 0 && camera.valid() && wireSegments &&
+               wireSegments->size() >= 2 && (wireSegments->size() % 2) == 0;
     }
 };
 
@@ -54,7 +54,7 @@ class EditorModelPreviewScene final {
     void rebuild_projection() noexcept;
     void clear_animation() noexcept;
 
-public:
+  public:
     void clear() noexcept;
     void set_snapshot(std::shared_ptr<const EditorModelPreviewSnapshot> snapshot) noexcept;
     void reset_camera() noexcept;
@@ -67,10 +67,18 @@ public:
     void seek_animation(float seconds) noexcept;
     void advance_animation(float deltaSeconds) noexcept;
 
-    const std::shared_ptr<const EditorModelPreviewSnapshot>& snapshot() const noexcept { return snapshot_; }
-    const EditorModelPreviewCameraState& camera() const noexcept { return camera_; }
-    std::int32_t animation_index() const noexcept { return animationIndex_; }
-    const animation::Animator& animator() const noexcept { return animator_; }
+    const std::shared_ptr<const EditorModelPreviewSnapshot> &snapshot() const noexcept {
+        return snapshot_;
+    }
+    const EditorModelPreviewCameraState &camera() const noexcept {
+        return camera_;
+    }
+    std::int32_t animation_index() const noexcept {
+        return animationIndex_;
+    }
+    const animation::Animator &animator() const noexcept {
+        return animator_;
+    }
     std::shared_ptr<const EditorModelPreviewSceneState> state() const;
 };
 

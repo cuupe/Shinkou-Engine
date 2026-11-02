@@ -9,10 +9,14 @@ namespace shinkou::editor {
 // Scene JSON and the retained compatibility adapter use a text projection.
 // Native inspector edits use PropertyValue directly. Parsing must consume the
 // complete value and reject non-finite numbers before calling a setter.
-std::string property_text(const PropertyValue& value);
-bool parse_property_text(PropertyType type, std::string_view text, PropertyValue& value);
+std::string property_text(const PropertyValue &value);
+bool parse_property_text(PropertyType type, std::string_view text, PropertyValue &value);
 
-struct DocumentProperty { std::string name; std::uint32_t type{0}; std::string value; };
+struct DocumentProperty {
+    std::string name;
+    std::uint32_t type{0};
+    std::string value;
+};
 struct DocumentComponent {
     std::string type;
     bool enabled{true};
@@ -30,10 +34,13 @@ struct EditorDocument {
     std::int32_t selected{-1};
     std::vector<DocumentObject> objects;
 
-    static bool capture(World& world, ObjectId selection, EditorDocument& document, std::string& error);
-    bool restore(World& world, ObjectId& selection, std::string& error) const;
-    bool to_json(std::string& json, std::string& error) const;
-    static bool from_json(std::string_view json, EditorDocument& document, std::string& error);
+    static bool capture(World &world, ObjectId selection, EditorDocument &document,
+                        std::string &error);
+    static bool capture_subtree(GameObject &, EditorDocument &, std::string &error);
+    bool instantiate(World &, ObjectId parent, ObjectId &selection, std::string &error) const;
+    bool restore(World &world, ObjectId &selection, std::string &error) const;
+    bool to_json(std::string &json, std::string &error) const;
+    static bool from_json(std::string_view json, EditorDocument &document, std::string &error);
 };
 
 } // namespace shinkou::editor
@@ -48,4 +55,4 @@ SHINKOU_REFLECT_TYPE(std::vector<::shinkou::editor::DocumentProperty>, "editor.P
 SHINKOU_REFLECT_TYPE(std::vector<::shinkou::editor::DocumentComponent>, "editor.Components");
 SHINKOU_REFLECT_TYPE(std::vector<::shinkou::editor::DocumentObject>, "editor.Objects");
 SHINKOU_REFLECT_TYPE(std::vector<std::string>, "editor.Strings");
-}
+} // namespace shinkou::reflection

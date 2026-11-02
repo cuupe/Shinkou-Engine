@@ -22,8 +22,8 @@ struct EditorVideoPreviewSnapshot {
     std::shared_ptr<const ui::UiImageSnapshot> firstFrame{};
 
     bool valid() const noexcept {
-        return revision != 0 && width > 0 && height > 0 && duration >= 0.0 &&
-            firstFrame && firstFrame->valid();
+        return revision != 0 && width > 0 && height > 0 && duration >= 0.0 && firstFrame &&
+               firstFrame->valid();
     }
 };
 
@@ -38,24 +38,19 @@ struct EditorVideoPreviewResult {
 // Extracts bounded video metadata and one decoded first-frame snapshot on
 // platforms with a registered provider. The worker never exposes decoder
 // handles to retained UI and may be cancelled during resource switches.
-EditorVideoPreviewResult load_editor_video_preview(
-    const FileSystemService& files,
-    std::string_view relativePath,
-    std::uint64_t generation,
-    std::uint64_t sourceStamp,
-    std::uint32_t maxDimension = 512,
-    const std::atomic_bool* cancel = nullptr);
+EditorVideoPreviewResult load_editor_video_preview(const FileSystemService &files,
+                                                   std::string_view relativePath,
+                                                   std::uint64_t generation,
+                                                   std::uint64_t sourceStamp,
+                                                   std::uint32_t maxDimension = 512,
+                                                   const std::atomic_bool *cancel = nullptr);
 
 // Decodes one bounded frame at a requested presentation time. Metadata is
 // republished with the frame so a seek result can replace the retained image
 // without exposing Media Foundation handles to the editor UI.
-EditorVideoPreviewResult load_editor_video_frame(
-    const FileSystemService& files,
-    std::string_view relativePath,
-    std::uint64_t generation,
-    std::uint64_t sourceStamp,
-    double seconds,
-    std::uint32_t maxDimension = 512,
-    const std::atomic_bool* cancel = nullptr);
+EditorVideoPreviewResult
+load_editor_video_frame(const FileSystemService &files, std::string_view relativePath,
+                        std::uint64_t generation, std::uint64_t sourceStamp, double seconds,
+                        std::uint32_t maxDimension = 512, const std::atomic_bool *cancel = nullptr);
 
 } // namespace shinkou::editor

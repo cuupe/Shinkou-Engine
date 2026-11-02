@@ -7,18 +7,58 @@
 
 namespace shinkou::render {
 enum class CompareOp { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
-enum class StencilOp { Keep, Zero, Replace, IncrementClamp, DecrementClamp, Invert, IncrementWrap, DecrementWrap };
+enum class StencilOp {
+    Keep,
+    Zero,
+    Replace,
+    IncrementClamp,
+    DecrementClamp,
+    Invert,
+    IncrementWrap,
+    DecrementWrap
+};
 enum class BlendOp { Add, Subtract, ReverseSubtract, Min, Max };
 enum class BlendFactor {
-    Zero, One, SrcColor, OneMinusSrcColor, DstColor, OneMinusDstColor,
-    SrcAlpha, OneMinusSrcAlpha, DstAlpha, OneMinusDstAlpha,
-    ConstantColor, OneMinusConstantColor, ConstantAlpha, OneMinusConstantAlpha,
-    SrcAlphaSaturate, Src1Color, OneMinusSrc1Color, Src1Alpha, OneMinusSrc1Alpha
+    Zero,
+    One,
+    SrcColor,
+    OneMinusSrcColor,
+    DstColor,
+    OneMinusDstColor,
+    SrcAlpha,
+    OneMinusSrcAlpha,
+    DstAlpha,
+    OneMinusDstAlpha,
+    ConstantColor,
+    OneMinusConstantColor,
+    ConstantAlpha,
+    OneMinusConstantAlpha,
+    SrcAlphaSaturate,
+    Src1Color,
+    OneMinusSrc1Color,
+    Src1Alpha,
+    OneMinusSrc1Alpha
 };
 enum class VertexFormat {
-    Float, Float2, Float3, Float4, UInt, UInt2, UInt3, UInt4,
-    Int, Int2, Int3, Int4, UNorm8x4, SNorm8x4, UInt8x4,
-    UNorm16x2, UNorm16x4, Half2, Half4
+    Float,
+    Float2,
+    Float3,
+    Float4,
+    UInt,
+    UInt2,
+    UInt3,
+    UInt4,
+    Int,
+    Int2,
+    Int3,
+    Int4,
+    UNorm8x4,
+    SNorm8x4,
+    UInt8x4,
+    UNorm16x2,
+    UNorm16x4,
+    Half2,
+    Half4
 };
 
 struct VertexBindingDesc {
@@ -76,10 +116,10 @@ struct RasterizerState {
 
 struct PipelineDesc;
 std::uint32_t vertex_format_size(VertexFormat format) noexcept;
-VertexLayout resolve_vertex_layout(const PipelineDesc& description);
-DepthStencilState resolve_depth_stencil(const PipelineDesc& description);
-std::vector<BlendAttachmentState> resolve_blend_attachments(const PipelineDesc& description);
-bool validate_pipeline_state(const PipelineDesc& description, std::string& error);
+VertexLayout resolve_vertex_layout(const PipelineDesc &description);
+DepthStencilState resolve_depth_stencil(const PipelineDesc &description);
+std::vector<BlendAttachmentState> resolve_blend_attachments(const PipelineDesc &description);
+bool validate_pipeline_state(const PipelineDesc &description, std::string &error);
 // Shared by logical pipeline caches and native PSO caches.
-std::string pipeline_state_key(const PipelineDesc& description);
-}
+std::string pipeline_state_key(const PipelineDesc &description);
+} // namespace shinkou::render

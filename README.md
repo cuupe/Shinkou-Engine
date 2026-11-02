@@ -7,6 +7,7 @@ C++17 游戏引擎与 Windows 原生编辑器，使用 CMake 构建。主引擎�
 
 | 路径 | 内容 |
 | --- | --- |
+| `core/` | 独立公共基础库：错误/结果、值树与 JSON、句柄、哈希和 UTF-8 路径 |
 | `engine/include/shinkou/` | 引擎公开头文件 |
 | `engine/src/` | 各子系统实现 |
 | `engine/tests/` | 引擎单元与合约测试 |
@@ -25,7 +26,8 @@ C++17 游戏引擎与 Windows 原生编辑器，使用 CMake 构建。主引擎�
 
 ## 构建与测试
 
-需要 CMake 3.25 或更新版本及支持 C++17 的编译器。Windows 上已有 MinGW 和
+需要 CMake 3.25 或更新版本及支持 C++20 的编译器（协程运行库使用 C++20，
+现有引擎调用接口保留 C++17）。Windows 上已有 MinGW 和
 Visual Studio 预设；`windows-vs` 使用 Visual Studio 18 2026 生成器。
 
 在仓库根目录运行：
@@ -53,6 +55,10 @@ $env:PATH = 'D:\paths\GNU\mingw64\bin;' + $env:PATH
 `SHINKOU_ENABLE_SDL3_INPUT`。`SHINKOU_FETCH_DEPENDENCIES=OFF` 不会关闭输入模块
 单独控制的 SDL3 下载。PhysX、Vulkan、Lua、Python、.NET 等依赖的探测与配置见
 `cmake/ShinkouDependencies.cmake`；PhysX 的接入要求见下方文档。
+
+日志默认启用。仓库内提供固定版本的 spdlog，关闭依赖下载也能离线编译日志；
+运行时默认异步输出到控制台和工作目录下的 `Saved/Logs/Engine.log`。
+日志级别、文件轮转等配置见 [日志文档](engine/docs/Logging.md)。
 
 仅检查文件系统相关改动：
 
@@ -89,9 +95,30 @@ ctest --test-dir out/build/assets --output-on-failure
 请求、缓存、依赖传播与热重载。两者的职责和后续缺口记录在
 [文件系统审计](docs/FileSystemAudit.md)。
 
+## 平台与操作系统接口
+
+`shinkou::platform::ISystem` 统一提供时钟、虚拟内存、线程/同步/TLS/Fiber、
+文件与目录监听、子进程、动态模块、栈回溯和控制台访问。后端分三类：
+
+- **Windows Native**：`Window` 之外的内核对象层（`VirtualAlloc`、SRWLOCK、
+  Fiber、`CreateProcessW` 等）；
+- **POSIX Native**：Linux/macOS/BSD 的 `mmap`、pthread、ucontext、fork/exec、
+  `dl_iterate_phdr` 与 `sigaction`；
+- **Portable**：纯 C++17 标准库回退（Android/Emscripten/未知平台）。
+
+入口、能力矩阵与各平台构建命令见
+[平台与操作系统接口](engine/docs/Platform.md)。该层为增量引入，现有
+`Window.h` 与编辑器/渲染/网络调用点保持不变；窗口、Vulkan surface 与编辑器
+仍是 Windows 优先，跨平台运行时尚未接入。
+
 ## 文档入口
 
+- [公共基础与统一数据契约](docs/CoreArchitecture.md)
+- [C++20 协程：主循环调度、取消、事件和 JobSystem 桥接](engine/docs/Coroutines.md)
+- [平台与操作系统接口（Native / Portable 后端）](engine/docs/Platform.md)
 - [资源工作流](docs/AssetWorkflow.md)与[资源库说明](assets/README.md)
+- [ECS chunk 存储（archetype / 16 KiB chunk）](docs/EcsChunkStorage.md)
+- [ECS 运行时优化与读写依赖管线](docs/EcsRuntimeOptimization.md)
 - [文件系统审计与本轮完善](docs/FileSystemAudit.md)
 - [渲染架构](docs/RenderingArchitecture.md)
 - [物理接入](docs/PhysicsIntegration.md)

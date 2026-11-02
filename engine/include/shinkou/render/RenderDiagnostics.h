@@ -157,9 +157,9 @@ struct DeviceFaultDiagnostic {
 // D3D12 implementation may map DRED breadcrumbs/page-fault data here, while a
 // Vulkan implementation may map VK_EXT_device_fault data here.
 struct RenderDiagnosticsHooks {
-    std::function<bool(GpuMemoryBudgetSnapshot&)> queryMemoryBudget;
-    std::function<bool(DeviceFaultDiagnostic&)> queryDeviceFault;
-    std::function<void(const RenderCaptureMarker&)> emitCaptureMarker;
+    std::function<bool(GpuMemoryBudgetSnapshot &)> queryMemoryBudget;
+    std::function<bool(DeviceFaultDiagnostic &)> queryDeviceFault;
+    std::function<void(const RenderCaptureMarker &)> emitCaptureMarker;
 };
 
 struct RenderDiagnosticsSnapshot {
@@ -174,28 +174,30 @@ struct RenderDiagnosticsSnapshot {
     DeviceFaultDiagnostic deviceFault;
 };
 
-GpuMemoryBudgetSnapshot query_gpu_memory_budget(const RenderDiagnosticsHooks& hooks,
+GpuMemoryBudgetSnapshot query_gpu_memory_budget(const RenderDiagnosticsHooks &hooks,
                                                 BackendApi api = BackendApi::Null);
-DeviceFaultDiagnostic query_device_fault(const RenderDiagnosticsHooks& hooks,
-                                          BackendApi api = BackendApi::Null);
-RenderGraphReport build_render_graph_report(const RenderGraph& graph);
+DeviceFaultDiagnostic query_device_fault(const RenderDiagnosticsHooks &hooks,
+                                         BackendApi api = BackendApi::Null);
+RenderGraphReport build_render_graph_report(const RenderGraph &graph);
 
 class RenderCaptureRecorder {
-public:
+  public:
     explicit RenderCaptureRecorder(RenderDiagnosticsHooks hooks = {});
 
     void set_hooks(RenderDiagnosticsHooks hooks);
-    void begin(std::string_view name, std::string_view category = {},
-               std::uint64_t frameIndex = 0, RenderQueue queue = RenderQueue::Graphics);
+    void begin(std::string_view name, std::string_view category = {}, std::uint64_t frameIndex = 0,
+               RenderQueue queue = RenderQueue::Graphics);
     void end(std::string_view name = {}, std::string_view category = {},
              std::uint64_t frameIndex = 0, RenderQueue queue = RenderQueue::Graphics);
     void instant(std::string_view name, std::string_view category = {},
                  std::uint64_t frameIndex = 0, RenderQueue queue = RenderQueue::Graphics);
     void clear();
 
-    const std::vector<RenderCaptureMarker>& markers() const noexcept { return markers_; }
+    const std::vector<RenderCaptureMarker> &markers() const noexcept {
+        return markers_;
+    }
 
-private:
+  private:
     void record(CaptureMarkerPhase phase, std::string name, std::string category,
                 std::uint64_t frameIndex, RenderQueue queue, std::uint32_t depth);
 
@@ -205,20 +207,20 @@ private:
     std::uint64_t nextId_{1};
 };
 
-RenderDiagnosticsSnapshot collect_diagnostics(const RenderDiagnosticsHooks& hooks,
-                                               const RenderGraph& graph,
-                                               std::vector<RenderCaptureMarker> captureMarkers = {},
-                                               BackendApi api = BackendApi::Null);
+RenderDiagnosticsSnapshot collect_diagnostics(const RenderDiagnosticsHooks &hooks,
+                                              const RenderGraph &graph,
+                                              std::vector<RenderCaptureMarker> captureMarkers = {},
+                                              BackendApi api = BackendApi::Null);
 
-std::string serialize_json(const RenderDiagnosticsSnapshot& snapshot);
-std::string serialize_text(const RenderDiagnosticsSnapshot& snapshot);
+std::string serialize_json(const RenderDiagnosticsSnapshot &snapshot);
+std::string serialize_text(const RenderDiagnosticsSnapshot &snapshot);
 
-const char* to_string(BackendApi api) noexcept;
-const char* to_string(RenderQueue queue) noexcept;
-const char* to_string(ResourceKind kind) noexcept;
-const char* to_string(ResourceUsage usage) noexcept;
-const char* to_string(CaptureMarkerPhase phase) noexcept;
-const char* to_string(RenderBudgetSeverity severity) noexcept;
-const char* to_string(DeviceFaultSource source) noexcept;
+const char *to_string(BackendApi api) noexcept;
+const char *to_string(RenderQueue queue) noexcept;
+const char *to_string(ResourceKind kind) noexcept;
+const char *to_string(ResourceUsage usage) noexcept;
+const char *to_string(CaptureMarkerPhase phase) noexcept;
+const char *to_string(RenderBudgetSeverity severity) noexcept;
+const char *to_string(DeviceFaultSource source) noexcept;
 
 } // namespace shinkou::render

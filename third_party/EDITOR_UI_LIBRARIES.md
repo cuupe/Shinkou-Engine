@@ -13,3 +13,18 @@ Vendored source subsets, including upstream license notices. No nested Git repos
 Versions are pinned together for the existing native renderer APIs. Configuration uses
 the checked-in sources and does not require a network connection. The application owns
 the engine loop, commands and assets; HelloImGui's window/application runner is not used.
+
+Local backend integration patches (preserve when updating ImGui):
+
+- DX12 exposes borrowed viewport queue/fence/backbuffer handles through
+  `ImGui_ImplDX12_GetViewportSync`. The engine inserts GPU waits between its
+  world queue and upstream's per-window queues; capture reads the acquired
+  rendered buffer before upstream presents it.
+- Vulkan exposes the acquired secondary backbuffer for opt-in GPU capture,
+  requests `TRANSFER_SRC` usage only when the surface supports it, and keys
+  render-complete semaphores by acquired image index. The latter follows
+  [Khronos present-semaphore reuse guidance](https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html).
+  Acquire semaphores continue to rotate independently.
+
+These accessors transfer no ownership. UI controls, docking, native platform
+window creation and normal presentation remain upstream implementations.

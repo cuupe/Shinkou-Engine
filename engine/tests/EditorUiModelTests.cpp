@@ -46,11 +46,10 @@ int main() {
     preview.kind = "Text";
     preview.title = "Text Resource";
     preview.status = "Text preview";
-    preview.textLines = {"int main() {}"};
     model.set_asset_preview(preview);
     const auto previewRevision = model.revision();
     model.set_asset_preview(preview);
-    if (model.revision() != previewRevision || model.asset_preview().textLines.size() != 1) return 9;
+    if (model.revision() != previewRevision || model.asset_preview().path != "assets/main.cpp") return 9;
     shinkou::editor::EditorMediaUiState media;
     media.path = "assets/music.wav";
     media.kind = "Audio";

@@ -19,7 +19,9 @@ struct UiLogicalPx {
     float y{0.0f};
 };
 
-std::optional<WindowClientPx> ui_logical_to_window_client_px(UiLogicalPx point, float dpiScale) noexcept;
-std::optional<UiLogicalPx> window_client_to_ui_logical_px(WindowClientPx point, float dpiScale) noexcept;
+std::optional<WindowClientPx> ui_logical_to_window_client_px(UiLogicalPx point,
+                                                             float dpiScale) noexcept;
+std::optional<UiLogicalPx> window_client_to_ui_logical_px(WindowClientPx point,
+                                                          float dpiScale) noexcept;
 
 } // namespace shinkou::editor

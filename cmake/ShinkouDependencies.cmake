@@ -33,6 +33,16 @@ if(TARGET spdlog::spdlog_header_only)
 elseif(TARGET spdlog::spdlog)
     set(SHINKOU_SPDLOG_TARGET spdlog::spdlog)
     set(SHINKOU_WITH_SPDLOG ON)
+elseif(EXISTS "${PROJECT_SOURCE_DIR}/third_party/spdlog/include/spdlog/spdlog.h")
+    # Logging is available in normal offline builds, independently of the
+    # optional dependency downloads. Includes also contain spdlog's bundled fmt.
+    find_package(Threads REQUIRED)
+    add_library(shinkou_spdlog_header_only INTERFACE)
+    target_include_directories(shinkou_spdlog_header_only SYSTEM INTERFACE
+        "${PROJECT_SOURCE_DIR}/third_party/spdlog/include")
+    target_link_libraries(shinkou_spdlog_header_only INTERFACE Threads::Threads)
+    set(SHINKOU_SPDLOG_TARGET shinkou_spdlog_header_only)
+    set(SHINKOU_WITH_SPDLOG ON)
 elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/engine/include/spdlog/spdlog.h")
     add_library(shinkou_spdlog_header_only INTERFACE)
     target_include_directories(shinkou_spdlog_header_only INTERFACE
@@ -46,6 +56,8 @@ elseif(SHINKOU_FETCH_DEPENDENCIES)
     FetchContent_MakeAvailable(spdlog)
     set(SHINKOU_SPDLOG_TARGET spdlog::spdlog_header_only)
     set(SHINKOU_WITH_SPDLOG ON)
+else()
+    message(FATAL_ERROR "Logging requires spdlog. Restore third_party/spdlog, install spdlog, or enable SHINKOU_FETCH_DEPENDENCIES.")
 endif()
 
 find_package(Vulkan QUIET)

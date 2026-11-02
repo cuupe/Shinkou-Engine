@@ -13,7 +13,7 @@ out/build/mingw-debug/shinkou_engine_sample.exe --editor dx11 --project <项目�
 ```
 
 `SHINKOU_ENABLE_IMGUI` 默认开启，使用仓库内固定版本；该部分构建无需下载。
-关闭后保留 retained UI 与无窗口测试路径。默认编辑器后端为 D3D11。
+关闭后仅保留控制器和运行时库；编辑器展示初始化会明确失败。默认编辑器后端为 D3D11。
 
 ## 代码边界
 
@@ -24,7 +24,7 @@ out/build/mingw-debug/shinkou_engine_sample.exe --editor dx11 --project <项目�
 
 控件通过控制器修改数据；属性编辑、资源拖放及变换操作器复用现有事务。
 每次变换拖动只创建一次撤销检查点。业务逻辑不再混入另一套失效的 ImGui 面板实现。
-游戏运行时 retained UI 继续独立工作。
+通用 retained UI 模块作为独立库 API 保留，编辑器不创建或绘制它们。
 
 属性控件的身份包含所属对象，切换选择时同步属性快照，防止未提交的文本写入另一对象。
 资源刷新和重复选择保持已解码模型、材质与纹理的缓存状态，避免检查器退回仅元数据。
@@ -51,9 +51,7 @@ Scene/Game 现各自持有匹配物理像素的颜色与深度纹理，并通过
 高 DPI 字体重建、右键转向、中键相机平面平移和左键三角形拾取的实现边界与验证
 方式见 [世界视口说明](EditorViewport.md)。
 
-当前完整场景编辑验收以 D3D11 为准。DX12/Vulkan 已连接官方 ImGui 绘制后端，
-但其编辑器场景 viewport/scissor 能力尚未实现；界面会显示明确提示。模型 GPU
-预览沿用 D3D11 实现。渲染图窗口展示执行数据，管线阶段顺序仍通过渲染管线 API 配置。
+DX11、DX12、Vulkan 均已适配场景、模型和独立窗口。现有契约与原生测试入口见 [后端说明](EditorRendererBackends.md)。渲染阶段顺序通过渲染管线 API 配置。
 
 ## 验证
 
@@ -91,3 +89,7 @@ Tools/UiCapture/RunImGuiInteraction.ps1 -Theme high-contrast
 默认系统临时目录不可写时，应将测试进程的 `TEMP` / `TMP` 设置为工作区中独立的
 临时子目录。当前环境中沙盒内 Windows DLL 初始化也可能返回 `0xc0000142`；
 本轮窗口和回归证据来自正常 Windows 桌面环境。
+
+## 2026-10-25 管线收敛
+
+旧 EditorUi、DX11 专用 UI compositor 和旧 SVG 解析器已删除。共享浏览模型与控件、控制器模式及测试边界见 [UIWorkflow](UIWorkflow.md)。

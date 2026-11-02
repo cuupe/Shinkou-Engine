@@ -2,9 +2,9 @@
 
 #include "shinkou/render/RenderTypes.h"
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <string>
-#include <future>
 #include <vector>
 
 namespace shinkou::render {
@@ -32,20 +32,21 @@ struct CompiledShader {
     bool valid{false};
 };
 
-std::uint64_t shader_variant_hash(const ShaderDesc& shader, BackendApi backend);
+std::uint64_t shader_variant_hash(const ShaderDesc &shader, BackendApi backend);
 
-bool merge_shader_bindings(const std::vector<ShaderBinding>& source,
-                           std::vector<ShaderBinding>& merged,
-                           std::string& diagnostics);
+bool merge_shader_bindings(const std::vector<ShaderBinding> &source,
+                           std::vector<ShaderBinding> &merged, std::string &diagnostics);
 
 class IShaderCompiler {
-public:
+  public:
     virtual ~IShaderCompiler() = default;
-    virtual CompiledShader compile(const ShaderDesc& shader, BackendApi backend) const = 0;
-    virtual std::future<CompiledShader> compile_async(const ShaderDesc& shader, BackendApi backend) const {
-        return std::async(std::launch::async, [this, shader, backend] { return compile(shader, backend); });
+    virtual CompiledShader compile(const ShaderDesc &shader, BackendApi backend) const = 0;
+    virtual std::future<CompiledShader> compile_async(const ShaderDesc &shader,
+                                                      BackendApi backend) const {
+        return std::async(std::launch::async,
+                          [this, shader, backend] { return compile(shader, backend); });
     }
 };
 
 std::unique_ptr<IShaderCompiler> create_shader_compiler();
-}
+} // namespace shinkou::render

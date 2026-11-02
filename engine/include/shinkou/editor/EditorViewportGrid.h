@@ -2,9 +2,11 @@
 #include "shinkou/render/RenderScene.h"
 namespace shinkou::editor {
 class EditorViewportGrid {
-    render::ResourceHandle vertex_{},fragment_{},pipeline_{};
-public:
-    bool record(render::Renderer&,const render::RenderView&,render::ResourceHandle color,render::ResourceHandle depth);
-    void release(render::Renderer&);
+    render::ResourceHandle vertex_{}, fragment_{}, pipeline_{};
+
+  public:
+    bool record(render::Renderer &, const render::RenderView &, render::ResourceHandle color,
+                render::ResourceHandle depth, float spacing = 0, float fadeDistance = 0);
+    void release(render::Renderer &);
 };
-}
+} // namespace shinkou::editor

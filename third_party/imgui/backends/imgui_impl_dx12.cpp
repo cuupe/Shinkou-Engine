@@ -1133,6 +1133,15 @@ static void ImGui_ImplDX12_RenderWindow(ImGuiViewport* viewport, void*)
     vd->CommandQueue->Signal(vd->Fence, ++vd->FenceSignaledValue);
 }
 
+bool ImGui_ImplDX12_GetViewportSync(ImGuiViewport* viewport,ImGui_ImplDX12_ViewportSync* output)
+{
+    auto* data=viewport ? static_cast<ImGui_ImplDX12_ViewportData*>(viewport->RendererUserData):nullptr;
+    if(!data || !data->SwapChain || !output)return false;
+    output->Queue=data->CommandQueue;output->Fence=data->Fence;output->FenceValue=data->FenceSignaledValue;
+    output->BackBuffer=data->FrameCtx[data->SwapChain->GetCurrentBackBufferIndex()].RenderTarget;
+    return output->Queue && output->Fence && output->BackBuffer;
+}
+
 static void ImGui_ImplDX12_SwapBuffers(ImGuiViewport* viewport, void*)
 {
     ImGui_ImplDX12_ViewportData* vd = (ImGui_ImplDX12_ViewportData*)viewport->RendererUserData;

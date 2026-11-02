@@ -106,7 +106,7 @@ function New-ScenarioReport(
     $requestedBackend = Get-RequestedBackend @($Scenario.Backend)
     $bmp = Read-BmpMetadata $ImagePath
     $commands = Get-Number $RawOutput 'editor-ui-commands=([0-9]+)'
-    $textCommands = Get-Number $RawOutput '(?:editor-ui-text|ui-text-commands|text-commands)=([0-9]+)'
+    $labeledControls = Get-Number $RawOutput 'editor-ui-labeled-controls=([0-9]+)'
     $assetCount = Get-Number $RawOutput 'editor-ui-assets=([0-9]+)'
     $visibleAssetCount = Get-Number $RawOutput 'editor-ui-visible-assets=([0-9]+)'
     $engineTheme = Get-Field $RawOutput 'editor-ui-theme=([^\s]+)'
@@ -163,7 +163,7 @@ function New-ScenarioReport(
         }
         backend = [ordered]@{
             requested = $requestedBackend
-            reported = if ($RawOutput -match 'native-ui=([01])') { if ($Matches[1] -eq "1") { "d3d11" } else { "unsupported" } } else { $null }
+            imguiSupported = if ($RawOutput -match 'imgui=([01])') { $Matches[1] -eq '1' } else { $null }
             evidence = "child-log-capability"
         }
         dpi = [ordered]@{
@@ -181,8 +181,8 @@ function New-ScenarioReport(
         }
         ui = [ordered]@{
             commands = $commands
-            text = $textCommands
-            textEvidence = if ($null -ne $textCommands) { "child-log" } else { "missing-from-child-log" }
+            labeledControls = $labeledControls
+            labeledControlEvidence = if ($null -ne $labeledControls) { "child-log" } else { "missing-from-child-log" }
             assets = $assetCount
             visibleAssets = $visibleAssetCount
             assetEvidence = if ($null -ne $visibleAssetCount) { "child-log" } else { "missing-from-child-log" }
@@ -218,7 +218,7 @@ function New-ScenarioReport(
             physicalSizeMatchesExpectedDpi = $physicalSizeMatches
             dpiMatchesExpected = $dpiMatches
             commandsPresent = $null -ne $commands
-            textPresent = $null -ne $textCommands
+            textPresent = $null -ne $labeledControls
             assetsPresent = $null -ne $assetCount
             visibleAssetsPresent = $null -ne $visibleAssetCount
             scenePassPresent = $scenePasses.Count -gt 0

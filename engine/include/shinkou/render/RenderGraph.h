@@ -1,12 +1,12 @@
 #pragma once
 
-#include "shinkou/render/RenderBackend.h"
 #include "shinkou/render/GpuMemoryAllocator.h"
+#include "shinkou/render/RenderBackend.h"
 #include "shinkou/render/RenderCommandList.h"
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
-#include <cstdint>
 
 namespace shinkou::render {
 struct RenderPassTiming {
@@ -69,11 +69,11 @@ struct RenderQueueBatch {
 };
 
 class RenderGraph {
-public:
-    using PassCallback = std::function<void(IRenderBackend&, const RenderPassContext&)>;
+  public:
+    using PassCallback = std::function<void(IRenderBackend &, const RenderPassContext &)>;
     // The callable and captured data must be immutable/thread-safe. Only the
     // supplied command list may be mutated during worker recording.
-    using RecordCallback = std::function<void(RenderCommandList&,const RenderPassContext&)>;
+    using RecordCallback = std::function<void(RenderCommandList &, const RenderPassContext &)>;
 
     struct Pass {
         std::string name;
@@ -99,7 +99,7 @@ public:
         std::size_t consumer{0};
     };
 
-private:
+  private:
     std::vector<Pass> passes_;
     std::vector<PassDependency> explicitDependencies_;
     std::vector<ResourceNode> resources_;
@@ -117,16 +117,16 @@ private:
     std::uint64_t generation_{1};
     ResourceHandle allocate_resource(ResourceKind kind) noexcept;
 
-public:
-    ResourceHandle create_texture(const TextureDesc&);
-    ResourceHandle create_sampler(const SamplerDesc&);
-    void import_resource(ResourceHandle, const ResourceDesc&);
-    void import_texture(ResourceHandle, const TextureDesc&);
-    ResourceHandle create_depth_stencil(const TextureDesc&);
-    ResourceHandle create_buffer(const BufferDesc&);
-    ResourceHandle create_shader(const ShaderDesc&);
-    ResourceHandle create_pipeline(const PipelineDesc&);
-    ResourceHandle create_material(const MaterialDesc&);
+  public:
+    ResourceHandle create_texture(const TextureDesc &);
+    ResourceHandle create_sampler(const SamplerDesc &);
+    void import_resource(ResourceHandle, const ResourceDesc &);
+    void import_texture(ResourceHandle, const TextureDesc &);
+    ResourceHandle create_depth_stencil(const TextureDesc &);
+    ResourceHandle create_buffer(const BufferDesc &);
+    ResourceHandle create_shader(const ShaderDesc &);
+    ResourceHandle create_pipeline(const PipelineDesc &);
+    ResourceHandle create_material(const MaterialDesc &);
     bool contains_resource(ResourceHandle) const noexcept;
     bool is_external_resource(ResourceHandle) const noexcept;
     std::size_t add_pass(std::string name, std::vector<ResourceHandle> reads,
@@ -136,25 +136,49 @@ public:
     std::size_t add_pass(std::string name, std::vector<ResourceAccess> accesses,
                          PassCallback callback, RenderQueue queue = RenderQueue::Graphics,
                          bool sideEffect = true, bool clearAttachments = true);
-    bool compile(std::string* error = nullptr);
-    bool set_depth_clear(std::size_t passIndex,bool clearDepth);
-    bool set_command_recorder(std::size_t passIndex,RecordCallback recorder);
-    bool add_dependency(std::size_t producer,std::size_t consumer);
-    const std::vector<PassDependency>& explicit_dependencies() const noexcept { return explicitDependencies_; }
-    void execute(IRenderBackend& backend, std::string* error = nullptr,
-                 const std::function<void(IRenderBackend&)>& beforePresent = {});
+    bool compile(std::string *error = nullptr);
+    bool set_depth_clear(std::size_t passIndex, bool clearDepth);
+    bool set_command_recorder(std::size_t passIndex, RecordCallback recorder);
+    bool add_dependency(std::size_t producer, std::size_t consumer);
+    const std::vector<PassDependency> &explicit_dependencies() const noexcept {
+        return explicitDependencies_;
+    }
+    void execute(IRenderBackend &backend, std::string *error = nullptr,
+                 const std::function<void(IRenderBackend &)> &beforePresent = {});
     void reset();
-    const std::vector<Pass>& passes() const noexcept { return passes_; }
-    const std::vector<ResourceNode>& resources() const noexcept { return resources_; }
+    const std::vector<Pass> &passes() const noexcept {
+        return passes_;
+    }
+    const std::vector<ResourceNode> &resources() const noexcept {
+        return resources_;
+    }
     ResourceHandle physical_resource(ResourceHandle logical) const noexcept;
-    const std::vector<std::size_t>& execution_order() const noexcept { return executionOrder_; }
-    const std::vector<RenderResourceTransition>& transitions() const noexcept { return transitions_; }
-    const std::vector<RenderQueueDependency>& queue_dependencies() const noexcept { return queueDependencies_; }
-    const std::vector<RenderQueueBatch>& queue_batches() const noexcept { return queueBatches_; }
-    const TransientAliasPlan& alias_plan() const noexcept { return aliasPlan_; }
-    const TransientAliasPlan& transient_alias_plan() const noexcept { return aliasPlan_; }
-    const std::vector<RenderPassTiming>& pass_timings() const noexcept { return passTimings_; }
-    const RenderGraphDiagnostics& diagnostics() const noexcept { return diagnostics_; }
-    std::uint64_t generation() const noexcept { return generation_; }
+    const std::vector<std::size_t> &execution_order() const noexcept {
+        return executionOrder_;
+    }
+    const std::vector<RenderResourceTransition> &transitions() const noexcept {
+        return transitions_;
+    }
+    const std::vector<RenderQueueDependency> &queue_dependencies() const noexcept {
+        return queueDependencies_;
+    }
+    const std::vector<RenderQueueBatch> &queue_batches() const noexcept {
+        return queueBatches_;
+    }
+    const TransientAliasPlan &alias_plan() const noexcept {
+        return aliasPlan_;
+    }
+    const TransientAliasPlan &transient_alias_plan() const noexcept {
+        return aliasPlan_;
+    }
+    const std::vector<RenderPassTiming> &pass_timings() const noexcept {
+        return passTimings_;
+    }
+    const RenderGraphDiagnostics &diagnostics() const noexcept {
+        return diagnostics_;
+    }
+    std::uint64_t generation() const noexcept {
+        return generation_;
+    }
 };
-}
+} // namespace shinkou::render

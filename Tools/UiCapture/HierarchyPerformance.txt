@@ -1,0 +1,19 @@
+# Native large hierarchy: bounded rows, exact selection and search.
+wait 1000
+state "hierarchy-rows=20001"
+capture hierarchy-large
+click "hierarchy-name:Object 0"
+object-name "Object 0"
+hover "hierarchy-name:Object 0"
+key 35
+wait 250
+capture hierarchy-bottom
+click "hierarchy-name:Object 19999"
+object-name "Object 19999"
+click "hierarchy.filter"
+text "Object 19999"
+wait 250
+state "hierarchy-rows=2 hierarchy-submitted=2"
+click "hierarchy-name:Object 19999"
+object-name "Object 19999"
+capture hierarchy-filtered

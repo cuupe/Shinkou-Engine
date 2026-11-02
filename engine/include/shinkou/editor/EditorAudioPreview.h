@@ -21,8 +21,8 @@ struct EditorAudioPreviewSnapshot {
     std::vector<float> peaks;
 
     bool valid() const noexcept {
-        return revision != 0 && channels > 0 && sampleRate > 0 &&
-            totalFrames > 0 && duration > 0.0 && !peaks.empty();
+        return revision != 0 && channels > 0 && sampleRate > 0 && totalFrames > 0 &&
+               duration > 0.0 && !peaks.empty();
     }
 };
 
@@ -37,11 +37,9 @@ struct EditorAudioPreviewResult {
 // Reads decoder metadata and a bounded set of peak samples on a worker
 // thread. It never materializes the full PCM stream and reports unsupported
 // or malformed files explicitly.
-EditorAudioPreviewResult load_editor_audio_preview(const FileSystemService& files,
-                                                   std::string_view relativePath,
-                                                   std::uint64_t generation,
-                                                   std::uint64_t sourceStamp,
-                                                   std::uint32_t peakCount = 256,
-                                                   const std::atomic_bool* cancel = nullptr);
+EditorAudioPreviewResult
+load_editor_audio_preview(const FileSystemService &files, std::string_view relativePath,
+                          std::uint64_t generation, std::uint64_t sourceStamp,
+                          std::uint32_t peakCount = 256, const std::atomic_bool *cancel = nullptr);
 
 } // namespace shinkou::editor

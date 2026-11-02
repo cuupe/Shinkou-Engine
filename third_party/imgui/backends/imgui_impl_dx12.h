@@ -24,6 +24,16 @@
 #include <dxgiformat.h> // DXGI_FORMAT
 #include <d3d12.h>      // D3D12_CPU_DESCRIPTOR_HANDLE
 
+// Shinkou integration: borrowed viewport objects for cross-queue world texture
+// synchronization and opt-in GPU readback. No ownership is transferred.
+struct ImGui_ImplDX12_ViewportSync {
+    ID3D12CommandQueue* Queue;
+    ID3D12Fence* Fence;
+    UINT64 FenceValue;
+    ID3D12Resource* BackBuffer;
+};
+IMGUI_IMPL_API bool ImGui_ImplDX12_GetViewportSync(ImGuiViewport*,ImGui_ImplDX12_ViewportSync*);
+
 // Initialization data, for ImGui_ImplDX12_Init()
 struct ImGui_ImplDX12_InitInfo
 {

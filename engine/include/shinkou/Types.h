@@ -1,5 +1,6 @@
 #pragma once
 
+#include "shinkou/core/Handle.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -19,39 +20,15 @@ using ComponentId = std::uint64_t;
 using FrameIndex = std::uint64_t;
 using Seconds = float;
 
-enum class LifecycleState {
-    Constructing,
-    Alive,
-    Inactive,
-    DestroyRequested,
-    Destroyed
-};
+enum class LifecycleState { Constructing, Alive, Inactive, DestroyRequested, Destroyed };
 
 // Selects where a GameObject's Component instances are stored.  Regular is
 // intentionally the default: it keeps the object-oriented scene path cheap
 // for editor and gameplay objects while allowing data-heavy objects to opt in
 // to EnTT storage at creation time.
-enum class ObjectStorage : std::uint8_t {
-    Regular,
-    Ecs
-};
+enum class ObjectStorage : std::uint8_t { Regular, Ecs };
 
-struct Entity {
-    EntityId id{0};
-    Generation generation{0};
-
-    explicit operator bool() const noexcept { return id != 0; }
-    friend bool operator==(Entity a, Entity b) noexcept {
-        return a.id == b.id && a.generation == b.generation;
-    }
-    friend bool operator!=(Entity a, Entity b) noexcept { return !(a == b); }
-};
-
-struct EntityHash {
-    std::size_t operator()(Entity value) const noexcept {
-        const auto id = static_cast<std::size_t>(value.id);
-        const auto generation = static_cast<std::size_t>(value.generation);
-        return id ^ (generation + static_cast<std::size_t>(0x9e3779b9u) + (id << 6u) + (id >> 2u));
-    }
-};
-}
+struct EntityTag;
+using Entity = core::GenerationalHandle<EntityTag, EntityId, Generation, false>;
+using EntityHash = core::HandleHash<Entity>;
+} // namespace shinkou

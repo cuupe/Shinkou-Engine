@@ -12,6 +12,12 @@ ctest --test-dir out-assets -R shinkou_assets_tests --output-on-failure
 
 The root project exposes both `shinkou_assets` and the namespaced alias `ShinkouEngine::Assets`. The main engine links this target only as a consumer; resource implementation files are not part of the engine source glob.
 
+Assets links the independent `ShinkouEngine::Core` target and adds it automatically
+when built alone. Manifest parsing, exact integer fields, JSON string encoding and
+UTF-8 persistent paths use the shared data contract; no private manifest parser
+is maintained. Domain checks, dependency state and cache formats remain in Assets.
+See [the architecture](../docs/CoreArchitecture.md).
+
 ## Data structures
 
 - `AssetKey -> slot` hash index gives stable lookup without storing owning pointers in the hot path.

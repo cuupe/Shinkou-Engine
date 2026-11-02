@@ -1,160 +1,39 @@
-# ShinkouEngine editor UI
+# 编辑器界面
 
-The editor layer is intentionally isolated from `engine/src/render`. `Engine::tick()`
-passes the current renderer, world, frame index and delta time to
-`editor::EditorLayer`; the editor only reads renderer diagnostics and world
-objects/components. RenderGraph and backend ownership remain unchanged.
+编辑器采用 Dear ImGui Docking；HelloImGui 提供主题，ImPlot 提供曲线，ImGuizmo 提供变换操作器，Codicons 提供字体图标。仅保留这一套编辑器展示路径。依赖版本和许可证见 [依赖清单](../../third_party/EDITOR_UI_LIBRARIES.md)。
 
-## Included surface
+## 控制器和展示
 
-The editor now has a backend-neutral UI foundation in addition to the ImGui
-view adapter:
+EditorLayer 管理场景文档、类型化属性、撤销、资源扫描与导入、文件恢复、音视频和构建命令。EditorImGuiView 负责控件与布局，各 GPU backend 只提交 ImDrawData。旧 EditorUi、DX11 Direct2D UI compositor、旧 SVG 解析器及未使用的工具栏组件已移除。
 
-- `shinkou::ui::UiRuntime` provides retained widgets, flex/overlay layout,
-  dirty-subtree rebuilding, hit testing, focus and pointer capture;
-- `shinkou::ui::ThemeRegistry` provides semantic tokens, built-in themes,
-  contrast checks and versioned JSON customization;
-- `shinkou::editor::DockWorkspace` provides split/tab/floating workspace trees,
-  minimum-size rebalance, splitter hit testing and versioned JSON persistence.
+initialize(false) 为纯控制器模式，不创建可视界面。initialize(true) 创建 ImGui 展示；无窗口时可用 Null 和引擎事件运行相同控件用于测试。关闭 SHINKOU_ENABLE_IMGUI 后控制器可用，编辑器展示初始化明确失败。
 
-The existing ImGui view uses a real DockSpace host when the docking-capable
-ImGui build is available. The same panel registry and dock model remain usable
-in headless builds.
+## 共享功能
 
-`Engine::tick()` polls the configured `InputSystem`, forwards pointer, key and
-text events through `EditorLayer::process_input()` into `UiRuntime`, and keeps
-the UI hit-test geometry current. Window client-size changes are propagated to
-the renderer and editor before input dispatch, so resizing does not require a
-separate editor integration layer.
+- 资源浏览模型统一目录、筛选、选择、列表/图标/目录树和展开缓存，筛选限制在当前目录子树内。
+- 字符串、复选框、滑块及 XYZ/XYZW 共用控件。Transform 位置、欧拉角旋转、缩放逐轴编辑，复用撤销事务；音频空间位置复用相同向量控件。
+- 检查器和媒体窗口共享播放/暂停/停止与波形实现。
+- 层级选择和视口拾取共用对象选择入口；Scene/Game 每帧共享模型实例提取结果。
+- 自定义面板经 register_panel 接入相同的停靠窗口策略。
 
-- Unity-style top menu model: File, Edit, Assets, GameObject, Component,
-  Window and Help;
-- Scene/Game workspaces plus Hierarchy, Inspector, Project, Console, Profiler,
-  Render Graph and Project Settings pages;
-- a pure C++ `EditorUiModel` that owns page definitions, menu commands, object
-  tree snapshots, filtering, selection and play/pause state;
-- toolbar with play/pause/step/save affordances;
-- hierarchy tree with filtering, selection and object creation;
-- component inspector using the existing `PropertyDescriptor` API;
-- renderer-independent viewport surface ready for a future render-target adapter;
-- asset browser, console, profiler and RenderGraph diagnostics panels;
-- retained Build panel with toolchain availability, task state, bounded output and diagnostics;
-- versioned `.shinkou/build-profile.json` persistence with a bounded multi-profile set, retained Name/Build Directory editing, plus direct Windows launch plans for Visual Studio, Rider, VS Code and clangd; launcher/profile errors remain explicit in the Build snapshot;
-- Build diagnostics provide All/Error/Warning/Note filters, total/severity counts, bounded live incremental parsing, row selection and checked file/line/column IDE opening; Windows-launched IDE PIDs are polled at a bounded cadence for Running/Exited/NotFound/QueryFailed presentation state;
-- project integration discovers bounded CMake/Visual Studio/.NET/Meson/Cargo files and compile databases, recommends a profile project file, and explicitly generates a validated project-root `.clangd` through the safe filesystem service;
-- live bounded stdout/stderr snapshots from the Windows build runner, including partial-line status;
-- project-root-safe asynchronous text resource preview in the Inspector, with bounded lines and truncation status;
-- safe `compile_commands.json` import/export with normalized project-root paths and arguments-array output;
-- retained Media Preview state with AudioSystem-backed Play/Pause/Stop/Loop/Volume commands, bounded duration/waveform metadata, decoder-backed cursor/seek transport when the backend supports it, and explicit unavailable status;
-- Windows Media Foundation video previews with bounded metadata and an immutable first-frame snapshot, with explicit decoder failure status;
-- video MediaSeek requests can asynchronously decode a bounded time-point frame with cancellation/coalescing; continuous playback and A/V sync remain separate capabilities;
-- bounded OBJ model previews with immutable structured vertex/index geometry, bounds and vertex/triangle statistics in the Inspector; when AssetSystem is connected, the OBJ worker consumes its typed model payload before falling back to the project-safe file provider;
-- bounded GLTF/GLB model previews for project-local buffers and basic TRIANGLES/POSITION/index accessors, using the same immutable snapshot seam;
-- GLTF/GLB model snapshots expose bounded material, sampler, texture and image metadata plus immutable encoded image artifacts; Inspector can select material/texture references, send the selected artifact through the existing WIC memory decoder, and report the selected Base Color/Normal/Metallic-Roughness role to the D3D11 preview seam;
-- selected resources are bridged to `AssetSystem` through a non-blocking typed source-artifact contract; the Inspector exposes loading/error/ready, canonical format, descriptor schema/size and source hash without passing source payloads into paint;
-- editor initialization and explicit asset refresh also expose an asynchronous `AssetSystem` manifest snapshot with resource count/status; scanning is off the paint and input paths;
-- manifest entries carry stable `AssetId` values and reuse bounded source fingerprints between scans; cache hit/miss statistics remain outside paint and are available to the asset-system audit seam;
-- when present, `.shinkou/manifest.json` is validated and used only to seed the AssetSystem cache before a fresh mount scan; the Inspector status reports validated-cache versus readback-fallback paths;
-- an isolated renderer-neutral model preview scene with independent orbit/zoom/reset camera state; viewing a model never mutates the active `World`;
-- Project assets can be dragged from a retained asset row into the visible Scene viewport; the editor validates the project-relative path and supported kind, resolves a connected AssetSystem manifest-backed `AssetId` when available, and creates an undoable `AssetReferenceComponent` at a bounded XY placement. This is a scene-safe reference bridge, not yet runtime model/audio/video instantiation;
-- retained Inspector image previews with bounded asynchronous WIC snapshots and a D3D11 Direct2D bitmap cache; connected AssetSystem texture payloads are decoded through a bounded WIC memory stream before falling back to the project file provider;
-- light, dark and high-contrast themes;
-- panel visibility and workspace settings;
-- custom panel registration through `EditorLayer::register_panel`.
+层级使用可见行虚拟化和版本缓存，QA 记账默认关闭。搜索栏固定、行高按物理像素测量，水平内容范围按层级/字体变化缓存。性能基准、开关及 C++/配置布局边界见 [UI 性能说明](../../docs/EditorUiPerformance.md)。
 
-Model preview deliberately has two seams: `EditorModelPreviewSnapshot` is the
-immutable provider result, while `EditorModelPreviewScene` owns only camera
-state and a bounded retained projection. The Inspector renders wireframe
-geometry and can show a selected decoded texture artifact. When an initialized
-D3D11 backend exposes the editor offscreen-target capability,
-`EditorModelPreviewRenderer` uploads the immutable mesh into persistent
-renderer resources and appends a model pass into a bounded BGRA8 offscreen
-target, followed by an explicit fullscreen composite pass inside the editor
-viewport seam; the selected material base color is applied by an HLSL constant
-buffer. The renderer no longer depends on the scene color attachment for this
-preview. Null, Vulkan, D3D12 and missing-capability paths report an explicit
-fallback and keep the retained/WIC preview. A selected WIC BGRA8 image snapshot
-now uploads to the D3D11 base-color texture binding when available; the glTF provider carries
-`TEXCOORD_0` and `NORMAL` into the D3D11 vertex buffer, while OBJ/no-UV
-assets use bounded position/normal fallbacks. The preview shader applies a
-small fixed diffuse light and the selected glTF metallic/roughness factors.
-Base Color and Normal roles now use separate D3D11 texture/sampler bindings;
-Normal uses a bounded derivative-based tangent basis for preview, while a
-flat 1x1 normal fallback keeps the shader contract valid when no role payload
-is ready. Metallic/Roughness uses a separate binding and samples the glTF
-blue/green channels to modulate the material factors. Complete tangent accessor/
-UV transform/PBR semantics remain later stages; a bounded synchronous D3D11
-readback exists for QA, while an automated pixel-threshold oracle,
-animation, nodes and lighting remain later stages before this is described as
-a full Unity-class 3D preview.
+## 工作区、DPI 与世界画面
 
-The AssetSystem bridge is also deliberately narrow. `EditorLayer` requests the
-selected project-relative resource asynchronously and publishes only the
-result metadata to `EditorUiModel`; text/image/audio/video/model providers keep
-their own bounded decoding and immutable snapshot lifetimes. Built-in typed
-source processors preserve source bytes with a canonical format, while an
-application may register structured processors/loaders for later importer and
-derived-cache stages. OBJ, GLTF/GLB and image now consume AssetSystem source
-payloads directly; GLTF additionally publishes bounded immutable image artifacts
-that flow into the regular WIC memory decoder. Audio and video still use their
-dedicated bounded provider seams. This is not yet a formal persisted decoded
-artifact or derived thumbnail cache.
+默认左侧层级、中间 Scene/Game、右侧检查器、下方资源/工具标签。支持分割、标签拖动、浮动、独立原生窗口及布局保存。停靠布局保存在编辑器布局文件旁的 .imgui.ini；DockWorkspace 保留公开数据格式，不承担另一套窗口绘制。
 
-Build/IDE integration follows the same boundary: `EditorBuildSystem` owns
-toolchain discovery, build planning and bounded process output, while
-`EditorToolIntegration` serializes project-relative profile sets and produces an
-inspectable executable/argument/working-directory plan. The Build panel exposes
-profile selection and bounded field editing; diagnostic rows can pass a checked
-file/line/column location to the selected IDE. Windows launch uses
-`CreateProcessW` directly and never falls back to shell syntax. The editor
-retains only the returned PID and uses limited-information queries, so the
-Build snapshot can report the launched process's current state without
-claiming compiler completion or taking ownership of the IDE lifecycle. Live
-diagnostics are parsed from complete output lines into bounded presentation
-state; total and severity counts remain separate from the 256-item display
-cap.
+字体按物理像素重建，主题尺寸从基础样式重新缩放，避免累乘。QA 区域显式从物理像素换算为逻辑像素。改变用户缩放不是实际更改显示器 DPI 的证据。
 
-Project integration is a separate read/plan/write seam. Discovery only reads
-bounded project metadata and canonicalizes candidates beneath the project root;
-profile association changes memory until the user saves the profile. A clangd
-plan validates `compile_commands.json` through the bounded parser and writes
-only the root `.clangd` file through `FileSystemService`, so paint and input do
-not perform project scans, parsing, or arbitrary file writes.
+Scene/Game 使用独立颜色与深度目标显示 World。右键转向，中键沿相机平面平移，左键拾取；坐标统一为左手、+Z 前方。DX11/DX12/Vulkan 均有场景、模型和独立窗口适配，契约与原生验收入口见 [后端说明](../../docs/EditorRendererBackends.md)。
 
-ImGui is optional. With `SHINKOU_ENABLE_IMGUI=OFF`, the engine still builds and
-the editor state, menu model and object-tree serialization API remain available
-without linking UI code. ImGui is only one view adapter for the model; another
-native desktop or remote UI can consume the same `EditorUiModel` data.
-With ImGui enabled, the layer creates its own context, builds a frame, and
-produces draw data. A platform/renderer adapter can consume that draw data when
-the host window backend is ready; this boundary deliberately does not alter
-Shinkou's renderer.
+资源能力见 [资源预览与配置](../../docs/EditorAssetInspection.md)，属性架构见 [检查器](../../docs/EditorInspectorArchitecture.md)。
 
-## Persistence
+## 验证
 
-`Saved/Editor/Layouts/Default.json` stores the engine-owned layout state using
-the existing reflection JSON serializer. ImGui window geometry, when enabled,
-is stored separately as `Default.json.imgui.ini`, so the two formats never
-overwrite each other. The backend-neutral dock tree is stored separately as
-`Default.json.dock.json`. All three files are independent and written with a
-temporary-file/rename commit. Call `set_layout_path` for per-project or
-per-user workspaces.
-
-## Build and run
+测试分为控制器业务、实际 ImGui 无窗口控件、原生 GPU 窗口三个层次。无窗口命令数量或交互区域不能替代真实窗口截图。开发边界与用例见 [UIWorkflow](../../docs/UIWorkflow.md)。
 
 ```powershell
-cmake -S . -B out/build/editor -G "MinGW Makefiles" `
-  -DSHINKOU_FETCH_DEPENDENCIES=ON -DSHINKOU_ENABLE_IMGUI=ON `
-  -DSHINKOU_BUILD_SAMPLE=ON
-cmake --build out/build/editor --target shinkou_engine_sample
-out/build/editor/shinkou_engine_sample.exe --editor --frames 3
+cmake --build out/build/mingw-debug --parallel 5
+ctest --test-dir out/build/mingw-debug --output-on-failure
+Tools/UiCapture/RunInspectorInteraction.ps1 -Backend dx11
 ```
-
-The sample's render callback remains the existing renderer smoke-test path; the
-`--editor` switch only enables the editor layer.
-
-## EngineDevMCP
-
-`Tools/EngineDevMCP` exposes build, launch, log and shutdown tools. The local
-`.codex/config.toml` now uses the workspace-relative `out/build/editor` path and
-falls back to `cmake --build` when a legacy `BuildEditor.bat` is absent.

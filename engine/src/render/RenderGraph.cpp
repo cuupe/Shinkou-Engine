@@ -9,36 +9,38 @@
 namespace shinkou::render {
 namespace {
 bool is_write_usage(ResourceUsage usage) {
-    return usage == ResourceUsage::ShaderWrite ||
-        usage == ResourceUsage::StorageWrite ||
-        (usage >= ResourceUsage::ColorAttachment0 && usage <= ResourceUsage::ColorAttachment7) ||
-        usage == ResourceUsage::DepthStencil ||
-        usage == ResourceUsage::CopyDestination;
+    return usage == ResourceUsage::ShaderWrite || usage == ResourceUsage::StorageWrite ||
+           (usage >= ResourceUsage::ColorAttachment0 && usage <= ResourceUsage::ColorAttachment7) ||
+           usage == ResourceUsage::DepthStencil || usage == ResourceUsage::CopyDestination;
 }
 
-    std::uint32_t color_attachment_index(ResourceUsage usage) {
-    if (usage < ResourceUsage::ColorAttachment0 || usage > ResourceUsage::ColorAttachment7) return UINT32_MAX;
-    return static_cast<std::uint32_t>(usage) - static_cast<std::uint32_t>(ResourceUsage::ColorAttachment0);
+std::uint32_t color_attachment_index(ResourceUsage usage) {
+    if (usage < ResourceUsage::ColorAttachment0 || usage > ResourceUsage::ColorAttachment7)
+        return UINT32_MAX;
+    return static_cast<std::uint32_t>(usage) -
+           static_cast<std::uint32_t>(ResourceUsage::ColorAttachment0);
 }
 
 bool usage_matches_kind(ResourceKind kind, ResourceUsage usage) {
     switch (kind) {
     case ResourceKind::Texture2D:
         return usage == ResourceUsage::ShaderRead || usage == ResourceUsage::ShaderWrite ||
-            usage == ResourceUsage::StorageRead || usage == ResourceUsage::StorageWrite ||
-            (usage >= ResourceUsage::ColorAttachment0 && usage <= ResourceUsage::ColorAttachment7) || usage == ResourceUsage::CopySource ||
-            usage == ResourceUsage::CopyDestination || usage == ResourceUsage::Present;
+               usage == ResourceUsage::StorageRead || usage == ResourceUsage::StorageWrite ||
+               (usage >= ResourceUsage::ColorAttachment0 &&
+                usage <= ResourceUsage::ColorAttachment7) ||
+               usage == ResourceUsage::CopySource || usage == ResourceUsage::CopyDestination ||
+               usage == ResourceUsage::Present;
     case ResourceKind::DepthStencil:
         return usage == ResourceUsage::ShaderRead || usage == ResourceUsage::ShaderWrite ||
-            usage == ResourceUsage::StorageRead || usage == ResourceUsage::StorageWrite ||
-            usage == ResourceUsage::DepthStencil || usage == ResourceUsage::CopySource ||
-            usage == ResourceUsage::CopyDestination;
+               usage == ResourceUsage::StorageRead || usage == ResourceUsage::StorageWrite ||
+               usage == ResourceUsage::DepthStencil || usage == ResourceUsage::CopySource ||
+               usage == ResourceUsage::CopyDestination;
     case ResourceKind::Buffer:
         return usage == ResourceUsage::ShaderRead || usage == ResourceUsage::ShaderWrite ||
-            usage == ResourceUsage::StorageRead || usage == ResourceUsage::StorageWrite ||
-            usage == ResourceUsage::UniformBuffer || usage == ResourceUsage::VertexBuffer ||
-            usage == ResourceUsage::IndexBuffer || usage == ResourceUsage::IndirectArguments ||
-            usage == ResourceUsage::CopySource || usage == ResourceUsage::CopyDestination;
+               usage == ResourceUsage::StorageRead || usage == ResourceUsage::StorageWrite ||
+               usage == ResourceUsage::UniformBuffer || usage == ResourceUsage::VertexBuffer ||
+               usage == ResourceUsage::IndexBuffer || usage == ResourceUsage::IndirectArguments ||
+               usage == ResourceUsage::CopySource || usage == ResourceUsage::CopyDestination;
     case ResourceKind::Sampler:
     case ResourceKind::Shader:
     case ResourceKind::Pipeline:
@@ -50,14 +52,15 @@ bool usage_matches_kind(ResourceKind kind, ResourceUsage usage) {
 
 bool requires_storage(ResourceUsage usage) {
     return usage == ResourceUsage::ShaderWrite || usage == ResourceUsage::StorageRead ||
-        usage == ResourceUsage::StorageWrite;
+           usage == ResourceUsage::StorageWrite;
 }
 
 bool requires_physical_state(ResourceKind kind) {
-    return kind == ResourceKind::Texture2D || kind == ResourceKind::DepthStencil || kind == ResourceKind::Buffer;
+    return kind == ResourceKind::Texture2D || kind == ResourceKind::DepthStencil ||
+           kind == ResourceKind::Buffer;
 }
 
-bool description_matches_kind(ResourceKind kind, const ResourceDesc& description) {
+bool description_matches_kind(ResourceKind kind, const ResourceDesc &description) {
     switch (kind) {
     case ResourceKind::Texture2D:
     case ResourceKind::DepthStencil:
@@ -80,25 +83,27 @@ bool same_resource(ResourceHandle left, ResourceHandle right) {
     return left.id == right.id && left.kind == right.kind;
 }
 
-bool has_present_access(const RenderGraph::Pass& pass) {
-    return std::any_of(pass.accesses.begin(), pass.accesses.end(), [](const ResourceAccess& access) {
-        return access.usage == ResourceUsage::Present;
-    });
+bool has_present_access(const RenderGraph::Pass &pass) {
+    return std::any_of(
+        pass.accesses.begin(), pass.accesses.end(),
+        [](const ResourceAccess &access) { return access.usage == ResourceUsage::Present; });
 }
 
-bool checked_mul(std::size_t left, std::size_t right, std::size_t& result) noexcept {
-    if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left) return false;
+bool checked_mul(std::size_t left, std::size_t right, std::size_t &result) noexcept {
+    if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
+        return false;
     result = left * right;
     return true;
 }
 
-bool checked_add(std::size_t left, std::size_t right, std::size_t& result) noexcept {
-    if (right > std::numeric_limits<std::size_t>::max() - left) return false;
+bool checked_add(std::size_t left, std::size_t right, std::size_t &result) noexcept {
+    if (right > std::numeric_limits<std::size_t>::max() - left)
+        return false;
     result = left + right;
     return true;
 }
 
-std::size_t texture_format_bytes_per_pixel(const TextureDesc& texture) noexcept {
+std::size_t texture_format_bytes_per_pixel(const TextureDesc &texture) noexcept {
     switch (texture.formatKind) {
     case TextureFormat::RGBA16Float:
         return 8;
@@ -112,13 +117,17 @@ std::size_t texture_format_bytes_per_pixel(const TextureDesc& texture) noexcept 
     default:
         break;
     }
-    if (texture.format == "rgba16f") return 8;
-    if (texture.format == "bc1") return 8;
-    if (texture.format == "bc3" || texture.format == "bc5" || texture.format == "bc6h" || texture.format == "bc7") return 16;
+    if (texture.format == "rgba16f")
+        return 8;
+    if (texture.format == "bc1")
+        return 8;
+    if (texture.format == "bc3" || texture.format == "bc5" || texture.format == "bc6h" ||
+        texture.format == "bc7")
+        return 16;
     return 4;
 }
 
-bool texture_is_block_compressed(const TextureDesc& texture) noexcept {
+bool texture_is_block_compressed(const TextureDesc &texture) noexcept {
     switch (texture.formatKind) {
     case TextureFormat::BC1RGBAUnorm:
     case TextureFormat::BC3RGBAUnorm:
@@ -128,11 +137,11 @@ bool texture_is_block_compressed(const TextureDesc& texture) noexcept {
         return true;
     default:
         return texture.format == "bc1" || texture.format == "bc3" || texture.format == "bc5" ||
-            texture.format == "bc6h" || texture.format == "bc7";
+               texture.format == "bc6h" || texture.format == "bc7";
     }
 }
 
-bool texture_storage_bytes(const TextureDesc& texture, std::size_t& result) noexcept {
+bool texture_storage_bytes(const TextureDesc &texture, std::size_t &result) noexcept {
     result = 0;
     const auto bytesPerPixelOrBlock = texture_format_bytes_per_pixel(texture);
     const bool compressed = texture_is_block_compressed(texture);
@@ -142,7 +151,8 @@ bool texture_storage_bytes(const TextureDesc& texture, std::size_t& result) noex
         const auto width = std::max(1u, texture.width >> std::min<std::uint32_t>(mip, 31u));
         const auto height = std::max(1u, texture.height >> std::min<std::uint32_t>(mip, 31u));
         const auto depth = texture.dimension == TextureDimension::Texture3D
-            ? std::max(1u, texture.depth >> std::min<std::uint32_t>(mip, 31u)) : 1u;
+                               ? std::max(1u, texture.depth >> std::min<std::uint32_t>(mip, 31u))
+                               : 1u;
         const auto blocksX = compressed ? (width / 4u + (width % 4u != 0u)) : width;
         const auto blocksY = compressed ? (height / 4u + (height % 4u != 0u)) : height;
         std::size_t levelSize = blocksX;
@@ -150,124 +160,149 @@ bool texture_storage_bytes(const TextureDesc& texture, std::size_t& result) noex
             !checked_mul(levelSize, depth, levelSize) ||
             !checked_mul(levelSize, layers, levelSize) ||
             !checked_mul(levelSize, bytesPerPixelOrBlock, levelSize) ||
-            !checked_mul(levelSize, samples, levelSize) ||
-            !checked_add(result, levelSize, result)) return false;
+            !checked_mul(levelSize, samples, levelSize) || !checked_add(result, levelSize, result))
+            return false;
     }
     return result != 0;
 }
-}
+} // namespace
 
 ResourceHandle RenderGraph::allocate_resource(ResourceKind kind) noexcept {
-    while (nextResource_ != 0u && std::any_of(resources_.begin(), resources_.end(),
-        [this](const ResourceNode& resource) { return resource.handle.id == nextResource_; })) {
+    while (nextResource_ != 0u &&
+           std::any_of(resources_.begin(), resources_.end(), [this](const ResourceNode &resource) {
+               return resource.handle.id == nextResource_;
+           })) {
         ++nextResource_;
     }
-    if (nextResource_ == 0u) return {};
+    if (nextResource_ == 0u)
+        return {};
     return {nextResource_++, kind};
 }
 
-ResourceHandle RenderGraph::create_texture(const TextureDesc& description) {
-    if (description.width == 0 || description.height == 0 || description.layers == 0) return {};
+ResourceHandle RenderGraph::create_texture(const TextureDesc &description) {
+    if (description.width == 0 || description.height == 0 || description.layers == 0)
+        return {};
     auto normalized = description;
-    if (normalized.mipLevels == 0) normalized.mipLevels = texture_full_mip_count(normalized);
-    if (normalized.mipLevels == 0) return {};
+    if (normalized.mipLevels == 0)
+        normalized.mipLevels = texture_full_mip_count(normalized);
+    if (normalized.mipLevels == 0)
+        return {};
     const auto handle = allocate_resource(ResourceKind::Texture2D);
-    if (!handle) return {};
+    if (!handle)
+        return {};
     resources_.push_back({handle, handle, std::move(normalized), false});
     return handle;
 }
 
-ResourceHandle RenderGraph::create_sampler(const SamplerDesc& description) {
+ResourceHandle RenderGraph::create_sampler(const SamplerDesc &description) {
     const auto handle = allocate_resource(ResourceKind::Sampler);
-    if (!handle) return {};
+    if (!handle)
+        return {};
     resources_.push_back({handle, handle, description, false});
     return handle;
 }
 
-void RenderGraph::import_resource(ResourceHandle handle, const ResourceDesc& description) {
-    if (!handle) return;
-    if (!description_matches_kind(handle.kind, description)) return;
-    const auto existing = std::find_if(resources_.begin(), resources_.end(),
-        [handle](const ResourceNode& resource) { return resource.handle.id == handle.id; });
+void RenderGraph::import_resource(ResourceHandle handle, const ResourceDesc &description) {
+    if (!handle)
+        return;
+    if (!description_matches_kind(handle.kind, description))
+        return;
+    const auto existing =
+        std::find_if(resources_.begin(), resources_.end(), [handle](const ResourceNode &resource) {
+            return resource.handle.id == handle.id;
+        });
     if (existing != resources_.end()) {
-        if (existing->handle.kind != handle.kind) return;
-        if (!existing->external) return;
+        if (existing->handle.kind != handle.kind)
+            return;
+        if (!existing->external)
+            return;
         existing->physicalHandle = existing->handle;
-        existing->description = description;
+        existing->description = resource_metadata(description);
         existing->external = true;
         compiled_ = false;
         return;
     }
-    resources_.push_back({handle, handle, description, true});
+    resources_.push_back({handle, handle, resource_metadata(description), true});
     compiled_ = false;
 }
 
-void RenderGraph::import_texture(ResourceHandle handle, const TextureDesc& description) {
-    if (handle.kind != ResourceKind::Texture2D) return;
+void RenderGraph::import_texture(ResourceHandle handle, const TextureDesc &description) {
+    if (handle.kind != ResourceKind::Texture2D)
+        return;
     import_resource(handle, description);
 }
 
-ResourceHandle RenderGraph::create_depth_stencil(const TextureDesc& description) {
-    if (description.width == 0 || description.height == 0 || description.layers == 0) return {};
+ResourceHandle RenderGraph::create_depth_stencil(const TextureDesc &description) {
+    if (description.width == 0 || description.height == 0 || description.layers == 0)
+        return {};
     auto normalized = description;
-    normalized.depthStencil=true;
-    if (normalized.mipLevels == 0) normalized.mipLevels = texture_full_mip_count(normalized);
-    if (normalized.mipLevels == 0) return {};
+    normalized.depthStencil = true;
+    if (normalized.mipLevels == 0)
+        normalized.mipLevels = texture_full_mip_count(normalized);
+    if (normalized.mipLevels == 0)
+        return {};
     const auto handle = allocate_resource(ResourceKind::DepthStencil);
-    if (!handle) return {};
+    if (!handle)
+        return {};
     resources_.push_back({handle, handle, std::move(normalized), false});
     return handle;
 }
 
-ResourceHandle RenderGraph::create_buffer(const BufferDesc& description) {
-    if (description.size == 0 || (description.structuredBuffer && description.stride == 0)) return {};
+ResourceHandle RenderGraph::create_buffer(const BufferDesc &description) {
+    if (description.size == 0 || (description.structuredBuffer && description.stride == 0))
+        return {};
     const auto handle = allocate_resource(ResourceKind::Buffer);
-    if (!handle) return {};
+    if (!handle)
+        return {};
     resources_.push_back({handle, handle, description, false});
     return handle;
 }
 
-ResourceHandle RenderGraph::create_shader(const ShaderDesc& description) {
+ResourceHandle RenderGraph::create_shader(const ShaderDesc &description) {
     const auto handle = allocate_resource(ResourceKind::Shader);
-    if (!handle) return {};
+    if (!handle)
+        return {};
     resources_.push_back({handle, handle, description, false});
     return handle;
 }
 
-ResourceHandle RenderGraph::create_pipeline(const PipelineDesc& description) {
+ResourceHandle RenderGraph::create_pipeline(const PipelineDesc &description) {
     std::string error;
-    if (!validate_pipeline_state(description, error)) return {};
+    if (!validate_pipeline_state(description, error))
+        return {};
     const auto handle = allocate_resource(ResourceKind::Pipeline);
-    if (!handle) return {};
+    if (!handle)
+        return {};
     resources_.push_back({handle, handle, description, false});
     return handle;
 }
 
-ResourceHandle RenderGraph::create_material(const MaterialDesc& description) {
+ResourceHandle RenderGraph::create_material(const MaterialDesc &description) {
     const auto handle = allocate_resource(ResourceKind::Material);
-    if (!handle) return {};
+    if (!handle)
+        return {};
     resources_.push_back({handle, handle, description, false});
     return handle;
 }
 
 bool RenderGraph::contains_resource(ResourceHandle handle) const noexcept {
-    return std::any_of(resources_.begin(), resources_.end(),
-        [handle](const ResourceNode& resource) {
+    return std::any_of(
+        resources_.begin(), resources_.end(), [handle](const ResourceNode &resource) {
             return resource.handle.id == handle.id && resource.handle.kind == handle.kind;
         });
 }
 
 bool RenderGraph::is_external_resource(ResourceHandle handle) const noexcept {
-    const auto found = std::find_if(resources_.begin(), resources_.end(),
-        [handle](const ResourceNode& resource) {
+    const auto found =
+        std::find_if(resources_.begin(), resources_.end(), [handle](const ResourceNode &resource) {
             return resource.handle.id == handle.id && resource.handle.kind == handle.kind;
         });
     return found != resources_.end() && found->external;
 }
 
 ResourceHandle RenderGraph::physical_resource(ResourceHandle logical) const noexcept {
-    const auto found = std::find_if(resources_.begin(), resources_.end(),
-        [logical](const ResourceNode& resource) {
+    const auto found =
+        std::find_if(resources_.begin(), resources_.end(), [logical](const ResourceNode &resource) {
             return resource.handle.id == logical.id && resource.handle.kind == logical.kind;
         });
     return found == resources_.end() ? ResourceHandle{} : found->physicalHandle;
@@ -278,30 +313,36 @@ std::size_t RenderGraph::add_pass(std::string name, std::vector<ResourceHandle> 
                                   RenderQueue queue, bool sideEffect, bool clearAttachments) {
     std::vector<ResourceAccess> accesses;
     accesses.reserve(reads.size() + writes.size());
-    for (const auto resource : reads) accesses.push_back({resource, ResourceUsage::ShaderRead});
-    for (const auto resource : writes) accesses.push_back({resource, ResourceUsage::ColorAttachment});
-    passes_.push_back({std::move(name), std::move(reads), std::move(writes), std::move(accesses), std::move(callback), queue, sideEffect, clearAttachments});
+    for (const auto resource : reads)
+        accesses.push_back({resource, ResourceUsage::ShaderRead});
+    for (const auto resource : writes)
+        accesses.push_back({resource, ResourceUsage::ColorAttachment});
+    passes_.push_back({std::move(name), std::move(reads), std::move(writes), std::move(accesses),
+                       std::move(callback), queue, sideEffect, clearAttachments});
     compiled_ = false;
     return passes_.size() - 1;
 }
 
 std::size_t RenderGraph::add_pass(std::string name, std::vector<ResourceAccess> accesses,
-                                  PassCallback callback, RenderQueue queue, bool sideEffect, bool clearAttachments) {
+                                  PassCallback callback, RenderQueue queue, bool sideEffect,
+                                  bool clearAttachments) {
     std::vector<ResourceHandle> reads;
     std::vector<ResourceHandle> writes;
     for (const auto access : accesses) {
         const bool write = is_write_usage(access.usage);
         (write ? writes : reads).push_back(access.resource);
     }
-    passes_.push_back({std::move(name), std::move(reads), std::move(writes), std::move(accesses), std::move(callback), queue, sideEffect, clearAttachments});
+    passes_.push_back({std::move(name), std::move(reads), std::move(writes), std::move(accesses),
+                       std::move(callback), queue, sideEffect, clearAttachments});
     compiled_ = false;
     return passes_.size() - 1;
 }
 
-bool RenderGraph::compile(std::string* error) {
+bool RenderGraph::compile(std::string *error) {
     const auto compileStart = std::chrono::steady_clock::now();
     const std::size_t count = passes_.size();
-    if (error) error->clear();
+    if (error)
+        error->clear();
     compiled_ = false;
     executionOrder_.clear();
     transitions_.clear();
@@ -310,15 +351,20 @@ bool RenderGraph::compile(std::string* error) {
     passTimings_.clear();
     aliasPlan_ = {};
     diagnostics_ = {};
-    for (auto& resource:resources_) resource.physicalHandle=resource.handle;
+    for (auto &resource : resources_)
+        resource.physicalHandle = resource.handle;
     diagnostics_.passCount = count;
     diagnostics_.resourceCount = resources_.size();
     const auto fail_compile = [&](std::string message, bool validation = true) {
-        if (error) *error = message;
+        if (error)
+            *error = message;
         diagnostics_.lastError = std::move(message);
-        if (validation) ++diagnostics_.validationErrorCount;
-        diagnostics_.compileNanoseconds = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - compileStart).count());
+        if (validation)
+            ++diagnostics_.validationErrorCount;
+        diagnostics_.compileNanoseconds =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now() - compileStart)
+                                           .count());
         return false;
     };
     std::vector<std::vector<std::size_t>> edges(count);
@@ -327,7 +373,8 @@ bool RenderGraph::compile(std::string* error) {
     std::unordered_map<std::uint32_t, std::vector<std::size_t>> readersSinceWrite;
     std::size_t presentPassIndex = static_cast<std::size_t>(-1);
     const auto addEdge = [&](std::size_t from, std::size_t to) {
-        if (from == to) return;
+        if (from == to)
+            return;
         if (std::find(edges[from].begin(), edges[from].end(), to) == edges[from].end()) {
             edges[from].push_back(to);
             ++indegree[to];
@@ -337,101 +384,127 @@ bool RenderGraph::compile(std::string* error) {
     for (std::size_t i = 0; i < count; ++i) {
         std::unordered_map<std::uint32_t, ResourceUsage> passUsages;
         const auto resource_exists = [this](ResourceHandle handle) {
-            return std::any_of(resources_.begin(), resources_.end(), [handle](const ResourceNode& resource) {
-                return same_resource(resource.handle, handle);
-            });
+            return std::any_of(resources_.begin(), resources_.end(),
+                               [handle](const ResourceNode &resource) {
+                                   return same_resource(resource.handle, handle);
+                               });
         };
         const auto resource_id_exists = [this](ResourceHandle handle) {
-            return std::any_of(resources_.begin(), resources_.end(), [handle](const ResourceNode& resource) {
-                return resource.handle.id == handle.id;
-            });
+            return std::any_of(
+                resources_.begin(), resources_.end(),
+                [handle](const ResourceNode &resource) { return resource.handle.id == handle.id; });
         };
-        const auto declared_access = [this](const Pass& pass, ResourceHandle handle, bool write) {
-            return std::any_of(pass.accesses.begin(), pass.accesses.end(), [handle, write](const ResourceAccess& access) {
-                return same_resource(access.resource, handle) && is_write_usage(access.usage) == write;
-            });
+        const auto declared_access = [this](const Pass &pass, ResourceHandle handle, bool write) {
+            return std::any_of(pass.accesses.begin(), pass.accesses.end(),
+                               [handle, write](const ResourceAccess &access) {
+                                   return same_resource(access.resource, handle) &&
+                                          is_write_usage(access.usage) == write;
+                               });
         };
         for (const auto resource : passes_[i].reads) {
             if (!resource_exists(resource)) {
                 if (resource_id_exists(resource)) {
-                    return fail_compile("pass '" + passes_[i].name + "' reads a resource with the wrong resource kind");
+                    return fail_compile("pass '" + passes_[i].name +
+                                        "' reads a resource with the wrong resource kind");
                 }
                 return fail_compile("pass '" + passes_[i].name + "' reads an unknown resource");
             }
             if (!declared_access(passes_[i], resource, false)) {
-                return fail_compile("pass '" + passes_[i].name + "' read declaration is inconsistent with its accesses");
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' read declaration is inconsistent with its accesses");
             }
         }
         for (const auto resource : passes_[i].writes) {
             if (!resource_exists(resource)) {
                 if (resource_id_exists(resource)) {
-                    return fail_compile("pass '" + passes_[i].name + "' writes a resource with the wrong resource kind");
+                    return fail_compile("pass '" + passes_[i].name +
+                                        "' writes a resource with the wrong resource kind");
                 }
                 return fail_compile("pass '" + passes_[i].name + "' writes an unknown resource");
             }
             if (!declared_access(passes_[i], resource, true)) {
-                return fail_compile("pass '" + passes_[i].name + "' write declaration is inconsistent with its accesses");
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' write declaration is inconsistent with its accesses");
             }
         }
         for (const auto access : passes_[i].accesses) {
             const auto resource = std::find_if(resources_.begin(), resources_.end(),
-                [access](const ResourceNode& node) { return node.handle.id == access.resource.id; });
+                                               [access](const ResourceNode &node) {
+                                                   return node.handle.id == access.resource.id;
+                                               });
             if (resource == resources_.end()) {
-                return fail_compile("pass '" + passes_[i].name + "' accesses unknown resource id=" +
-                    std::to_string(access.resource.id) + " kind=" + std::to_string(static_cast<std::uint32_t>(access.resource.kind)));
+                return fail_compile(
+                    "pass '" + passes_[i].name +
+                    "' accesses unknown resource id=" + std::to_string(access.resource.id) +
+                    " kind=" + std::to_string(static_cast<std::uint32_t>(access.resource.kind)));
             }
             if (resource->handle.kind != access.resource.kind) {
                 return fail_compile("pass '" + passes_[i].name + "' accesses resource " +
-                    std::to_string(access.resource.id) + " with the wrong resource kind");
+                                    std::to_string(access.resource.id) +
+                                    " with the wrong resource kind");
             }
-            if (const auto* texture = std::get_if<TextureDesc>(&resource->description)) {
+            if (const auto *texture = std::get_if<TextureDesc>(&resource->description)) {
                 const auto colorAttachment = color_attachment_index(access.usage) != UINT32_MAX;
                 if (colorAttachment && !texture->renderTarget) {
-                    return fail_compile("pass '" + passes_[i].name + "' uses a texture without renderTarget capability");
+                    return fail_compile("pass '" + passes_[i].name +
+                                        "' uses a texture without renderTarget capability");
                 }
                 if (requires_storage(access.usage) && !texture->storage) {
-                    return fail_compile("pass '" + passes_[i].name + "' uses a texture without storage capability");
+                    return fail_compile("pass '" + passes_[i].name +
+                                        "' uses a texture without storage capability");
                 }
-            } else if (const auto* buffer = std::get_if<BufferDesc>(&resource->description)) {
+            } else if (const auto *buffer = std::get_if<BufferDesc>(&resource->description)) {
                 if (requires_storage(access.usage) &&
-                    (access.usage == ResourceUsage::ShaderWrite || access.usage == ResourceUsage::StorageWrite) &&
+                    (access.usage == ResourceUsage::ShaderWrite ||
+                     access.usage == ResourceUsage::StorageWrite) &&
                     !buffer->storageBuffer) {
-                    return fail_compile("pass '" + passes_[i].name + "' writes a buffer without storage capability");
+                    return fail_compile("pass '" + passes_[i].name +
+                                        "' writes a buffer without storage capability");
                 }
             }
-            if (access.usage == ResourceUsage::Unknown || !usage_matches_kind(resource->handle.kind, access.usage)) {
+            if (access.usage == ResourceUsage::Unknown ||
+                !usage_matches_kind(resource->handle.kind, access.usage)) {
                 return fail_compile("pass '" + passes_[i].name + "' uses resource " +
-                    std::to_string(access.resource.id) + " with an incompatible usage");
+                                    std::to_string(access.resource.id) +
+                                    " with an incompatible usage");
             }
             if (passes_[i].queue == RenderQueue::Compute &&
-                (color_attachment_index(access.usage) != UINT32_MAX || access.usage == ResourceUsage::DepthStencil ||
-                 access.usage == ResourceUsage::VertexBuffer || access.usage == ResourceUsage::IndexBuffer ||
+                (color_attachment_index(access.usage) != UINT32_MAX ||
+                 access.usage == ResourceUsage::DepthStencil ||
+                 access.usage == ResourceUsage::VertexBuffer ||
+                 access.usage == ResourceUsage::IndexBuffer ||
                  access.usage == ResourceUsage::Present)) {
-                return fail_compile("pass '" + passes_[i].name + "' uses a graphics-only resource usage on the compute queue");
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' uses a graphics-only resource usage on the compute queue");
             }
             if (passes_[i].queue == RenderQueue::Copy &&
-                access.usage != ResourceUsage::CopySource && access.usage != ResourceUsage::CopyDestination) {
-                return fail_compile("pass '" + passes_[i].name + "' uses a non-copy resource usage on the copy queue");
+                access.usage != ResourceUsage::CopySource &&
+                access.usage != ResourceUsage::CopyDestination) {
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' uses a non-copy resource usage on the copy queue");
             }
             const bool write = is_write_usage(access.usage);
-            const auto& declared = write ? passes_[i].writes : passes_[i].reads;
+            const auto &declared = write ? passes_[i].writes : passes_[i].reads;
             if (std::none_of(declared.begin(), declared.end(), [access](ResourceHandle resource) {
                     return same_resource(resource, access.resource);
                 })) {
-                return fail_compile("pass '" + passes_[i].name + "' access declaration is inconsistent with its reads/writes");
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' access declaration is inconsistent with its reads/writes");
             }
             if (passUsages.find(access.resource.id) != passUsages.end()) {
                 return fail_compile("pass '" + passes_[i].name + "' accesses resource " +
-                    std::to_string(access.resource.id) + " more than once");
+                                    std::to_string(access.resource.id) + " more than once");
             }
             passUsages.emplace(access.resource.id, access.usage);
         }
         if (has_present_access(passes_[i])) {
             if (passes_[i].queue != RenderQueue::Graphics) {
-                return fail_compile("pass '" + passes_[i].name + "' presents on a non-graphics queue");
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' presents on a non-graphics queue");
             }
             if (!passes_[i].writes.empty()) {
-                return fail_compile("pass '" + passes_[i].name + "' must not write resources while presenting");
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' must not write resources while presenting");
             }
             if (presentPassIndex != static_cast<std::size_t>(-1)) {
                 return fail_compile("render graph contains more than one present pass");
@@ -440,13 +513,16 @@ bool RenderGraph::compile(std::string* error) {
         }
         bool colorGap = false;
         for (std::uint32_t colorIndex = 0; colorIndex < 8; ++colorIndex) {
-            const auto usage = static_cast<ResourceUsage>(static_cast<std::uint32_t>(ResourceUsage::ColorAttachment0) + colorIndex);
-            const bool present = std::any_of(passes_[i].accesses.begin(), passes_[i].accesses.end(),
-                [usage](const ResourceAccess& access) { return access.usage == usage; });
+            const auto usage = static_cast<ResourceUsage>(
+                static_cast<std::uint32_t>(ResourceUsage::ColorAttachment0) + colorIndex);
+            const bool present = std::any_of(
+                passes_[i].accesses.begin(), passes_[i].accesses.end(),
+                [usage](const ResourceAccess &access) { return access.usage == usage; });
             if (!present) {
                 colorGap = true;
             } else if (colorGap) {
-                return fail_compile("pass '" + passes_[i].name + "' has a sparse color attachment list");
+                return fail_compile("pass '" + passes_[i].name +
+                                    "' has a sparse color attachment list");
             }
         }
         for (const auto resource : passes_[i].reads) {
@@ -461,25 +537,31 @@ bool RenderGraph::compile(std::string* error) {
             if (it != lastWriter.end() && it->second != i) {
                 addEdge(it->second, i);
             }
-            for (const auto reader : readersSinceWrite[resource.id]) addEdge(reader, i);
+            for (const auto reader : readersSinceWrite[resource.id])
+                addEdge(reader, i);
             readersSinceWrite[resource.id].clear();
             lastWriter[resource.id] = i;
         }
     }
 
-    for (const auto& dependency:explicitDependencies_) {
-        if (dependency.producer>=count || dependency.consumer>=count || dependency.producer==dependency.consumer)
+    for (const auto &dependency : explicitDependencies_) {
+        if (dependency.producer >= count || dependency.consumer >= count ||
+            dependency.producer == dependency.consumer)
             return fail_compile("render graph has an invalid explicit pass dependency");
-        addEdge(dependency.producer,dependency.consumer);
+        addEdge(dependency.producer, dependency.consumer);
     }
     std::priority_queue<std::size_t, std::vector<std::size_t>, std::greater<>> ready;
-    for (std::size_t i = 0; i < count; ++i) if (indegree[i] == 0) ready.push(i);
+    for (std::size_t i = 0; i < count; ++i)
+        if (indegree[i] == 0)
+            ready.push(i);
     executionOrder_.clear();
     while (!ready.empty()) {
         const auto node = ready.top();
         ready.pop();
         executionOrder_.push_back(node);
-        for (const auto next : edges[node]) if (--indegree[next] == 0) ready.push(next);
+        for (const auto next : edges[node])
+            if (--indegree[next] == 0)
+                ready.push(next);
     }
 
     if (executionOrder_.size() != count) {
@@ -488,11 +570,13 @@ bool RenderGraph::compile(std::string* error) {
     std::vector<bool> livePasses(count, false);
     for (std::size_t i = 0; i < count; ++i) {
         livePasses[i] = passes_[i].sideEffect;
-        if (!livePasses[i] && has_present_access(passes_[i])) livePasses[i] = true;
+        if (!livePasses[i] && has_present_access(passes_[i]))
+            livePasses[i] = true;
         if (!livePasses[i]) {
             for (const auto write : passes_[i].writes) {
-                const auto resource = std::find_if(resources_.begin(), resources_.end(),
-                    [write](const ResourceNode& node) { return node.handle.id == write.id; });
+                const auto resource = std::find_if(
+                    resources_.begin(), resources_.end(),
+                    [write](const ResourceNode &node) { return node.handle.id == write.id; });
                 if (resource != resources_.end() && resource->external) {
                     livePasses[i] = true;
                     break;
@@ -504,10 +588,14 @@ bool RenderGraph::compile(std::string* error) {
     while (changed) {
         changed = false;
         for (std::size_t consumer = 0; consumer < count; ++consumer) {
-            if (!livePasses[consumer]) continue;
+            if (!livePasses[consumer])
+                continue;
             for (std::size_t producer = 0; producer < count; ++producer) {
-                if (livePasses[producer]) continue;
-                if (std::find(edges[producer].begin(), edges[producer].end(), consumer) == edges[producer].end()) continue;
+                if (livePasses[producer])
+                    continue;
+                if (std::find(edges[producer].begin(), edges[producer].end(), consumer) ==
+                    edges[producer].end())
+                    continue;
                 livePasses[producer] = true;
                 changed = true;
             }
@@ -515,11 +603,14 @@ bool RenderGraph::compile(std::string* error) {
     }
     std::vector<std::size_t> scheduledOrder;
     scheduledOrder.reserve(executionOrder_.size());
-    for (const auto passIndex : executionOrder_) if (livePasses[passIndex]) scheduledOrder.push_back(passIndex);
+    for (const auto passIndex : executionOrder_)
+        if (livePasses[passIndex])
+            scheduledOrder.push_back(passIndex);
     diagnostics_.culledPassCount = count - scheduledOrder.size();
     executionOrder_ = std::move(scheduledOrder);
     if (presentPassIndex != static_cast<std::size_t>(-1)) {
-        if (std::find(executionOrder_.begin(), executionOrder_.end(), presentPassIndex) == executionOrder_.end() ||
+        if (std::find(executionOrder_.begin(), executionOrder_.end(), presentPassIndex) ==
+                executionOrder_.end() ||
             executionOrder_.back() != presentPassIndex) {
             return fail_compile("present pass must be the terminal render graph pass");
         }
@@ -530,57 +621,76 @@ bool RenderGraph::compile(std::string* error) {
     diagnostics_.copyPassCount = 0;
     queueDependencies_.clear();
     for (const auto passIndex : executionOrder_) {
-        if (passes_[passIndex].queue == RenderQueue::Graphics) ++diagnostics_.graphicsPassCount;
-        else if (passes_[passIndex].queue == RenderQueue::Compute) ++diagnostics_.computePassCount;
-        else ++diagnostics_.copyPassCount;
+        if (passes_[passIndex].queue == RenderQueue::Graphics)
+            ++diagnostics_.graphicsPassCount;
+        else if (passes_[passIndex].queue == RenderQueue::Compute)
+            ++diagnostics_.computePassCount;
+        else
+            ++diagnostics_.copyPassCount;
     }
     for (std::size_t producer = 0; producer < count; ++producer) {
-        if (!livePasses[producer]) continue;
+        if (!livePasses[producer])
+            continue;
         for (const auto consumer : edges[producer]) {
-            if (!livePasses[consumer]) continue;
-            if (passes_[producer].queue == passes_[consumer].queue) continue;
+            if (!livePasses[consumer])
+                continue;
+            if (passes_[producer].queue == passes_[consumer].queue)
+                continue;
             ResourceHandle dependencyResource{};
             for (const auto producerAccess : passes_[producer].accesses) {
                 for (const auto consumerAccess : passes_[consumer].accesses) {
                     if (producerAccess.resource.id != consumerAccess.resource.id ||
-                        (!is_write_usage(producerAccess.usage) && !is_write_usage(consumerAccess.usage))) continue;
+                        (!is_write_usage(producerAccess.usage) &&
+                         !is_write_usage(consumerAccess.usage)))
+                        continue;
                     dependencyResource = producerAccess.resource;
                     break;
                 }
-                if (dependencyResource) break;
+                if (dependencyResource)
+                    break;
             }
             queueDependencies_.push_back({producer, consumer, passes_[producer].queue,
-                passes_[consumer].queue, dependencyResource});
+                                          passes_[consumer].queue, dependencyResource});
         }
     }
     diagnostics_.crossQueueDependencyCount = queueDependencies_.size();
     std::unordered_map<std::size_t, std::uint32_t> passToBatch;
     for (const auto passIndex : executionOrder_) {
         if (queueBatches_.empty() || queueBatches_.back().queue != passes_[passIndex].queue) {
-            queueBatches_.push_back({static_cast<std::uint32_t>(queueBatches_.size()), passes_[passIndex].queue, {}, {}});
+            queueBatches_.push_back({static_cast<std::uint32_t>(queueBatches_.size()),
+                                     passes_[passIndex].queue,
+                                     {},
+                                     {}});
         }
-        auto& batch = queueBatches_.back();
+        auto &batch = queueBatches_.back();
         batch.passIndices.push_back(passIndex);
         passToBatch[passIndex] = batch.index;
     }
-    for (const auto& dependency : queueDependencies_) {
+    for (const auto &dependency : queueDependencies_) {
         const auto producer = passToBatch.find(dependency.producerPass);
         const auto consumer = passToBatch.find(dependency.consumerPass);
-        if (producer == passToBatch.end() || consumer == passToBatch.end() || producer->second == consumer->second) continue;
-        auto& waits = queueBatches_[consumer->second].waitBatches;
-        if (std::find(waits.begin(), waits.end(), producer->second) == waits.end()) waits.push_back(producer->second);
+        if (producer == passToBatch.end() || consumer == passToBatch.end() ||
+            producer->second == consumer->second)
+            continue;
+        auto &waits = queueBatches_[consumer->second].waitBatches;
+        if (std::find(waits.begin(), waits.end(), producer->second) == waits.end())
+            waits.push_back(producer->second);
     }
-    for (auto& resource : resources_) resource.physicalHandle = resource.handle;
+    for (auto &resource : resources_)
+        resource.physicalHandle = resource.handle;
     const auto ordered_before = [&](std::size_t producer, std::size_t consumer) {
-        if (producer == consumer || passes_[producer].queue == passes_[consumer].queue) return true;
+        if (producer == consumer || passes_[producer].queue == passes_[consumer].queue)
+            return true;
         std::vector<std::size_t> pending{producer};
         std::unordered_set<std::size_t> visited{producer};
         while (!pending.empty()) {
             const auto current = pending.back();
             pending.pop_back();
             for (const auto next : edges[current]) {
-                if (next == consumer) return true;
-                if (visited.insert(next).second) pending.push_back(next);
+                if (next == consumer)
+                    return true;
+                if (visited.insert(next).second)
+                    pending.push_back(next);
             }
         }
         return false;
@@ -588,9 +698,9 @@ bool RenderGraph::compile(std::string* error) {
     const auto hash_combine = [](std::uint64_t seed, std::uint64_t value) {
         return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u));
     };
-    const auto compatibility_key = [&hash_combine](const ResourceDesc& description) {
+    const auto compatibility_key = [&hash_combine](const ResourceDesc &description) {
         std::uint64_t key = 0xcbf29ce484222325ull;
-        if (const auto* texture = std::get_if<TextureDesc>(&description)) {
+        if (const auto *texture = std::get_if<TextureDesc>(&description)) {
             key = hash_combine(key, texture->width);
             key = hash_combine(key, texture->height);
             key = hash_combine(key, texture->layers);
@@ -608,7 +718,7 @@ bool RenderGraph::compile(std::string* error) {
             key = hash_combine(key, texture->resolve);
             key = hash_combine(key, static_cast<std::uint64_t>(texture->resolveMode));
             key = hash_combine(key, texture->depthStencil);
-        } else if (const auto* buffer = std::get_if<BufferDesc>(&description)) {
+        } else if (const auto *buffer = std::get_if<BufferDesc>(&description)) {
             key = hash_combine(key, buffer->size);
             key = hash_combine(key, buffer->stride);
             key = hash_combine(key, buffer->vertexBuffer);
@@ -620,7 +730,7 @@ bool RenderGraph::compile(std::string* error) {
         }
         return key;
     };
-    const auto resource_memory_type = [&compatibility_key](const ResourceNode& node) {
+    const auto resource_memory_type = [&compatibility_key](const ResourceNode &node) {
         const auto descriptionKey = compatibility_key(node.description);
         const auto kindKey = static_cast<std::uint64_t>(node.handle.kind) << 24u;
         return static_cast<GpuMemoryType>((descriptionKey ^ kindKey) & 0xffffffffu);
@@ -628,32 +738,39 @@ bool RenderGraph::compile(std::string* error) {
     std::vector<TransientResourceRequest> aliasRequests;
     std::unordered_map<std::uint32_t, std::size_t> aliasRequestIndices;
     for (std::size_t order = 0; order < executionOrder_.size(); ++order) {
-        const auto& pass = passes_[executionOrder_[order]];
+        const auto &pass = passes_[executionOrder_[order]];
         for (const auto access : pass.accesses) {
             const auto node = std::find_if(resources_.begin(), resources_.end(),
-                [access](const ResourceNode& resource) { return resource.handle.id == access.resource.id; });
+                                           [access](const ResourceNode &resource) {
+                                               return resource.handle.id == access.resource.id;
+                                           });
             if (node == resources_.end() || node->external ||
                 (node->handle.kind != ResourceKind::Texture2D &&
                  node->handle.kind != ResourceKind::DepthStencil &&
-                 node->handle.kind != ResourceKind::Buffer)) continue;
+                 node->handle.kind != ResourceKind::Buffer))
+                continue;
             // All resources are initialized before pass execution. Reusing a
             // physical allocation for distinct initial payloads would make
             // later passes read the first resource's constants/texture data.
             // Aliasing initialized resources requires a first-use upload,
             // which is deliberately not part of this allocator's contract.
-            if (const auto* buffer=std::get_if<BufferDesc>(&node->description); buffer && !buffer->initialData.empty()) continue;
-            if (const auto* texture=std::get_if<TextureDesc>(&node->description); texture &&
-                (!texture->initialData.empty() || !texture->initialSubresources.empty())) continue;
+            if (const auto *buffer = std::get_if<BufferDesc>(&node->description);
+                buffer && !buffer->initialData.empty())
+                continue;
+            if (const auto *texture = std::get_if<TextureDesc>(&node->description);
+                texture && (!texture->initialData.empty() || !texture->initialSubresources.empty()))
+                continue;
             const auto found = aliasRequestIndices.find(node->handle.id);
             if (found == aliasRequestIndices.end()) {
                 TransientResourceRequest request;
                 request.resourceId = node->handle.id;
-                if (const auto* texture = std::get_if<TextureDesc>(&node->description)) {
+                if (const auto *texture = std::get_if<TextureDesc>(&node->description)) {
                     if (!texture_storage_bytes(*texture, request.size)) {
-                        return fail_compile("transient texture storage size overflow for resource " +
+                        return fail_compile(
+                            "transient texture storage size overflow for resource " +
                             std::to_string(node->handle.id));
                     }
-                } else if (const auto* buffer = std::get_if<BufferDesc>(&node->description)) {
+                } else if (const auto *buffer = std::get_if<BufferDesc>(&node->description)) {
                     request.size = buffer->size;
                 }
                 request.alignment = 256;
@@ -666,50 +783,62 @@ bool RenderGraph::compile(std::string* error) {
                 aliasRequestIndices.emplace(node->handle.id, aliasRequests.size());
                 aliasRequests.push_back(request);
             } else {
-                auto& request = aliasRequests[found->second];
+                auto &request = aliasRequests[found->second];
                 request.lastUse = order;
                 request.lastPass = executionOrder_[order];
             }
         }
     }
     TransientAliasPlanOptions aliasOptions;
-    aliasOptions.canAlias = [&ordered_before](const TransientResourceRequest& previous,
-                                               const TransientResourceRequest& next) {
+    aliasOptions.canAlias = [&ordered_before](const TransientResourceRequest &previous,
+                                              const TransientResourceRequest &next) {
         return previous.compatibilityKey == next.compatibilityKey &&
-            ordered_before(previous.lastPass, next.firstPass);
+               ordered_before(previous.lastPass, next.firstPass);
     };
     GpuMemoryAllocator aliasPlanner;
     aliasPlan_ = aliasPlanner.plan_transient_aliases(aliasRequests, aliasOptions);
     if (!aliasPlan_.valid) {
-        return fail_compile(aliasPlan_.error.empty() ?
-            "transient resource alias planning failed" : aliasPlan_.error);
+        return fail_compile(aliasPlan_.error.empty() ? "transient resource alias planning failed"
+                                                     : aliasPlan_.error);
     }
-    for (auto& resource : resources_) {
-        if (resource.external) continue;
+    for (auto &resource : resources_) {
+        if (resource.external)
+            continue;
         const auto physicalId = aliasPlan_.physical_resource(resource.handle.id);
-        if (physicalId) resource.physicalHandle = ResourceHandle{static_cast<std::uint32_t>(physicalId), resource.handle.kind};
+        if (physicalId)
+            resource.physicalHandle =
+                ResourceHandle{static_cast<std::uint32_t>(physicalId), resource.handle.kind};
     }
     diagnostics_.plannedTransitionCount = 0;
     std::unordered_map<std::uint32_t, ResourceUsage> previousUsage;
     for (const auto passIndex : executionOrder_) {
         for (const auto access : passes_[passIndex].accesses) {
             const auto node = std::find_if(resources_.begin(), resources_.end(),
-                [access](const ResourceNode& resource) { return resource.handle.id == access.resource.id; });
-            if (node == resources_.end() || !requires_physical_state(node->handle.kind)) continue;
-            const auto physicalId = node == resources_.end() ? access.resource.id : node->physicalHandle.id;
+                                           [access](const ResourceNode &resource) {
+                                               return resource.handle.id == access.resource.id;
+                                           });
+            if (node == resources_.end() || !requires_physical_state(node->handle.kind))
+                continue;
+            const auto physicalId =
+                node == resources_.end() ? access.resource.id : node->physicalHandle.id;
             const auto previous = previousUsage.find(physicalId);
-            const bool orderedStorageWrite=access.usage==ResourceUsage::StorageWrite || access.usage==ResourceUsage::ShaderWrite;
-            if (previous == previousUsage.end() || previous->second != access.usage || orderedStorageWrite) {
+            const bool orderedStorageWrite = access.usage == ResourceUsage::StorageWrite ||
+                                             access.usage == ResourceUsage::ShaderWrite;
+            if (previous == previousUsage.end() || previous->second != access.usage ||
+                orderedStorageWrite) {
                 ++diagnostics_.plannedTransitionCount;
-                transitions_.push_back({access.resource,
-                    previous == previousUsage.end() ? ResourceUsage::Unknown : previous->second,
-                    access.usage, passIndex});
+                transitions_.push_back(
+                    {access.resource,
+                     previous == previousUsage.end() ? ResourceUsage::Unknown : previous->second,
+                     access.usage, passIndex});
             }
             previousUsage[physicalId] = access.usage;
         }
     }
-    diagnostics_.compileNanoseconds = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - compileStart).count());
+    diagnostics_.compileNanoseconds =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       std::chrono::steady_clock::now() - compileStart)
+                                       .count());
     diagnostics_.passCount = passes_.size();
     diagnostics_.resourceCount = resources_.size();
     diagnostics_.physicalTextureCount = 0;
@@ -717,21 +846,30 @@ bool RenderGraph::compile(std::string* error) {
     diagnostics_.physicalBufferCount = 0;
     diagnostics_.aliasedBufferCount = 0;
     diagnostics_.hdrPassCount = 0;
-    for (const auto& resource : resources_) {
-        if (resource.handle.kind != ResourceKind::Texture2D || resource.external) continue;
-        if (resource.physicalHandle.id == resource.handle.id) ++diagnostics_.physicalTextureCount;
-        else ++diagnostics_.aliasedTextureCount;
+    for (const auto &resource : resources_) {
+        if (resource.handle.kind != ResourceKind::Texture2D || resource.external)
+            continue;
+        if (resource.physicalHandle.id == resource.handle.id)
+            ++diagnostics_.physicalTextureCount;
+        else
+            ++diagnostics_.aliasedTextureCount;
     }
-    for (const auto& resource : resources_) {
-        if (resource.handle.kind != ResourceKind::Buffer || resource.external) continue;
-        if (resource.physicalHandle.id == resource.handle.id) ++diagnostics_.physicalBufferCount;
-        else ++diagnostics_.aliasedBufferCount;
+    for (const auto &resource : resources_) {
+        if (resource.handle.kind != ResourceKind::Buffer || resource.external)
+            continue;
+        if (resource.physicalHandle.id == resource.handle.id)
+            ++diagnostics_.physicalBufferCount;
+        else
+            ++diagnostics_.aliasedBufferCount;
     }
     for (const auto passIndex : executionOrder_) {
         for (const auto access : passes_[passIndex].accesses) {
             const auto resource = std::find_if(resources_.begin(), resources_.end(),
-                [access](const ResourceNode& node) { return node.handle.id == access.resource.id; });
-            if (resource == resources_.end()) continue;
+                                               [access](const ResourceNode &node) {
+                                                   return node.handle.id == access.resource.id;
+                                               });
+            if (resource == resources_.end())
+                continue;
             const auto texture = std::get_if<TextureDesc>(&resource->description);
             if (texture && texture->hdr) {
                 ++diagnostics_.hdrPassCount;
@@ -743,37 +881,45 @@ bool RenderGraph::compile(std::string* error) {
     return true;
 }
 
-bool RenderGraph::set_depth_clear(std::size_t passIndex,bool clearDepth) {
-    if (passIndex>=passes_.size()) return false;
-    passes_[passIndex].clearDepthAttachments=clearDepth;
+bool RenderGraph::set_depth_clear(std::size_t passIndex, bool clearDepth) {
+    if (passIndex >= passes_.size())
+        return false;
+    passes_[passIndex].clearDepthAttachments = clearDepth;
     return true;
 }
 
-bool RenderGraph::set_command_recorder(std::size_t passIndex,RecordCallback recorder) {
-    if (passIndex>=passes_.size()) return false;
-    passes_[passIndex].recordCommands=std::move(recorder);
+bool RenderGraph::set_command_recorder(std::size_t passIndex, RecordCallback recorder) {
+    if (passIndex >= passes_.size())
+        return false;
+    passes_[passIndex].recordCommands = std::move(recorder);
     return true;
 }
 
-bool RenderGraph::add_dependency(std::size_t producer,std::size_t consumer) {
-    if (producer>=passes_.size() || consumer>=passes_.size() || producer==consumer) return false;
-    if (std::none_of(explicitDependencies_.begin(),explicitDependencies_.end(),[&](const auto& dependency) {
-        return dependency.producer==producer && dependency.consumer==consumer;
-    })) explicitDependencies_.push_back({producer,consumer});
-    compiled_=false;
+bool RenderGraph::add_dependency(std::size_t producer, std::size_t consumer) {
+    if (producer >= passes_.size() || consumer >= passes_.size() || producer == consumer)
+        return false;
+    if (std::none_of(explicitDependencies_.begin(), explicitDependencies_.end(),
+                     [&](const auto &dependency) {
+                         return dependency.producer == producer && dependency.consumer == consumer;
+                     }))
+        explicitDependencies_.push_back({producer, consumer});
+    compiled_ = false;
     return true;
 }
 
-void RenderGraph::execute(IRenderBackend& backend, std::string* error,
-                          const std::function<void(IRenderBackend&)>& beforePresent) {
+void RenderGraph::execute(IRenderBackend &backend, std::string *error,
+                          const std::function<void(IRenderBackend &)> &beforePresent) {
     const auto executeStart = std::chrono::steady_clock::now();
     const auto finish_execution_diagnostics = [this, &executeStart]() {
-        diagnostics_.executeNanoseconds = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - executeStart).count());
+        diagnostics_.executeNanoseconds =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now() - executeStart)
+                                           .count());
         diagnostics_.passCount = passes_.size();
         diagnostics_.resourceCount = resources_.size();
     };
-    if (error) error->clear();
+    if (error)
+        error->clear();
     backend.clear_error();
     diagnostics_.executionFailed = false;
     diagnostics_.executedPassCount = 0;
@@ -796,55 +942,71 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
     }
     passTimings_.clear();
     std::vector<std::shared_ptr<const RenderCommandList>> recorded(passes_.size());
-    if (std::any_of(passes_.begin(),passes_.end(),[](const auto& pass){return bool(pass.recordCommands);})) {
-        FunctionCommandRecordingExecutor executor([&](const CommandRecordingTask& task) {
-            const auto& pass=passes_[task.passIndex];
-            if (!pass.recordCommands) return CommandRecordingResult{CommandRecordingStatus::Recorded,{},{}};
-            auto commands=std::make_shared<RenderCommandList>();
-            pass.recordCommands(*commands,task.pass_context());
+    if (std::any_of(passes_.begin(), passes_.end(),
+                    [](const auto &pass) { return bool(pass.recordCommands); })) {
+        FunctionCommandRecordingExecutor executor([&](const CommandRecordingTask &task) {
+            const auto &pass = passes_[task.passIndex];
+            if (!pass.recordCommands)
+                return CommandRecordingResult{CommandRecordingStatus::Recorded, {}, {}};
+            auto commands = std::make_shared<RenderCommandList>();
+            pass.recordCommands(*commands, task.pass_context());
             std::string failure;
-            if (!commands->validate(task.pass_context(),failure))
-                return CommandRecordingResult{CommandRecordingStatus::Failed,std::move(failure),{}};
-            return CommandRecordingResult{CommandRecordingStatus::Recorded,{},std::move(commands)};
+            if (!commands->validate(task.pass_context(), failure))
+                return CommandRecordingResult{
+                    CommandRecordingStatus::Failed, std::move(failure), {}};
+            return CommandRecordingResult{
+                CommandRecordingStatus::Recorded, {}, std::move(commands)};
         });
-        const auto preparation=RenderGraphScheduler{}.prepare(*this,executor);
-        for (std::size_t i=0;i<preparation.tasks.size();++i) {
-            const auto& result=preparation.results[i];
-            const auto passIndex=preparation.tasks[i].passIndex;
-            if (result.status!=CommandRecordingStatus::Recorded) {
-                diagnostics_.executionFailed=true;
-                diagnostics_.failedPassIndex=passIndex;
-                diagnostics_.lastError="render pass '"+passes_[passIndex].name+"' recording failed: "+result.diagnostic;
-                if (error) *error=diagnostics_.lastError;
+        const auto preparation = RenderGraphScheduler{}.prepare(*this, executor);
+        for (std::size_t i = 0; i < preparation.tasks.size(); ++i) {
+            const auto &result = preparation.results[i];
+            const auto passIndex = preparation.tasks[i].passIndex;
+            if (result.status != CommandRecordingStatus::Recorded) {
+                diagnostics_.executionFailed = true;
+                diagnostics_.failedPassIndex = passIndex;
+                diagnostics_.lastError = "render pass '" + passes_[passIndex].name +
+                                         "' recording failed: " + result.diagnostic;
+                if (error)
+                    *error = diagnostics_.lastError;
                 finish_execution_diagnostics();
                 return;
             }
             if (result.payload) {
-                recorded[passIndex]=std::static_pointer_cast<const RenderCommandList>(result.payload);
+                recorded[passIndex] =
+                    std::static_pointer_cast<const RenderCommandList>(result.payload);
                 ++diagnostics_.recordedPassCount;
-                diagnostics_.recordedCommandCount+=recorded[passIndex]->size();
+                diagnostics_.recordedCommandCount += recorded[passIndex]->size();
             }
         }
         if (!preparation.valid) {
-            diagnostics_.executionFailed=true;
-            diagnostics_.lastError=preparation.error;
-            if (error) *error=diagnostics_.lastError;
+            diagnostics_.executionFailed = true;
+            diagnostics_.lastError = preparation.error;
+            if (error)
+                *error = diagnostics_.lastError;
             finish_execution_diagnostics();
             return;
         }
     }
-    for (const auto& resource : resources_) {
+    for (const auto &resource : resources_) {
         if (!resource.external && resource.physicalHandle.id == resource.handle.id) {
             if (!backend.create_transient_resource(resource.handle, resource.description)) {
-                if (error) *error = backend.last_error().empty() ?
-                    "render graph transient resource creation failed" : backend.last_error();
-                if (error) *error += " (resource "+std::to_string(resource.handle.id)+", kind "+std::to_string(static_cast<unsigned>(resource.handle.kind))+")";
-                if (error) if (const auto* buffer=std::get_if<BufferDesc>(&resource.description))
-                    *error += " size="+std::to_string(buffer->size)+" stride="+std::to_string(buffer->stride);
-                diagnostics_.lastError = error ? *error : "render graph transient resource creation failed";
+                if (error)
+                    *error = backend.last_error().empty()
+                                 ? "render graph transient resource creation failed"
+                                 : backend.last_error();
+                if (error)
+                    *error += " (resource " + std::to_string(resource.handle.id) + ", kind " +
+                              std::to_string(static_cast<unsigned>(resource.handle.kind)) + ")";
+                if (error)
+                    if (const auto *buffer = std::get_if<BufferDesc>(&resource.description))
+                        *error += " size=" + std::to_string(buffer->size) +
+                                  " stride=" + std::to_string(buffer->stride);
+                diagnostics_.lastError =
+                    error ? *error : "render graph transient resource creation failed";
                 diagnostics_.executionFailed = true;
-                for (const auto& cleanup : resources_) {
-                    if (!cleanup.external) backend.retire_transient_resource(cleanup.handle,false);
+                for (const auto &cleanup : resources_) {
+                    if (!cleanup.external)
+                        backend.retire_transient_resource(cleanup.handle, false);
                 }
                 finish_execution_diagnostics();
                 return;
@@ -853,14 +1015,16 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
             backend.set_debug_name(resource.handle, name);
         }
     }
-    for (const auto& resource : resources_) {
+    for (const auto &resource : resources_) {
         if (!resource.external && resource.physicalHandle.id != resource.handle.id &&
             !backend.alias_resource(resource.handle, resource.physicalHandle)) {
-            if (error) *error = "backend could not alias transient resource";
+            if (error)
+                *error = "backend could not alias transient resource";
             diagnostics_.lastError = error ? *error : "backend could not alias transient resource";
             diagnostics_.executionFailed = true;
-            for (const auto& cleanup : resources_) {
-                if (!cleanup.external) backend.retire_transient_resource(cleanup.handle,false);
+            for (const auto &cleanup : resources_) {
+                if (!cleanup.external)
+                    backend.retire_transient_resource(cleanup.handle, false);
             }
             finish_execution_diagnostics();
             return;
@@ -869,14 +1033,14 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
     const auto retire_transients = [&backend, this]() {
         // Retire aliases first so their backend views/references are released
         // before the physical allocation they point at.
-        for (const auto& resource : resources_) {
+        for (const auto &resource : resources_) {
             if (!resource.external && resource.physicalHandle.id != resource.handle.id) {
-                backend.retire_transient_resource(resource.handle,!diagnostics_.executionFailed);
+                backend.retire_transient_resource(resource.handle, !diagnostics_.executionFailed);
             }
         }
-        for (const auto& resource : resources_) {
+        for (const auto &resource : resources_) {
             if (!resource.external && resource.physicalHandle.id == resource.handle.id) {
-                backend.retire_transient_resource(resource.handle,!diagnostics_.executionFailed);
+                backend.retire_transient_resource(resource.handle, !diagnostics_.executionFailed);
             }
         }
     };
@@ -884,13 +1048,14 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
     const auto abort_if_device_unavailable = [&]() {
         const auto capabilities = backend.capabilities();
         if (capabilities.deviceReady && capabilities.deviceState != RenderDeviceState::Lost &&
-            capabilities.deviceState != RenderDeviceState::NeedsResize) return false;
+            capabilities.deviceState != RenderDeviceState::NeedsResize)
+            return false;
         if (error) {
             *error = backend.last_error();
             if (error->empty()) {
                 *error = capabilities.deviceState == RenderDeviceState::NeedsResize
-                    ? "render graph execution requires a valid resized swapchain"
-                    : "render graph execution aborted because the device is unavailable";
+                             ? "render graph execution requires a valid resized swapchain"
+                             : "render graph execution aborted because the device is unavailable";
             }
         }
         return true;
@@ -907,8 +1072,9 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
     std::uint32_t lastGraphicsBatch = UINT32_MAX;
     std::uint32_t presentBatch = UINT32_MAX;
     std::size_t presentPassIndex = static_cast<std::size_t>(-1);
-    for (const auto& batch : queueBatches_) {
-        if (batch.queue == RenderQueue::Graphics) lastGraphicsBatch = batch.index;
+    for (const auto &batch : queueBatches_) {
+        if (batch.queue == RenderQueue::Graphics)
+            lastGraphicsBatch = batch.index;
         for (const auto passIndex : batch.passIndices) {
             if (has_present_access(passes_[passIndex])) {
                 presentBatch = batch.index;
@@ -918,136 +1084,173 @@ void RenderGraph::execute(IRenderBackend& backend, std::string* error,
         }
     }
     const auto presentationBatch = presentBatch != UINT32_MAX ? presentBatch : lastGraphicsBatch;
-    for (const auto& batch : queueBatches_) {
+    for (const auto &batch : queueBatches_) {
         if (!backend.begin_queue(batch.queue, batch.index, batch.waitBatches)) {
-            if (error) *error = backend.last_error().empty() ?
-                "render backend failed to begin queue batch" : backend.last_error();
+            if (error)
+                *error = backend.last_error().empty() ? "render backend failed to begin queue batch"
+                                                      : backend.last_error();
             diagnostics_.lastError = error ? *error : "render backend failed to begin queue batch";
             diagnostics_.executionFailed = true;
             diagnostics_.failedQueueBatch = batch.index;
-            if (!batch.passIndices.empty()) diagnostics_.failedPassIndex = batch.passIndices.front();
+            if (!batch.passIndices.empty())
+                diagnostics_.failedPassIndex = batch.passIndices.front();
             break;
         }
         for (const auto index : batch.passIndices) {
-        auto& pass = passes_[index];
-        const auto start = std::chrono::steady_clock::now();
-        bool transitionFailed = false;
-        for (const auto access : pass.accesses) {
-            const auto node = std::find_if(resources_.begin(), resources_.end(),
-                [access](const ResourceNode& resource) {
-                    return resource.handle.id == access.resource.id && resource.handle.kind == access.resource.kind;
-                });
-            if (node == resources_.end() || !requires_physical_state(node->handle.kind)) continue;
-            const auto physical = physical_resource(access.resource);
-            if (!backend.transition_resource(physical ? physical : access.resource, access.usage)) {
-                transitionFailed = true;
-                if (error) *error = "render pass '" + pass.name + "' resource transition failed for resource " +
-                    std::to_string((physical ? physical : access.resource).id) + ": " + backend.last_error();
-                diagnostics_.lastError = error ? *error : backend.last_error();
+            auto &pass = passes_[index];
+            const auto start = std::chrono::steady_clock::now();
+            bool transitionFailed = false;
+            for (const auto access : pass.accesses) {
+                const auto node = std::find_if(
+                    resources_.begin(), resources_.end(), [access](const ResourceNode &resource) {
+                        return resource.handle.id == access.resource.id &&
+                               resource.handle.kind == access.resource.kind;
+                    });
+                if (node == resources_.end() || !requires_physical_state(node->handle.kind))
+                    continue;
+                const auto physical = physical_resource(access.resource);
+                if (!backend.transition_resource(physical ? physical : access.resource,
+                                                 access.usage)) {
+                    transitionFailed = true;
+                    if (error)
+                        *error = "render pass '" + pass.name +
+                                 "' resource transition failed for resource " +
+                                 std::to_string((physical ? physical : access.resource).id) + ": " +
+                                 backend.last_error();
+                    diagnostics_.lastError = error ? *error : backend.last_error();
+                    diagnostics_.executionFailed = true;
+                    diagnostics_.failedPassIndex = index;
+                    diagnostics_.failedQueueBatch = batch.index;
+                    break;
+                }
+            }
+            if (transitionFailed) {
+                break;
+            }
+            std::vector<ResourceHandle> colorTargets(8);
+            ResourceHandle depthTarget{};
+            for (const auto access : pass.accesses) {
+                const auto colorIndex = color_attachment_index(access.usage);
+                if (colorIndex != UINT32_MAX) {
+                    colorTargets[colorIndex] = access.resource;
+                } else if (access.usage == ResourceUsage::DepthStencil)
+                    depthTarget = access.resource;
+            }
+            if (pass.queue == RenderQueue::Graphics) {
+                while (!colorTargets.empty() && !colorTargets.back())
+                    colorTargets.pop_back();
+                if (!colorTargets.empty() || depthTarget) {
+                    const bool clearDepth =
+                        pass.clearDepthAttachments.value_or(pass.clearAttachments);
+                    const bool independentClear = clearDepth != pass.clearAttachments;
+                    backend.set_render_targets(colorTargets, depthTarget,
+                                               independentClear ? false : pass.clearAttachments);
+                    if (independentClear &&
+                        !backend.clear_render_attachments(colorTargets, depthTarget,
+                                                          pass.clearAttachments, clearDepth)) {
+                        diagnostics_.lastError =
+                            "backend cannot independently clear color and depth attachments";
+                        if (error)
+                            *error = diagnostics_.lastError;
+                        diagnostics_.executionFailed = true;
+                        diagnostics_.failedPassIndex = index;
+                        break;
+                    }
+                }
+            }
+            backend.begin_debug_label(pass.name);
+            backend.begin_pass();
+            const auto beforeStats = backend.stats();
+            RenderPassContext context{pass.name, pass.reads, pass.writes, pass.accesses,
+                                      pass.queue};
+            backend.execute(context);
+            std::string commandError;
+            try {
+                if (recorded[index])
+                    recorded[index]->replay(backend, commandError);
+                else if (pass.callback)
+                    pass.callback(backend, context);
+            } catch (const std::exception &exception) {
+                commandError = exception.what();
+            } catch (...) {
+                commandError = "pass callback threw an unknown exception";
+            }
+            backend.end_pass();
+            backend.end_debug_label();
+            if (!backend.last_error().empty() || !commandError.empty()) {
+                diagnostics_.lastError =
+                    "render pass '" + pass.name +
+                    "' failed: " + (commandError.empty() ? backend.last_error() : commandError);
+                if (error)
+                    *error = diagnostics_.lastError;
                 diagnostics_.executionFailed = true;
                 diagnostics_.failedPassIndex = index;
                 diagnostics_.failedQueueBatch = batch.index;
                 break;
             }
-        }
-        if (transitionFailed) {
-            break;
-        }
-        std::vector<ResourceHandle> colorTargets(8);
-        ResourceHandle depthTarget{};
-        for (const auto access : pass.accesses) {
-            const auto colorIndex = color_attachment_index(access.usage);
-            if (colorIndex != UINT32_MAX) {
-                colorTargets[colorIndex] = access.resource;
-            } else if (access.usage == ResourceUsage::DepthStencil) depthTarget = access.resource;
-        }
-        if (pass.queue == RenderQueue::Graphics) {
-            while (!colorTargets.empty() && !colorTargets.back()) colorTargets.pop_back();
-            if (!colorTargets.empty() || depthTarget) {
-                const bool clearDepth=pass.clearDepthAttachments.value_or(pass.clearAttachments);
-                const bool independentClear=clearDepth!=pass.clearAttachments;
-                backend.set_render_targets(colorTargets, depthTarget, independentClear ? false : pass.clearAttachments);
-                if (independentClear && !backend.clear_render_attachments(colorTargets,depthTarget,pass.clearAttachments,clearDepth)) {
-                    diagnostics_.lastError="backend cannot independently clear color and depth attachments";
-                    if (error) *error=diagnostics_.lastError;
-                    diagnostics_.executionFailed=true;
-                    diagnostics_.failedPassIndex=index;
-                    break;
-                }
-            }
-        }
-        backend.begin_debug_label(pass.name);
-        backend.begin_pass();
-        const auto beforeStats = backend.stats();
-        RenderPassContext context{pass.name, pass.reads, pass.writes, pass.accesses, pass.queue};
-        backend.execute(context);
-        std::string commandError;
-        try {
-            if (recorded[index]) recorded[index]->replay(backend,commandError);
-            else if (pass.callback) pass.callback(backend, context);
-        } catch (const std::exception& exception) { commandError=exception.what(); }
-        catch (...) { commandError="pass callback threw an unknown exception"; }
-        backend.end_pass();
-        backend.end_debug_label();
-        if (!backend.last_error().empty() || !commandError.empty()) {
-            diagnostics_.lastError = "render pass '" + pass.name + "' failed: " +
-                (commandError.empty()?backend.last_error():commandError);
-            if (error) *error = diagnostics_.lastError;
-            diagnostics_.executionFailed = true;
-            diagnostics_.failedPassIndex = index;
-            diagnostics_.failedQueueBatch = batch.index;
-            break;
-        }
-        ++diagnostics_.executedPassCount;
-        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - start).count();
-        const auto afterStats = backend.stats();
-        passTimings_.push_back({pass.name, static_cast<std::uint64_t>(elapsed), 0,
-            afterStats.drawCalls - beforeStats.drawCalls,
-            afterStats.barriers - beforeStats.barriers,
-            static_cast<std::uint64_t>(pass.reads.size()),
-            static_cast<std::uint64_t>(pass.writes.size())});
+            ++diagnostics_.executedPassCount;
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now() - start)
+                                     .count();
+            const auto afterStats = backend.stats();
+            passTimings_.push_back({pass.name, static_cast<std::uint64_t>(elapsed), 0,
+                                    afterStats.drawCalls - beforeStats.drawCalls,
+                                    afterStats.barriers - beforeStats.barriers,
+                                    static_cast<std::uint64_t>(pass.reads.size()),
+                                    static_cast<std::uint64_t>(pass.writes.size())});
         }
         if (diagnostics_.executionFailed) {
             discard_frame();
             break;
         }
-        if (beforePresent && batch.queue == RenderQueue::Graphics && batch.index == presentationBatch) {
+        if (beforePresent && batch.queue == RenderQueue::Graphics &&
+            batch.index == presentationBatch) {
             beforePresent(backend);
             if (!backend.last_error().empty()) {
-                if (error) *error = "ImGui overlay failed: " + backend.last_error();
+                if (error)
+                    *error = "ImGui overlay failed: " + backend.last_error();
                 diagnostics_.lastError = error ? *error : backend.last_error();
                 diagnostics_.executionFailed = true;
                 diagnostics_.failedQueueBatch = batch.index;
-                if (presentPassIndex != static_cast<std::size_t>(-1)) diagnostics_.failedPassIndex = presentPassIndex;
+                if (presentPassIndex != static_cast<std::size_t>(-1))
+                    diagnostics_.failedPassIndex = presentPassIndex;
                 break;
             }
         }
         if (!backend.end_queue(batch.queue, batch.index, batch.index + 1 == queueBatches_.size(),
-            batch.queue == RenderQueue::Graphics && batch.index == presentationBatch)) {
-            if (error) *error = backend.last_error().empty() ?
-                "render backend failed to submit queue batch" : backend.last_error();
+                               batch.queue == RenderQueue::Graphics &&
+                                   batch.index == presentationBatch)) {
+            if (error)
+                *error = backend.last_error().empty()
+                             ? "render backend failed to submit queue batch"
+                             : backend.last_error();
             diagnostics_.lastError = error ? *error : "render backend failed to submit queue batch";
             diagnostics_.executionFailed = true;
             diagnostics_.failedQueueBatch = batch.index;
-            if (!batch.passIndices.empty()) diagnostics_.failedPassIndex = batch.passIndices.back();
+            if (!batch.passIndices.empty())
+                diagnostics_.failedPassIndex = batch.passIndices.back();
             break;
         }
         if (abort_if_device_unavailable()) {
             diagnostics_.executionFailed = true;
             diagnostics_.failedQueueBatch = batch.index;
             diagnostics_.lastError = error ? *error : backend.last_error();
-            if (!batch.passIndices.empty()) diagnostics_.failedPassIndex = batch.passIndices.back();
+            if (!batch.passIndices.empty())
+                diagnostics_.failedPassIndex = batch.passIndices.back();
             break;
         }
     }
-    if (diagnostics_.executionFailed) discard_frame();
-    else backend.end_frame();
+    if (diagnostics_.executionFailed)
+        discard_frame();
+    else
+        backend.end_frame();
     if (!backend.last_error().empty() && !diagnostics_.executionFailed) {
-        if (error) *error = backend.last_error();
+        if (error)
+            *error = backend.last_error();
         diagnostics_.lastError = error ? *error : backend.last_error();
         diagnostics_.executionFailed = true;
-        if (!executionOrder_.empty()) diagnostics_.failedPassIndex = executionOrder_.back();
+        if (!executionOrder_.empty())
+            diagnostics_.failedPassIndex = executionOrder_.back();
     }
     retire_transients();
     const auto afterFrameStats = backend.stats();
@@ -1078,4 +1281,4 @@ void RenderGraph::reset() {
     nextResource_ = 0x80000000u;
     compiled_ = false;
 }
-}
+} // namespace shinkou::render

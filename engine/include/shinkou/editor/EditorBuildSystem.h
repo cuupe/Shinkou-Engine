@@ -1,12 +1,12 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
-#include <future>
 #include <functional>
+#include <future>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -126,37 +126,41 @@ struct EditorBuildProcessResult {
 };
 
 class EditorBuildProcess final {
-public:
-    static EditorBuildProcessResult run(const EditorBuildCommand& command,
-                                        const EditorBuildProcessOptions& options,
-                                        std::atomic_bool& cancelRequested);
+  public:
+    static EditorBuildProcessResult run(const EditorBuildCommand &command,
+                                        const EditorBuildProcessOptions &options,
+                                        std::atomic_bool &cancelRequested);
 };
 
 class EditorBuildSystem final {
-public:
+  public:
     explicit EditorBuildSystem(std::filesystem::path projectRoot = {});
 
     void set_project_root(std::filesystem::path projectRoot);
-    const std::filesystem::path& project_root() const noexcept { return projectRoot_; }
+    const std::filesystem::path &project_root() const noexcept {
+        return projectRoot_;
+    }
 
     // Refresh is intentionally explicit. It may inspect PATH and a small
     // project-local tools directory, so callers must not invoke it from paint.
     void refresh_toolchains(std::string_view searchPath = {});
-    const std::vector<EditorToolDescriptor>& toolchains() const noexcept { return toolchains_; }
+    const std::vector<EditorToolDescriptor> &toolchains() const noexcept {
+        return toolchains_;
+    }
 
-    EditorBuildPlan plan(const EditorBuildProfile& profile) const;
+    EditorBuildPlan plan(const EditorBuildProfile &profile) const;
 
-    static std::vector<EditorToolDescriptor> discover_toolchains(
-        const std::filesystem::path& projectRoot, std::string_view searchPath = {});
-    static std::vector<EditorBuildDiagnostic> parse_diagnostics(
-        std::string_view output, const std::filesystem::path& projectRoot = {});
+    static std::vector<EditorToolDescriptor>
+    discover_toolchains(const std::filesystem::path &projectRoot, std::string_view searchPath = {});
+    static std::vector<EditorBuildDiagnostic>
+    parse_diagnostics(std::string_view output, const std::filesystem::path &projectRoot = {});
     static std::string_view tool_name(EditorToolKind kind) noexcept;
 
-private:
+  private:
     std::filesystem::path projectRoot_;
     std::vector<EditorToolDescriptor> toolchains_;
 
-    const EditorToolDescriptor* find_tool(EditorToolKind kind) const noexcept;
+    const EditorToolDescriptor *find_tool(EditorToolKind kind) const noexcept;
 };
 
 } // namespace shinkou::editor

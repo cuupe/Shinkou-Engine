@@ -49,7 +49,7 @@ struct LightingLight {
     bool enabled{true};
 };
 
-std::vector<LightingLight> make_lighting_lights(const std::vector<LightRenderItem>& lights);
+std::vector<LightingLight> make_lighting_lights(const std::vector<LightRenderItem> &lights);
 
 enum class LightBinningMode { Tiles, Clusters };
 
@@ -64,8 +64,8 @@ struct LightBinningDesc {
     float farPlane{1000.0f};
     bool logarithmicDepth{true};
     bool includeDirectionalLights{true};
-    std::size_t maxBinCount{1u<<20};
-    std::size_t maxLightIndexCount{16u<<20};
+    std::size_t maxBinCount{1u << 20};
+    std::size_t maxLightIndexCount{16u << 20};
 };
 
 struct LightBinRange {
@@ -87,14 +87,14 @@ struct LightBinningPlan {
 
     std::size_t bin_index(std::uint32_t tileX, std::uint32_t tileY,
                           std::uint32_t slice = 0) const noexcept;
-    const LightBinRange* range(std::uint32_t tileX, std::uint32_t tileY,
+    const LightBinRange *range(std::uint32_t tileX, std::uint32_t tileY,
                                std::uint32_t slice = 0) const noexcept;
 };
 
-LightBinningPlan build_light_binning(const RenderView& view,
-                                     const std::vector<LightingLight>& lights,
-                                     const LightBinningDesc& description,
-                                     std::string* error = nullptr);
+LightBinningPlan build_light_binning(const RenderView &view,
+                                     const std::vector<LightingLight> &lights,
+                                     const LightBinningDesc &description,
+                                     std::string *error = nullptr);
 
 struct LightingStageDesc {
     // This embeds the existing post-process resource/parameter description so
@@ -119,13 +119,15 @@ struct LightingPipelineDesc {
 struct LightingValidationResult {
     std::vector<std::string> errors;
 
-    bool valid() const noexcept { return errors.empty(); }
+    bool valid() const noexcept {
+        return errors.empty();
+    }
 };
 
-LightingValidationResult validate_lighting_pipeline(const LightingPipelineDesc& description);
-bool topologically_sort_lighting_stages(const std::vector<LightingStageDesc>& stages,
-                                        std::vector<std::size_t>& order,
-                                        std::string* error = nullptr);
+LightingValidationResult validate_lighting_pipeline(const LightingPipelineDesc &description);
+bool topologically_sort_lighting_stages(const std::vector<LightingStageDesc> &stages,
+                                        std::vector<std::size_t> &order,
+                                        std::string *error = nullptr);
 
 struct LightingPipelinePlan {
     std::vector<std::size_t> stageOrder;
@@ -137,18 +139,24 @@ struct LightingPipelinePlan {
 class LightingPipeline {
     LightingPipelineDesc description_{};
 
-public:
-    const LightingPipelineDesc& description() const noexcept { return description_; }
-    LightingPipelineDesc& description() noexcept { return description_; }
+  public:
+    const LightingPipelineDesc &description() const noexcept {
+        return description_;
+    }
+    LightingPipelineDesc &description() noexcept {
+        return description_;
+    }
 
     std::size_t add_stage(LightingStageDesc stage);
-    void clear_stages() noexcept { description_.stages.clear(); }
+    void clear_stages() noexcept {
+        description_.stages.clear();
+    }
 
     LightingValidationResult validate() const;
-    LightingPipelinePlan build_plan(const RenderView& view,
-                                    const std::vector<LightingLight>& lights) const;
-    LightingPipelinePlan build_plan(const RenderView& view,
-                                    const std::vector<LightRenderItem>& lights) const;
+    LightingPipelinePlan build_plan(const RenderView &view,
+                                    const std::vector<LightingLight> &lights) const;
+    LightingPipelinePlan build_plan(const RenderView &view,
+                                    const std::vector<LightRenderItem> &lights) const;
 };
 
 } // namespace shinkou::render

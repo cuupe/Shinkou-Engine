@@ -6,23 +6,31 @@
 #include <string>
 
 #if defined(SHINKOU_PLATFORM_WINDOWS)
+// Shell declarations depend on the core Win32 types; preserve this order.
+// clang-format off
 #include <windows.h>
 #include <shellapi.h>
+// clang-format on
 #if defined(SHINKOU_WITH_IMGUI)
-#include <imgui.h>
 #include <backends/imgui_impl_win32.h>
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
+#include <imgui.h>
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 #endif
 
 namespace {
-std::string utf8_from_wide(const std::wstring& value) {
-    if (value.empty()) return {};
-    const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-    if (size <= 0) return {};
+std::string utf8_from_wide(const std::wstring &value) {
+    if (value.empty())
+        return {};
+    const int size =
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                            static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0)
+        return {};
     std::string result(static_cast<std::size_t>(size), '\0');
     if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-            static_cast<int>(value.size()), result.data(), size, nullptr, nullptr) != size) return {};
+                            static_cast<int>(value.size()), result.data(), size, nullptr,
+                            nullptr) != size)
+        return {};
     return result;
 }
 
@@ -31,67 +39,84 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
     // A background QA window receives explicitly targeted mouse coordinates.
     // Native leave notifications describe the foreground desktop in that mode,
     // so they must not erase the synthetic hover between scripted clicks.
-    static const bool targetedQaMouse=[] {
+    static const bool targetedQaMouse = [] {
         wchar_t value[2]{};
-        return GetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE",value,2)==1 && value[0]==L'1' &&
-            GetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT",nullptr,0)>1;
+        return GetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE", value, 2) == 1 &&
+               value[0] == L'1' &&
+               GetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT", nullptr, 0) > 1;
     }();
     if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData &&
-        !(targetedQaMouse && (message==WM_MOUSELEAVE || message==WM_NCMOUSELEAVE)))
-        ImGui_ImplWin32_WndProcHandler(window,message,wParam,lParam);
+        !(targetedQaMouse && (message == WM_MOUSELEAVE || message == WM_NCMOUSELEAVE)))
+        ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam);
 #endif
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
-        SetWindowLongPtrA(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+        const auto *create = reinterpret_cast<const CREATESTRUCTW *>(lParam);
+        SetWindowLongPtrA(window, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(create->lpCreateParams));
     }
     if (message == WM_COMMAND && HIWORD(wParam) == 0) {
-        auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window, GWLP_USERDATA));
-        if (owner) owner->dispatch_menu_command(static_cast<std::uint32_t>(LOWORD(wParam)));
+        auto *owner =
+            reinterpret_cast<shinkou::platform::Window *>(GetWindowLongPtrA(window, GWLP_USERDATA));
+        if (owner)
+            owner->dispatch_menu_command(static_cast<std::uint32_t>(LOWORD(wParam)));
         return 0;
     }
     if (message == WM_SIZE) {
-        auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window, GWLP_USERDATA));
-        if (owner) owner->set_client_size(static_cast<std::uint32_t>(LOWORD(lParam)), static_cast<std::uint32_t>(HIWORD(lParam)));
+        auto *owner =
+            reinterpret_cast<shinkou::platform::Window *>(GetWindowLongPtrA(window, GWLP_USERDATA));
+        if (owner)
+            owner->set_client_size(static_cast<std::uint32_t>(LOWORD(lParam)),
+                                   static_cast<std::uint32_t>(HIWORD(lParam)));
     }
     if (message == WM_DROPFILES) {
-        auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window, GWLP_USERDATA));
+        auto *owner =
+            reinterpret_cast<shinkou::platform::Window *>(GetWindowLongPtrA(window, GWLP_USERDATA));
         const auto drop = reinterpret_cast<HDROP>(wParam);
         POINT point{};
         const bool hasPoint = drop != nullptr && DragQueryPoint(drop, &point) != FALSE;
         constexpr UINT kMaxDroppedFiles = 64;
         constexpr UINT kMaxPathCharacters = 32768;
         if (owner && drop && hasPoint) {
-            const auto count = std::min(DragQueryFileW(drop, 0xFFFFFFFFu, nullptr, 0), kMaxDroppedFiles);
+            const auto count =
+                std::min(DragQueryFileW(drop, 0xFFFFFFFFu, nullptr, 0), kMaxDroppedFiles);
             for (UINT index = 0; index < count; ++index) {
                 const auto length = DragQueryFileW(drop, index, nullptr, 0);
-                if (length == 0 || length >= kMaxPathCharacters) continue;
+                if (length == 0 || length >= kMaxPathCharacters)
+                    continue;
                 std::wstring widePath(static_cast<std::size_t>(length) + 1, L'\0');
-                if (DragQueryFileW(drop, index, widePath.data(), length + 1) != length) continue;
+                if (DragQueryFileW(drop, index, widePath.data(), length + 1) != length)
+                    continue;
                 widePath.resize(length);
                 const auto path = utf8_from_wide(widePath);
-                if (!path.empty()) owner->dispatch_file_drop(path, point.x, point.y);
+                if (!path.empty())
+                    owner->dispatch_file_drop(path, point.x, point.y);
             }
         }
-        if (drop) DragFinish(drop);
+        if (drop)
+            DragFinish(drop);
         return 0;
     }
-    if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_ERASEBKGND)
+        return 1;
     if (message == WM_GETMINMAXINFO) {
-        const auto result=DefWindowProcW(window,message,wParam,lParam);
+        const auto result = DefWindowProcW(window, message, wParam, lParam);
         // A render surface may exceed the current monitor (remote/4K QA or
         // a large desktop). Keep maximize bounds native, lift tracking limits.
-        auto* limits=reinterpret_cast<MINMAXINFO*>(lParam);
-        limits->ptMaxTrackSize={16384,16384};
+        auto *limits = reinterpret_cast<MINMAXINFO *>(lParam);
+        limits->ptMaxTrackSize = {16384, 16384};
         return result;
     }
     if (message == WM_DPICHANGED) {
-        const auto* rect = reinterpret_cast<const RECT*>(lParam);
-        SetWindowPos(window,nullptr,rect->left,rect->top,rect->right-rect->left,rect->bottom-rect->top,SWP_NOACTIVATE|SWP_NOZORDER);
+        const auto *rect = reinterpret_cast<const RECT *>(lParam);
+        SetWindowPos(window, nullptr, rect->left, rect->top, rect->right - rect->left,
+                     rect->bottom - rect->top, SWP_NOACTIVATE | SWP_NOZORDER);
         return 0;
     }
     if (message == WM_CLOSE) {
-        auto* owner = reinterpret_cast<shinkou::platform::Window*>(GetWindowLongPtrA(window,GWLP_USERDATA));
-        if (owner && !owner->request_close()) return 0;
+        auto *owner =
+            reinterpret_cast<shinkou::platform::Window *>(GetWindowLongPtrA(window, GWLP_USERDATA));
+        if (owner && !owner->request_close())
+            return 0;
     }
     if (message == WM_CLOSE || message == WM_DESTROY) {
         PostQuitMessage(0);
@@ -99,19 +124,19 @@ LRESULT CALLBACK ShinkouWindowProc(HWND window, UINT message, WPARAM wParam, LPA
     }
     return DefWindowProcW(window, message, wParam, lParam);
 }
-}
+} // namespace
 #endif
 
 namespace shinkou::platform {
-bool Window::create(const WindowConfig& config) {
+bool Window::create(const WindowConfig &config) {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     // Opt into the native per-monitor coordinate space before creating the
     // first HWND. Without this, Windows virtualizes GetClientRect/WM_SIZE on
     // a 125%/150% display and the editor's logical layout, swapchain and
     // RenderView seam disagree by the DPI factor.
-    using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(HANDLE);
-    if (const auto address = GetProcAddress(GetModuleHandleW(L"user32.dll"),
-                                            "SetProcessDpiAwarenessContext")) {
+    using SetProcessDpiAwarenessContextFn = BOOL(WINAPI *)(HANDLE);
+    if (const auto address =
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext")) {
         SetProcessDpiAwarenessContextFn setAwareness = nullptr;
         static_assert(sizeof(setAwareness) == sizeof(address));
         std::memcpy(&setAwareness, &address, sizeof(setAwareness));
@@ -120,7 +145,7 @@ bool Window::create(const WindowConfig& config) {
             (void)setAwareness(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(-4)));
         }
     }
-    static const wchar_t* className = L"ShinkouEngineWindow";
+    static const wchar_t *className = L"ShinkouEngineWindow";
     static bool registered = false;
     if (!registered) {
         WNDCLASSW windowClass{};
@@ -129,20 +154,25 @@ bool Window::create(const WindowConfig& config) {
         windowClass.lpszClassName = className;
         windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
         windowClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-        if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+        if (!RegisterClassW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+            return false;
         registered = true;
     }
     const DWORD style = WS_OVERLAPPEDWINDOW;
     RECT rect{0, 0, static_cast<LONG>(config.width), static_cast<LONG>(config.height)};
     AdjustWindowRect(&rect, style, FALSE);
-    const int titleSize=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,config.title.c_str(),-1,nullptr,0);
-    if (titleSize<=0) return false;
-    std::wstring title(static_cast<std::size_t>(titleSize),L'\0');
-    MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,config.title.c_str(),-1,title.data(),titleSize);
-    HWND window = CreateWindowExW(0, className, title.c_str(), style,
-        CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top,
-        nullptr, nullptr, GetModuleHandleA(nullptr), this);
-    if (!window) return false;
+    const int titleSize =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, config.title.c_str(), -1, nullptr, 0);
+    if (titleSize <= 0)
+        return false;
+    std::wstring title(static_cast<std::size_t>(titleSize), L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, config.title.c_str(), -1, title.data(),
+                        titleSize);
+    HWND window = CreateWindowExW(0, className, title.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT,
+                                  rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr,
+                                  GetModuleHandleA(nullptr), this);
+    if (!window)
+        return false;
     nativeHandle_ = window;
     open_ = true;
     width_ = config.width;
@@ -184,14 +214,18 @@ void Window::process_events() {
         // Targeted QA drives every platform HWND through posted Win32 input.
         // Hardware leave events describe another foreground desktop in that
         // mode and must not erase the supplied mouse position in child windows.
-        static const bool targetedQaMouse=[] {
+        static const bool targetedQaMouse = [] {
             wchar_t value[2]{};
-            return GetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE",value,2)==1 && value[0]==L'1' &&
-                GetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT",nullptr,0)>1;
+            return GetEnvironmentVariableW(L"SHINKOU_UI_QA_TARGETED_MOUSE", value, 2) == 1 &&
+                   value[0] == L'1' &&
+                   GetEnvironmentVariableW(L"SHINKOU_UI_QA_SNAPSHOT", nullptr, 0) > 1;
         }();
-        if(targetedQaMouse&&(message.message==WM_MOUSELEAVE||message.message==WM_NCMOUSELEAVE))continue;
+        if (targetedQaMouse &&
+            (message.message == WM_MOUSELEAVE || message.message == WM_NCMOUSELEAVE))
+            continue;
 #endif
-        if (message.message == WM_QUIT) open_ = false;
+        if (message.message == WM_QUIT)
+            open_ = false;
         TranslateMessage(&message);
         DispatchMessageA(&message);
     }
@@ -217,7 +251,7 @@ void Window::destroy() {
 float Window::dpi_scale() const noexcept {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     if (nativeHandle_) {
-        using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+        using GetDpiForWindowFn = UINT(WINAPI *)(HWND);
         static const GetDpiForWindowFn getDpi = [] {
             FARPROC address = GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
             GetDpiForWindowFn function = nullptr;
@@ -225,9 +259,11 @@ float Window::dpi_scale() const noexcept {
             std::memcpy(&function, &address, sizeof(function));
             return function;
         }();
-        if (getDpi) return std::max(0.25f, static_cast<float>(getDpi(static_cast<HWND>(nativeHandle_))) / 96.0f);
+        if (getDpi)
+            return std::max(0.25f,
+                            static_cast<float>(getDpi(static_cast<HWND>(nativeHandle_))) / 96.0f);
     }
 #endif
     return 1.0f;
 }
-}
+} // namespace shinkou::platform

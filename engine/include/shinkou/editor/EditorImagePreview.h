@@ -24,7 +24,7 @@ struct EditorImagePreviewResult {
 // Decodes only a bounded thumbnail. The provider owns no UI state and may be
 // called from a worker thread. Unsupported platforms/providers return an
 // explicit error instead of silently presenting a fake image.
-EditorImagePreviewResult load_editor_image_preview(const FileSystemService& files,
+EditorImagePreviewResult load_editor_image_preview(const FileSystemService &files,
                                                    std::string_view relativePath,
                                                    std::uint64_t generation,
                                                    std::uint64_t sourceStamp,
@@ -34,10 +34,7 @@ EditorImagePreviewResult load_editor_image_preview(const FileSystemService& file
 // preview worker to reopen the project file. The WIC decode limits are shared
 // with the path-based provider.
 EditorImagePreviewResult load_editor_image_preview_bytes(
-    std::string_view relativePath,
-    const std::vector<std::uint8_t>& sourceBytes,
-    std::uint64_t generation,
-    std::uint64_t sourceStamp,
-    std::uint32_t maxDimension = 512);
+    std::string_view relativePath, const std::vector<std::uint8_t> &sourceBytes,
+    std::uint64_t generation, std::uint64_t sourceStamp, std::uint32_t maxDimension = 512);
 
 } // namespace shinkou::editor

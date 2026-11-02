@@ -13,6 +13,6 @@ SHINKOU_REFLECT_TYPE(::shinkou::components::LifetimeComponent, "shinkou.componen
 SHINKOU_REFLECT_TYPE(::shinkou::render::LightType, "shinkou.render.LightType");
 SHINKOU_REFLECT_TYPE(::shinkou::render::TransformComponent, "shinkou.render.TransformComponent");
 
-bool register_engine_types(TypeRegistry& registry, std::string* error = nullptr);
+bool register_engine_types(TypeRegistry &registry, std::string *error = nullptr);
 
 } // namespace shinkou::reflection

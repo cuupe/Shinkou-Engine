@@ -1,0 +1,37 @@
+# Actual secondary-window world texture, picking and camera-plane input.
+wait 700
+framebuffer-native
+state "scene-ready=1 "
+capture world-docked
+click "world-object:Companion Mesh"
+object-name "Companion Mesh"
+detach "tab:viewport" 1200 80
+wait 700
+detached "viewport.surface"
+framebuffer-native
+state "scene-ready=1 "
+capture-window "viewport.surface" world-detached
+click "world-object:Demo Mesh"
+object-name "Demo Mesh"
+remember-property "Transform:position"
+axis-drag "viewport.gizmo-center" 35 -15
+property-changed "Transform:position"
+down 17
+key 90
+up 17
+property-unchanged "Transform:position"
+remember-camera
+look 45 15
+wait 200
+camera-look
+remember-camera
+pan 40 -25
+wait 200
+camera-pan-plane
+framebuffer-native
+capture-window "viewport.surface" world-detached-navigated
+redock "tab:viewport" "tab:inspector"
+wait 500
+docked "viewport.surface"
+framebuffer-native
+capture world-redocked

@@ -9,11 +9,10 @@
 #include <vector>
 
 struct ImDrawData;
-namespace shinkou::ui { class UiRenderList; }
 
 namespace shinkou::render {
 struct RenderBackendConfig {
-    void* nativeWindow{nullptr};
+    void *nativeWindow{nullptr};
     std::uint32_t width{1280};
     std::uint32_t height{720};
     bool vsync{true};
@@ -54,9 +53,9 @@ struct RenderPassContext {
     std::string_view name;
     // Borrowed immutable pass data. The graph owns these vectors for the
     // duration of execution; keeping references here avoids per-pass copies.
-    const std::vector<ResourceHandle>& reads;
-    const std::vector<ResourceHandle>& writes;
-    const std::vector<ResourceAccess>& accesses;
+    const std::vector<ResourceHandle> &reads;
+    const std::vector<ResourceHandle> &writes;
+    const std::vector<ResourceAccess> &accesses;
     RenderQueue queue{RenderQueue::Graphics};
 };
 
@@ -101,7 +100,7 @@ struct TextureReadback {
 
     bool valid() const noexcept {
         return width > 0 && height > 0 && rowPitch >= static_cast<std::size_t>(width) * 4u &&
-            data.size() >= rowPitch * height;
+               data.size() >= rowPitch * height;
     }
 };
 
@@ -109,12 +108,8 @@ struct RenderCapabilities {
     BackendApi api{BackendApi::Null};
     bool deviceReady{false};
     RenderDeviceState deviceState{RenderDeviceState::Uninitialized};
-    // Overlay capabilities are explicit because an engine UI is a separate
-    // presentation pass from the scene renderer. The editor must select one
-    // supported path per frame instead of submitting multiple overlays and
-    // hoping a backend consumes them.
+    // The editor's single overlay pass submits ImDrawData after scene passes.
     bool supportsImGui{false};
-    bool supportsNativeUi{false};
     bool supportsTextureReadback{false};
     // Pass-local editor target binding used by independent preview passes.
     // This is separate from the ordinary viewport/scissor seam.
@@ -141,6 +136,9 @@ struct RenderCapabilities {
     bool supportsGpuMemoryAllocator{false};
     bool supportsGpuMemoryAliasing{false};
     TextureCapabilities textureCapabilities{};
+    // Immediate-context diagnostics may read a pass result synchronously.
+    // Explicit command-buffer APIs normally require the frame to be submitted.
+    bool supportsInPassTextureReadback{false};
 };
 
 struct RenderStats {
@@ -170,71 +168,108 @@ struct RenderStats {
 };
 
 class IRenderBackend {
-public:
+  public:
     virtual ~IRenderBackend() = default;
-    virtual void request_ui_capture() {}
+    virtual void request_ui_capture() {
+    }
     virtual RenderCapabilities capabilities() const noexcept = 0;
     // Optional compatibility surface. Existing backends inherit this safely.
     virtual TextureCapabilities texture_capabilities() const noexcept {
         const auto renderCapabilities = capabilities();
         return renderCapabilities.textureCapabilities.known
-            ? renderCapabilities.textureCapabilities
-            : TextureCapabilities::for_backend(renderCapabilities.api);
+                   ? renderCapabilities.textureCapabilities
+                   : TextureCapabilities::for_backend(renderCapabilities.api);
     }
-    virtual TextureValidationResult validate_texture(const TextureDesc& description) const {
+    virtual TextureValidationResult validate_texture(const TextureDesc &description) const {
         return validate_texture_desc(description, texture_capabilities());
     }
-    virtual TextureValidationResult validate_texture_view(const TextureDesc& texture,
-                                                          const TextureViewDesc& view) const {
+    virtual TextureValidationResult validate_texture_view(const TextureDesc &texture,
+                                                          const TextureViewDesc &view) const {
         return shinkou::render::validate_texture_view(texture, view, texture_capabilities());
     }
-    virtual bool resolve_texture(ResourceHandle, ResourceHandle) { return false; }
-    virtual bool initialize(const RenderBackendConfig& config) = 0;
-    virtual bool resize(std::uint32_t, std::uint32_t) { return true; }
-    virtual bool create_resource(ResourceHandle handle, const ResourceDesc& desc) = 0;
-    virtual bool create_transient_resource(ResourceHandle handle,const ResourceDesc& description) { return create_resource(handle,description); }
-    virtual void retire_transient_resource(ResourceHandle handle,bool reusable=true) { (void)reusable; retire_resource(handle); }
+    virtual bool resolve_texture(ResourceHandle, ResourceHandle) {
+        return false;
+    }
+    virtual bool initialize(const RenderBackendConfig &config) = 0;
+    virtual bool resize(std::uint32_t, std::uint32_t) {
+        return true;
+    }
+    virtual bool create_resource(ResourceHandle handle, const ResourceDesc &desc) = 0;
+    virtual bool create_transient_resource(ResourceHandle handle, const ResourceDesc &description) {
+        return create_resource(handle, description);
+    }
+    virtual void retire_transient_resource(ResourceHandle handle, bool reusable = true) {
+        (void)reusable;
+        retire_resource(handle);
+    }
     virtual bool alias_resource(ResourceHandle logical, ResourceHandle physical) {
         (void)logical;
         (void)physical;
         return false;
     }
     virtual void destroy_resource(ResourceHandle handle) = 0;
-    virtual bool update_buffer(const BufferUpdate&) { return false; }
-    virtual bool update_texture(const TextureUpdate&) { return false; }
+    virtual bool update_buffer(const BufferUpdate &) {
+        return false;
+    }
+    virtual bool update_texture(const TextureUpdate &) {
+        return false;
+    }
     // Readback is an explicit diagnostic/editor operation. Backends should
-    // use an appropriate staging resource and enforce request.maxBytes.
-    virtual bool read_texture(const TextureReadbackRequest&, TextureReadback&) {
+    // use an appropriate staging resource and enforce request.maxBytes. Call
+    // outside a recording frame unless supportsInPassTextureReadback is set.
+    virtual bool read_texture(const TextureReadbackRequest &, TextureReadback &) {
         return false;
     }
     // Uploads issued between begin_graph() and submit() are recorded into one
     // backend batch when supported, so the render graph can consume them in
     // submission order without forcing a CPU wait per update.
-    virtual void begin_upload_batch() {}
-    virtual bool flush_upload_batch() { return true; }
-    virtual bool generate_mips(ResourceHandle) { return false; }
-    virtual BindlessTableHandle create_bindless_table(const BindlessTableDesc&) { return {}; }
-    virtual bool update_bindless(BindlessTableHandle, std::uint32_t, ResourceHandle, DescriptorType) { return false; }
-    virtual void destroy_bindless_table(BindlessTableHandle) {}
-    virtual void bind_bindless_table(BindlessTableHandle) {}
-    virtual void retire_resource(ResourceHandle handle) { destroy_resource(handle); }
-    virtual void collect_garbage() {}
-    virtual bool transition_resource(ResourceHandle, ResourceUsage) { return true; }
-    virtual void set_render_target(ResourceHandle) {}
+    virtual void begin_upload_batch() {
+    }
+    virtual bool flush_upload_batch() {
+        return true;
+    }
+    virtual bool generate_mips(ResourceHandle) {
+        return false;
+    }
+    virtual BindlessTableHandle create_bindless_table(const BindlessTableDesc &) {
+        return {};
+    }
+    virtual bool update_bindless(BindlessTableHandle, std::uint32_t, ResourceHandle,
+                                 DescriptorType) {
+        return false;
+    }
+    virtual void destroy_bindless_table(BindlessTableHandle) {
+    }
+    virtual void bind_bindless_table(BindlessTableHandle) {
+    }
+    virtual void retire_resource(ResourceHandle handle) {
+        destroy_resource(handle);
+    }
+    virtual void collect_garbage() {
+    }
+    virtual bool transition_resource(ResourceHandle, ResourceUsage) {
+        return true;
+    }
+    virtual void set_render_target(ResourceHandle) {
+    }
     virtual void set_render_targets(ResourceHandle color, ResourceHandle depth) {
         (void)depth;
         set_render_target(color);
     }
-    virtual void set_render_targets(const std::vector<ResourceHandle>& colors, ResourceHandle depth,
+    virtual void set_render_targets(const std::vector<ResourceHandle> &colors, ResourceHandle depth,
                                     bool clearAttachments = true) {
         (void)clearAttachments;
         set_render_targets(colors.empty() ? ResourceHandle{} : colors.front(), depth);
     }
-    virtual void set_render_targets(ResourceHandle color, ResourceHandle depth, bool clearAttachments) {
+    virtual void set_render_targets(ResourceHandle color, ResourceHandle depth,
+                                    bool clearAttachments) {
         (void)clearAttachments;
         set_render_targets(color, depth);
     }
-    virtual bool clear_render_attachments(const std::vector<ResourceHandle>&,ResourceHandle,bool,bool) { return false; }
+    virtual bool clear_render_attachments(const std::vector<ResourceHandle> &, ResourceHandle, bool,
+                                          bool) {
+        return false;
+    }
     // An empty color target means the swapchain/backbuffer. Native editor
     // preview passes use this to switch between an offscreen target and the
     // protected editor presentation target without changing scene policy.
@@ -243,72 +278,111 @@ public:
         set_render_targets(color, depth, clearAttachments);
         return true;
     }
-    virtual void set_viewport(float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f) {
-        (void)x; (void)y; (void)width; (void)height; (void)minDepth; (void)maxDepth;
+    virtual void set_viewport(float x, float y, float width, float height, float minDepth = 0.0f,
+                              float maxDepth = 1.0f) {
+        (void)x;
+        (void)y;
+        (void)width;
+        (void)height;
+        (void)minDepth;
+        (void)maxDepth;
     }
     virtual void set_debug_name(ResourceHandle handle, std::string_view name) {
-        (void)handle; (void)name;
+        (void)handle;
+        (void)name;
     }
-    virtual void begin_debug_label(std::string_view name) { (void)name; }
-    virtual void end_debug_label() {}
+    virtual void begin_debug_label(std::string_view name) {
+        (void)name;
+    }
+    virtual void end_debug_label() {
+    }
     virtual void begin_frame() = 0;
     // The application owns the platform ImGui frame lifecycle: it must call
     // the backend's *_NewFrame() adapter before ImGui::NewFrame(). The render
     // backend only consumes the completed draw data during submit().
-    virtual bool initialize_imgui() { return false; }
-    virtual void new_imgui_frame() {}
-    virtual void invalidate_imgui_fonts() {}
+    virtual bool initialize_imgui() {
+        return false;
+    }
+    virtual void new_imgui_frame() {
+    }
+    virtual void invalidate_imgui_fonts() {
+    }
     // Opaque ID consumed only by Dear ImGui's renderer adapter.
-    virtual std::uint64_t imgui_texture(ResourceHandle) { return 0; }
-    virtual void shutdown_imgui() {}
-    virtual void render_imgui(ImDrawData*) {}
+    virtual std::uint64_t imgui_texture(ResourceHandle) {
+        return 0;
+    }
+    virtual void shutdown_imgui() {
+    }
+    virtual void render_imgui(ImDrawData *) {
+    }
     // Retained editor UI seam. The widget tree and layout are backend-neutral;
     // the backend owns batching, clipping, text and presentation.
-    virtual void render_editor_ui(const ::shinkou::ui::UiRenderList&) {}
     // Optional editor scene seam. The default is intentionally unsupported
     // for backends that have not proved viewport/scissor enforcement and
     // target binding. Disabled state is always accepted so callers can clear
     // stale backend state during frame teardown.
-    virtual bool set_editor_viewport(const EditorViewportSeam& seam) {
+    virtual bool set_editor_viewport(const EditorViewportSeam &seam) {
         return !seam.enabled;
     }
-    virtual bool begin_queue(RenderQueue) { return true; }
+    virtual bool begin_queue(RenderQueue) {
+        return true;
+    }
     virtual bool begin_queue(RenderQueue queue, std::uint32_t batchIndex,
-                             const std::vector<std::uint32_t>& waitBatches) {
+                             const std::vector<std::uint32_t> &waitBatches) {
         (void)batchIndex;
         (void)waitBatches;
         return begin_queue(queue);
     }
-    virtual bool end_queue(RenderQueue, std::uint32_t, bool) { return true; }
-    virtual bool end_queue(RenderQueue queue, std::uint32_t batchIndex, bool lastBatch, bool present) {
+    virtual bool end_queue(RenderQueue, std::uint32_t, bool) {
+        return true;
+    }
+    virtual bool end_queue(RenderQueue queue, std::uint32_t batchIndex, bool lastBatch,
+                           bool present) {
         (void)present;
         return end_queue(queue, batchIndex, lastBatch);
     }
-    virtual void begin_pass() {}
-    virtual void execute(const RenderPassContext& pass) = 0;
-    virtual void end_pass() {}
+    virtual void begin_pass() {
+    }
+    virtual void execute(const RenderPassContext &pass) = 0;
+    virtual void end_pass() {
+    }
     virtual void bind_pipeline(std::string_view pipelineName) = 0;
     virtual void bind_pipeline(ResourceHandle pipeline) = 0;
-    virtual void bind_material(ResourceHandle material) { (void)material; }
-    virtual bool update_material(ResourceHandle material, const MaterialDesc& description) {
+    virtual void bind_material(ResourceHandle material) {
+        (void)material;
+    }
+    virtual bool update_material(ResourceHandle material, const MaterialDesc &description) {
         (void)material;
         (void)description;
         return false;
     }
-    virtual void bind_uniform_buffer(ResourceHandle buffer, std::uint32_t slot, std::uint32_t space = 0) {
-        (void)buffer; (void)slot; (void)space;
+    virtual void bind_uniform_buffer(ResourceHandle buffer, std::uint32_t slot,
+                                     std::uint32_t space = 0) {
+        (void)buffer;
+        (void)slot;
+        (void)space;
     }
-    virtual void draw_sprite(const SpriteDraw& draw) = 0;
-    virtual void draw_mesh(const MeshDraw& draw) = 0;
-    virtual void draw_mesh_indirect(const IndirectMeshDraw& draw) { (void)draw; }
-    virtual bool dispatch(const DispatchDesc& dispatch) { (void)dispatch; return false; }
+    virtual void draw_sprite(const SpriteDraw &draw) = 0;
+    virtual void draw_mesh(const MeshDraw &draw) = 0;
+    virtual void draw_mesh_indirect(const IndirectMeshDraw &draw) {
+        (void)draw;
+    }
+    virtual bool dispatch(const DispatchDesc &dispatch) {
+        (void)dispatch;
+        return false;
+    }
     virtual void end_frame() = 0;
-    virtual void discard_frame() {}
-    virtual void wait_idle() {}
-    virtual void clear_error() {}
-    virtual std::string last_error() const { return {}; }
+    virtual void discard_frame() {
+    }
+    virtual void wait_idle() {
+    }
+    virtual void clear_error() {
+    }
+    virtual std::string last_error() const {
+        return {};
+    }
     virtual RenderStats stats() const noexcept = 0;
 };
 
 std::unique_ptr<IRenderBackend> create_backend(BackendApi api);
-}
+} // namespace shinkou::render

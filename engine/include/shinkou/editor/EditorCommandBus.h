@@ -56,7 +56,9 @@ struct EditorCommandResult {
     static EditorCommandResult success(bool changed = false, std::string message = {});
     static EditorCommandResult failure(std::string message);
 
-    explicit operator bool() const noexcept { return succeeded; }
+    explicit operator bool() const noexcept {
+        return succeeded;
+    }
 };
 
 // A changed command must provide both inverse operations. This makes the
@@ -77,7 +79,9 @@ struct EditorCommandDispatchResult {
     EditorTransactionId transaction{0};
     std::string message;
 
-    explicit operator bool() const noexcept { return accepted; }
+    explicit operator bool() const noexcept {
+        return accepted;
+    }
 };
 
 enum class EditorCommandTraceState : std::uint8_t {
@@ -104,15 +108,17 @@ struct EditorTransactionInfo {
 };
 
 class EditorCommandBus {
-public:
-    using Handler = std::function<EditorCommandExecution(const EditorCommandInvocation&)>;
-    using FailureCallback = std::function<void(const EditorCommandInvocation&, std::string_view)>;
+  public:
+    using Handler = std::function<EditorCommandExecution(const EditorCommandInvocation &)>;
+    using FailureCallback = std::function<void(const EditorCommandInvocation &, std::string_view)>;
 
     bool register_handler(EditorCommand command, Handler handler);
     bool unregister_handler(EditorCommand command);
     bool has_handler(EditorCommand command) const noexcept;
 
-    void set_failure_callback(FailureCallback callback) { failureCallback_ = std::move(callback); }
+    void set_failure_callback(FailureCallback callback) {
+        failureCallback_ = std::move(callback);
+    }
 
     EditorCommandDispatchResult execute(EditorCommandRequest request = {});
 
@@ -120,26 +126,42 @@ public:
                                           std::string sourceId = {});
     EditorCommandDispatchResult commit_transaction(EditorTransactionId transaction);
     EditorCommandDispatchResult cancel_transaction(EditorTransactionId transaction);
-    bool has_active_transaction() const noexcept { return transaction_.has_value(); }
+    bool has_active_transaction() const noexcept {
+        return transaction_.has_value();
+    }
     std::optional<EditorTransactionInfo> active_transaction() const;
 
     EditorCommandDispatchResult undo(EditorCommandSource source = EditorCommandSource::System,
                                      std::string sourceId = {});
     EditorCommandDispatchResult redo(EditorCommandSource source = EditorCommandSource::System,
                                      std::string sourceId = {});
-    bool can_undo() const noexcept { return !undoStack_.empty() && !transaction_.has_value(); }
-    bool can_redo() const noexcept { return !redoStack_.empty() && !transaction_.has_value(); }
+    bool can_undo() const noexcept {
+        return !undoStack_.empty() && !transaction_.has_value();
+    }
+    bool can_redo() const noexcept {
+        return !redoStack_.empty() && !transaction_.has_value();
+    }
 
     void clear_history() noexcept;
     void set_history_limit(std::size_t limit) noexcept;
-    std::size_t history_limit() const noexcept { return historyLimit_; }
+    std::size_t history_limit() const noexcept {
+        return historyLimit_;
+    }
 
-    std::uint64_t revision() const noexcept { return revision_; }
-    std::uint64_t sequence() const noexcept { return sequence_; }
-    const std::vector<EditorCommandTrace>& traces() const noexcept { return traces_; }
-    const EditorCommandDispatchResult& last_result() const noexcept { return lastResult_; }
+    std::uint64_t revision() const noexcept {
+        return revision_;
+    }
+    std::uint64_t sequence() const noexcept {
+        return sequence_;
+    }
+    const std::vector<EditorCommandTrace> &traces() const noexcept {
+        return traces_;
+    }
+    const EditorCommandDispatchResult &last_result() const noexcept {
+        return lastResult_;
+    }
 
-private:
+  private:
     struct HistoryEntry {
         EditorCommandInvocation invocation;
         bool changed{false};
@@ -170,17 +192,18 @@ private:
     EditorTransactionId nextTransaction_{1};
     std::size_t historyLimit_{256};
 
-    EditorCommandInvocation make_invocation(const EditorCommandRequest& request,
-                                             std::uint64_t sequence,
-                                             EditorTransactionId transaction) const;
+    EditorCommandInvocation make_invocation(const EditorCommandRequest &request,
+                                            std::uint64_t sequence,
+                                            EditorTransactionId transaction) const;
     EditorCommandDispatchResult fail(EditorCommandInvocation invocation, std::string message);
     void trim_history() noexcept;
     void trim_traces() noexcept;
     void mark_trace(EditorCommandTraceState state, EditorTransactionId transaction,
                     std::uint64_t sequence) noexcept;
     EditorCommandDispatchResult finish(EditorCommandDispatchResult result);
-    EditorCommandDispatchResult apply_history_group(HistoryGroup& group, bool undo,
-                                                     EditorCommandSource source, std::string sourceId);
+    EditorCommandDispatchResult apply_history_group(HistoryGroup &group, bool undo,
+                                                    EditorCommandSource source,
+                                                    std::string sourceId);
 };
 
 } // namespace shinkou::editor

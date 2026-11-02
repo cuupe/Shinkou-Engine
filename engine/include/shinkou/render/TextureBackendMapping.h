@@ -22,17 +22,20 @@ enum class TextureBackendUsage : std::uint32_t {
     ResolveDestination = 1u << 5,
 };
 
-constexpr TextureBackendUsage operator|(TextureBackendUsage left, TextureBackendUsage right) noexcept {
+constexpr TextureBackendUsage operator|(TextureBackendUsage left,
+                                        TextureBackendUsage right) noexcept {
     return static_cast<TextureBackendUsage>(static_cast<std::uint32_t>(left) |
                                             static_cast<std::uint32_t>(right));
 }
 
-constexpr TextureBackendUsage& operator|=(TextureBackendUsage& left, TextureBackendUsage right) noexcept {
+constexpr TextureBackendUsage &operator|=(TextureBackendUsage &left,
+                                          TextureBackendUsage right) noexcept {
     left = left | right;
     return left;
 }
 
-constexpr bool has_texture_backend_usage(TextureBackendUsage value, TextureBackendUsage flag) noexcept {
+constexpr bool has_texture_backend_usage(TextureBackendUsage value,
+                                         TextureBackendUsage flag) noexcept {
     return (static_cast<std::uint32_t>(value) & static_cast<std::uint32_t>(flag)) != 0;
 }
 
@@ -104,7 +107,9 @@ struct TextureBackendMappingResult {
     std::vector<TextureBackendDiagnostic> diagnostics;
 
     bool valid() const noexcept;
-    explicit operator bool() const noexcept { return valid(); }
+    explicit operator bool() const noexcept {
+        return valid();
+    }
     std::string error_summary() const;
 };
 
@@ -113,7 +118,9 @@ struct TextureBackendViewMappingResult {
     std::vector<TextureBackendDiagnostic> diagnostics;
 
     bool valid() const noexcept;
-    explicit operator bool() const noexcept { return valid(); }
+    explicit operator bool() const noexcept {
+        return valid();
+    }
     std::string error_summary() const;
 };
 
@@ -124,25 +131,25 @@ struct TextureBackendMappingOptions {
     std::vector<TextureFormat> formatFallbacks;
 };
 
-TextureBackendMappingResult map_texture_to_backend(
-    const TextureDesc& description, BackendApi backend,
-    const TextureCapabilities& capabilities,
-    const TextureBackendMappingOptions& options = {});
+TextureBackendMappingResult
+map_texture_to_backend(const TextureDesc &description, BackendApi backend,
+                       const TextureCapabilities &capabilities,
+                       const TextureBackendMappingOptions &options = {});
 
-TextureBackendViewMappingResult map_texture_view_to_backend(
-    const TextureDesc& texture, const TextureViewDesc& view, BackendApi backend,
-    const TextureCapabilities& capabilities,
-    const TextureBackendMappingOptions& options = {});
+TextureBackendViewMappingResult
+map_texture_view_to_backend(const TextureDesc &texture, const TextureViewDesc &view,
+                            BackendApi backend, const TextureCapabilities &capabilities,
+                            const TextureBackendMappingOptions &options = {});
 
 // Descriptive aliases for callers that prefer the word "plan".
-TextureBackendMappingResult build_texture_backend_plan(
-    const TextureDesc& description, BackendApi backend,
-    const TextureCapabilities& capabilities,
-    const TextureBackendMappingOptions& options = {});
+TextureBackendMappingResult
+build_texture_backend_plan(const TextureDesc &description, BackendApi backend,
+                           const TextureCapabilities &capabilities,
+                           const TextureBackendMappingOptions &options = {});
 
-TextureBackendViewMappingResult build_texture_view_backend_plan(
-    const TextureDesc& texture, const TextureViewDesc& view, BackendApi backend,
-    const TextureCapabilities& capabilities,
-    const TextureBackendMappingOptions& options = {});
+TextureBackendViewMappingResult
+build_texture_view_backend_plan(const TextureDesc &texture, const TextureViewDesc &view,
+                                BackendApi backend, const TextureCapabilities &capabilities,
+                                const TextureBackendMappingOptions &options = {});
 
 } // namespace shinkou::render

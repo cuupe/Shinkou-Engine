@@ -1,3 +1,4 @@
+#include "shinkou/core/Path.h"
 #include "shinkou/editor/EditorBuildSystem.h"
 #include "shinkou/editor/EditorToolIntegration.h"
 
@@ -82,6 +83,12 @@ int main() {
     assert(loadedProfile.valid && loadedProfile.profile.id == cmake.id);
     assert(loadedProfile.profile.configureArguments == cmake.configureArguments);
     assert(loadedProfile.profile.buildArguments == cmake.buildArguments);
+    auto utf8Profile = cmake;
+    utf8Profile.buildDirectory = shinkou::core::path_from_utf8(u8"out/构建");
+    std::string utf8Json;
+    assert(EditorBuildProfileStore::serialize(utf8Profile,utf8Json,&profileError));
+    const auto utf8Restored = EditorBuildProfileStore::deserialize(utf8Json);
+    assert(utf8Restored.valid && shinkou::core::path_to_utf8(utf8Restored.profile.buildDirectory) == u8"out/构建");
     auto unsafeProfile = cmake;
     unsafeProfile.buildDirectory = "../outside";
     assert(!EditorBuildProfileStore::serialize(unsafeProfile, profileJson, &profileError));

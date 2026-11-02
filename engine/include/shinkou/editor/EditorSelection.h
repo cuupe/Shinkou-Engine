@@ -35,26 +35,39 @@ struct EditorSelectionChange {
 };
 
 class EditorSelection {
-public:
-    using ChangeCallback = std::function<void(const EditorSelectionChange&)>;
+  public:
+    using ChangeCallback = std::function<void(const EditorSelectionChange &)>;
 
     bool select(ObjectId id, EditorSelectionMode mode = EditorSelectionMode::Replace);
-    bool select(const std::vector<ObjectId>& ids, EditorSelectionMode mode = EditorSelectionMode::Replace);
+    bool select(const std::vector<ObjectId> &ids,
+                EditorSelectionMode mode = EditorSelectionMode::Replace);
     bool set(std::vector<ObjectId> ids, ObjectId primary = 0);
     bool set_primary(ObjectId id);
     bool remove(ObjectId id);
     bool clear();
 
     bool contains(ObjectId id) const noexcept;
-    bool empty() const noexcept { return selected_.empty(); }
-    std::size_t size() const noexcept { return selected_.size(); }
-    ObjectId primary() const noexcept { return primary_; }
-    const std::vector<ObjectId>& ids() const noexcept { return selected_; }
-    std::uint64_t revision() const noexcept { return revision_; }
+    bool empty() const noexcept {
+        return selected_.empty();
+    }
+    std::size_t size() const noexcept {
+        return selected_.size();
+    }
+    ObjectId primary() const noexcept {
+        return primary_;
+    }
+    const std::vector<ObjectId> &ids() const noexcept {
+        return selected_;
+    }
+    std::uint64_t revision() const noexcept {
+        return revision_;
+    }
 
-    void set_change_callback(ChangeCallback callback) { changeCallback_ = std::move(callback); }
+    void set_change_callback(ChangeCallback callback) {
+        changeCallback_ = std::move(callback);
+    }
 
-private:
+  private:
     std::vector<ObjectId> selected_;
     ObjectId primary_{0};
     std::uint64_t revision_{0};
@@ -62,7 +75,7 @@ private:
 
     static std::vector<ObjectId> normalize(std::vector<ObjectId> ids);
     bool commit(EditorSelectionChangeKind kind, std::vector<ObjectId> next, ObjectId primary);
-    static ObjectId fallback_primary(const std::vector<ObjectId>& ids, ObjectId requested) noexcept;
+    static ObjectId fallback_primary(const std::vector<ObjectId> &ids, ObjectId requested) noexcept;
 };
 
 } // namespace shinkou::editor

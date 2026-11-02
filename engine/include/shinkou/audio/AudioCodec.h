@@ -31,12 +31,14 @@ struct AudioCodecResult {
 };
 
 class AudioCodec final {
-public:
-    static AudioCodecResult decode(const std::filesystem::path& path, AudioPcmBuffer& output,
-                                   const AudioDecodeOptions& options = {});
-    static AudioCodecResult encode_wav(const std::filesystem::path& path, const AudioPcmBuffer& input,
-                                       const AudioEncodeOptions& options = {});
-    static AudioCodecResult transcode_ffmpeg(const AudioTranscodeOptions& options,
-                                             const std::filesystem::path& ffmpegExecutable = "ffmpeg");
+  public:
+    static AudioCodecResult decode(const std::filesystem::path &path, AudioPcmBuffer &output,
+                                   const AudioDecodeOptions &options = {});
+    static AudioCodecResult encode_wav(const std::filesystem::path &path,
+                                       const AudioPcmBuffer &input,
+                                       const AudioEncodeOptions &options = {});
+    static AudioCodecResult
+    transcode_ffmpeg(const AudioTranscodeOptions &options,
+                     const std::filesystem::path &ffmpegExecutable = "ffmpeg");
 };
-}
+} // namespace shinkou::audio

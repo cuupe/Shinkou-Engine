@@ -27,7 +27,7 @@
 
 ## 实现与限制
 
-独立模块：`EditorTextPreview`（只读文本/DOCX/ZIP）、`EditorFbxPreview`、`EditorAssetSettings`（配置序列化）、`EditorAssetInspection`（编辑器与音频桥接）、`EditorImGuiAssetOptions`（上游 ImGui 控件）。解码在异步任务中执行，UI 消费不可变快照。完整文本由快照共享，旧 retained 检查器只保留 24 行，避免每帧复制整篇文档。
+独立模块：`EditorTextPreview`（只读文本/DOCX/ZIP）、`EditorFbxPreview`、`EditorAssetSettings`（配置序列化）、`EditorAssetInspection`（编辑器与音频桥接）、`EditorImGuiAssetOptions`（上游 ImGui 控件）。解码在异步任务中执行，UI 共享不可变的完整文本快照，不维护另一份截断文本。
 
 文本读取最多 1 MiB / 10,000 行。DOCX/ZIP 压缩包最多 64 MiB，Word XML 解压后最多 8 MiB，显示文字有额外预算。FBX 源最多 128 MiB，解析分配器和三角形/顶点数量有限额；支持取消加载。读取不跟随 Word 外部关系、宏或 FBX 外部文件路径。
 

@@ -7,18 +7,28 @@
 namespace shinkou::render {
 namespace {
 
-const char* result_name(DescriptorOperationResult result) noexcept {
+const char *result_name(DescriptorOperationResult result) noexcept {
     switch (result) {
-    case DescriptorOperationResult::Success: return "success";
-    case DescriptorOperationResult::InvalidConfig: return "invalid descriptor allocator configuration";
-    case DescriptorOperationResult::InvalidHandle: return "invalid descriptor handle";
-    case DescriptorOperationResult::StaleHandle: return "stale descriptor handle";
-    case DescriptorOperationResult::TypeMismatch: return "descriptor handle type mismatch";
-    case DescriptorOperationResult::AlreadyFree: return "descriptor handle was already released";
-    case DescriptorOperationResult::OutOfCapacity: return "descriptor allocator capacity is exhausted";
-    case DescriptorOperationResult::BudgetExceeded: return "descriptor allocator budget is exhausted";
-    case DescriptorOperationResult::PoolLimitExceeded: return "descriptor allocator pool limit is exhausted";
-    case DescriptorOperationResult::BackendFailure: return "backend descriptor pool creation failed";
+    case DescriptorOperationResult::Success:
+        return "success";
+    case DescriptorOperationResult::InvalidConfig:
+        return "invalid descriptor allocator configuration";
+    case DescriptorOperationResult::InvalidHandle:
+        return "invalid descriptor handle";
+    case DescriptorOperationResult::StaleHandle:
+        return "stale descriptor handle";
+    case DescriptorOperationResult::TypeMismatch:
+        return "descriptor handle type mismatch";
+    case DescriptorOperationResult::AlreadyFree:
+        return "descriptor handle was already released";
+    case DescriptorOperationResult::OutOfCapacity:
+        return "descriptor allocator capacity is exhausted";
+    case DescriptorOperationResult::BudgetExceeded:
+        return "descriptor allocator budget is exhausted";
+    case DescriptorOperationResult::PoolLimitExceeded:
+        return "descriptor allocator pool limit is exhausted";
+    case DescriptorOperationResult::BackendFailure:
+        return "backend descriptor pool creation failed";
     }
     return "unknown descriptor allocator error";
 }
@@ -47,17 +57,18 @@ bool DescriptorPool::matches_unlocked(BindlessHandle handle) const noexcept {
     }
     const auto expectedIndex = static_cast<std::uint64_t>(logicalBaseIndex_) + handle.slot;
     return expectedIndex <= std::numeric_limits<std::uint32_t>::max() &&
-        handle.index == static_cast<std::uint32_t>(expectedIndex) &&
-        slots_[handle.slot].generation == handle.generation;
+           handle.index == static_cast<std::uint32_t>(expectedIndex) &&
+           slots_[handle.slot].generation == handle.generation;
 }
 
 std::optional<BindlessHandle> DescriptorPool::allocate() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (freeSlots_.empty()) return std::nullopt;
+    if (freeSlots_.empty())
+        return std::nullopt;
 
     const auto slot = freeSlots_.back();
     freeSlots_.pop_back();
-    auto& entry = slots_[slot];
+    auto &entry = slots_[slot];
     entry.allocated = true;
     ++allocated_;
     ++allocationCount_;
@@ -65,16 +76,15 @@ std::optional<BindlessHandle> DescriptorPool::allocate() {
 
     return BindlessHandle{
         static_cast<std::uint32_t>(static_cast<std::uint64_t>(logicalBaseIndex_) + slot),
-        entry.generation,
-        description_.type,
-        id_,
-        slot};
+        entry.generation, description_.type, id_, slot};
 }
 
 DescriptorOperationResult DescriptorPool::release(BindlessHandle handle) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (handle.pool != id_ || handle.slot >= slots_.size()) return DescriptorOperationResult::InvalidHandle;
-    if (handle.type != description_.type) return DescriptorOperationResult::TypeMismatch;
+    if (handle.pool != id_ || handle.slot >= slots_.size())
+        return DescriptorOperationResult::InvalidHandle;
+    if (handle.type != description_.type)
+        return DescriptorOperationResult::TypeMismatch;
 
     const auto expectedIndex = static_cast<std::uint64_t>(logicalBaseIndex_) + handle.slot;
     if (expectedIndex > std::numeric_limits<std::uint32_t>::max() ||
@@ -82,9 +92,11 @@ DescriptorOperationResult DescriptorPool::release(BindlessHandle handle) {
         return DescriptorOperationResult::InvalidHandle;
     }
 
-    auto& entry = slots_[handle.slot];
-    if (entry.generation != handle.generation) return DescriptorOperationResult::StaleHandle;
-    if (!entry.allocated) return DescriptorOperationResult::AlreadyFree;
+    auto &entry = slots_[handle.slot];
+    if (entry.generation != handle.generation)
+        return DescriptorOperationResult::StaleHandle;
+    if (!entry.allocated)
+        return DescriptorOperationResult::AlreadyFree;
 
     entry.allocated = false;
     entry.generation = next_generation(entry.generation);
@@ -99,23 +111,29 @@ bool DescriptorPool::validate(BindlessHandle handle) const {
     return matches_unlocked(handle);
 }
 
-std::optional<DescriptorLocation> DescriptorPool::resolve(BindlessHandle handle,
-                                                          DescriptorPoolBackendHandle backendPool) const {
+std::optional<DescriptorLocation>
+DescriptorPool::resolve(BindlessHandle handle, DescriptorPoolBackendHandle backendPool) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!matches_unlocked(handle)) return std::nullopt;
+    if (!matches_unlocked(handle))
+        return std::nullopt;
     return DescriptorLocation{id_, handle.slot, handle.index, description_.type, backendPool};
 }
 
 DescriptorPoolStats DescriptorPool::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return DescriptorPoolStats{
-        id_, description_.type, slots_.size(), allocated_, slots_.size() - allocated_, highWatermark_,
-        allocationCount_, releaseCount_};
+    return DescriptorPoolStats{id_,
+                               description_.type,
+                               slots_.size(),
+                               allocated_,
+                               slots_.size() - allocated_,
+                               highWatermark_,
+                               allocationCount_,
+                               releaseCount_};
 }
 
-DescriptorAllocator::DescriptorAllocator(DescriptorAllocatorConfig config)
-    : config_(config) {
-    if (config_.initialPoolCapacity == 0 || config_.growthFactor == 0 || config_.maxPoolCapacity == 0) {
+DescriptorAllocator::DescriptorAllocator(DescriptorAllocatorConfig config) : config_(config) {
+    if (config_.initialPoolCapacity == 0 || config_.growthFactor == 0 ||
+        config_.maxPoolCapacity == 0) {
         lastError_ = result_name(DescriptorOperationResult::InvalidConfig);
     }
     if (config_.initialPoolCapacity > config_.maxPoolCapacity) {
@@ -126,41 +144,47 @@ DescriptorAllocator::DescriptorAllocator(DescriptorAllocatorConfig config)
 
 DescriptorAllocator::~DescriptorAllocator() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!config_.backend) return;
+    if (!config_.backend)
+        return;
     for (auto it = backendPools_.rbegin(); it != backendPools_.rend(); ++it) {
-        if (*it) config_.backend->destroy_pool(*it);
+        if (*it)
+            config_.backend->destroy_pool(*it);
     }
 }
 
-DescriptorPool* DescriptorAllocator::find_pool_unlocked(DescriptorPoolId id) noexcept {
-    for (auto& pool : pools_) {
-        if (pool->id() == id) return pool.get();
+DescriptorPool *DescriptorAllocator::find_pool_unlocked(DescriptorPoolId id) noexcept {
+    for (auto &pool : pools_) {
+        if (pool->id() == id)
+            return pool.get();
     }
     return nullptr;
 }
 
-const DescriptorPool* DescriptorAllocator::find_pool_unlocked(DescriptorPoolId id) const noexcept {
-    for (const auto& pool : pools_) {
-        if (pool->id() == id) return pool.get();
+const DescriptorPool *DescriptorAllocator::find_pool_unlocked(DescriptorPoolId id) const noexcept {
+    for (const auto &pool : pools_) {
+        if (pool->id() == id)
+            return pool.get();
     }
     return nullptr;
 }
 
 std::uint32_t DescriptorAllocator::next_pool_capacity_unlocked(DescriptorType type) const noexcept {
     std::uint32_t previous = 0;
-    for (const auto& pool : pools_) {
+    for (const auto &pool : pools_) {
         if (pool->description().type == type) {
             previous = std::max(previous, pool->description().capacity);
         }
     }
-    if (previous == 0) return std::min(config_.initialPoolCapacity, config_.maxPoolCapacity);
+    if (previous == 0)
+        return std::min(config_.initialPoolCapacity, config_.maxPoolCapacity);
     const auto factor = std::max(1u, config_.growthFactor);
     const auto grown = static_cast<std::uint64_t>(previous) * factor;
-    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
-        std::max<std::uint64_t>(1, grown), config_.maxPoolCapacity));
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(std::max<std::uint64_t>(1, grown), config_.maxPoolCapacity));
 }
 
-DescriptorPool* DescriptorAllocator::create_pool_unlocked(DescriptorType type, std::uint32_t poolCapacity) {
+DescriptorPool *DescriptorAllocator::create_pool_unlocked(DescriptorType type,
+                                                          std::uint32_t poolCapacity) {
     if (poolCapacity == 0 || poolCapacity > config_.maxPoolCapacity) {
         set_error_unlocked(DescriptorOperationResult::InvalidConfig);
         return nullptr;
@@ -196,27 +220,31 @@ DescriptorPool* DescriptorAllocator::create_pool_unlocked(DescriptorType type, s
     }
 
     auto pool = std::make_unique<DescriptorPool>(poolId, logicalBaseIndex, description.description);
-    auto* result = pool.get();
+    auto *result = pool.get();
     pools_.push_back(std::move(pool));
     backendPools_.push_back(backendHandle);
     nextLogicalIndex_ += poolCapacity;
     counters_.capacity += poolCapacity;
     ++counters_.poolCount;
-    if (counters_.poolCount > 1) ++counters_.growthCount;
+    if (counters_.poolCount > 1)
+        ++counters_.growthCount;
     counters_.free += poolCapacity;
     set_error_unlocked(DescriptorOperationResult::Success);
     return result;
 }
 
 void DescriptorAllocator::set_error_unlocked(DescriptorOperationResult result) const {
-    if (result == DescriptorOperationResult::Success) lastError_.clear();
-    else lastError_ = result_name(result);
+    if (result == DescriptorOperationResult::Success)
+        lastError_.clear();
+    else
+        lastError_ = result_name(result);
 }
 
 std::optional<BindlessHandle> DescriptorAllocator::allocate(DescriptorType type) {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& pool : pools_) {
-        if (pool->description().type != type) continue;
+    for (auto &pool : pools_) {
+        if (pool->description().type != type)
+            continue;
         if (auto handle = pool->allocate()) {
             ++counters_.allocated;
             --counters_.free;
@@ -235,16 +263,18 @@ std::optional<BindlessHandle> DescriptorAllocator::allocate(DescriptorType type)
     }
     if (config_.descriptorBudget != 0) {
         const auto remaining = config_.descriptorBudget > counters_.capacity
-            ? config_.descriptorBudget - counters_.capacity : 0;
+                                   ? config_.descriptorBudget - counters_.capacity
+                                   : 0;
         if (remaining == 0) {
             ++counters_.budgetRejectCount;
             ++counters_.failedAllocationCount;
             set_error_unlocked(DescriptorOperationResult::BudgetExceeded);
             return std::nullopt;
         }
-        capacityToCreate = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacityToCreate, remaining));
+        capacityToCreate =
+            static_cast<std::uint32_t>(std::min<std::uint64_t>(capacityToCreate, remaining));
     }
-    auto* pool = create_pool_unlocked(type, capacityToCreate);
+    auto *pool = create_pool_unlocked(type, capacityToCreate);
     if (!pool) {
         ++counters_.failedAllocationCount;
         return std::nullopt;
@@ -265,7 +295,7 @@ std::optional<BindlessHandle> DescriptorAllocator::allocate(DescriptorType type)
 
 DescriptorOperationResult DescriptorAllocator::release(BindlessHandle handle) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto* pool = find_pool_unlocked(handle.pool);
+    auto *pool = find_pool_unlocked(handle.pool);
     if (!pool) {
         ++counters_.invalidHandleCount;
         set_error_unlocked(DescriptorOperationResult::InvalidHandle);
@@ -278,10 +308,17 @@ DescriptorOperationResult DescriptorAllocator::release(BindlessHandle handle) {
         ++counters_.free;
         ++counters_.releaseCount;
         break;
-    case DescriptorOperationResult::InvalidHandle: ++counters_.invalidHandleCount; break;
-    case DescriptorOperationResult::StaleHandle: ++counters_.staleHandleCount; break;
-    case DescriptorOperationResult::TypeMismatch: ++counters_.typeMismatchCount; break;
-    default: break;
+    case DescriptorOperationResult::InvalidHandle:
+        ++counters_.invalidHandleCount;
+        break;
+    case DescriptorOperationResult::StaleHandle:
+        ++counters_.staleHandleCount;
+        break;
+    case DescriptorOperationResult::TypeMismatch:
+        ++counters_.typeMismatchCount;
+        break;
+    default:
+        break;
     }
     set_error_unlocked(result);
     return result;
@@ -289,7 +326,7 @@ DescriptorOperationResult DescriptorAllocator::release(BindlessHandle handle) {
 
 bool DescriptorAllocator::validate(BindlessHandle handle) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto* pool = find_pool_unlocked(handle.pool);
+    const auto *pool = find_pool_unlocked(handle.pool);
     if (!pool) {
         ++counters_.invalidHandleCount;
         set_error_unlocked(DescriptorOperationResult::InvalidHandle);
@@ -300,7 +337,8 @@ bool DescriptorAllocator::validate(BindlessHandle handle) const {
         set_error_unlocked(DescriptorOperationResult::TypeMismatch);
         return false;
     }
-    if (pool->validate(handle)) return true;
+    if (pool->validate(handle))
+        return true;
     ++counters_.staleHandleCount;
     set_error_unlocked(DescriptorOperationResult::StaleHandle);
     return false;
@@ -308,7 +346,7 @@ bool DescriptorAllocator::validate(BindlessHandle handle) const {
 
 std::optional<DescriptorLocation> DescriptorAllocator::resolve(BindlessHandle handle) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto* pool = find_pool_unlocked(handle.pool);
+    const auto *pool = find_pool_unlocked(handle.pool);
     if (!pool) {
         ++counters_.invalidHandleCount;
         set_error_unlocked(DescriptorOperationResult::InvalidHandle);
@@ -316,9 +354,11 @@ std::optional<DescriptorLocation> DescriptorAllocator::resolve(BindlessHandle ha
     }
     std::size_t poolIndex = 0;
     for (; poolIndex < pools_.size(); ++poolIndex) {
-        if (pools_[poolIndex]->id() == handle.pool) break;
+        if (pools_[poolIndex]->id() == handle.pool)
+            break;
     }
-    const auto backendHandle = poolIndex < backendPools_.size() ? backendPools_[poolIndex] : DescriptorPoolBackendHandle{};
+    const auto backendHandle =
+        poolIndex < backendPools_.size() ? backendPools_[poolIndex] : DescriptorPoolBackendHandle{};
     if (handle.type != pool->description().type) {
         ++counters_.typeMismatchCount;
         set_error_unlocked(DescriptorOperationResult::TypeMismatch);
@@ -342,15 +382,17 @@ std::vector<DescriptorPoolStats> DescriptorAllocator::pool_stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<DescriptorPoolStats> result;
     result.reserve(pools_.size());
-    for (const auto& pool : pools_) result.push_back(pool->stats());
+    for (const auto &pool : pools_)
+        result.push_back(pool->stats());
     return result;
 }
 
 std::uint64_t DescriptorAllocator::capacity(DescriptorType type) const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::uint64_t result = 0;
-    for (const auto& pool : pools_) {
-        if (pool->description().type == type) result += pool->description().capacity;
+    for (const auto &pool : pools_) {
+        if (pool->description().type == type)
+            result += pool->description().capacity;
     }
     return result;
 }
@@ -358,8 +400,9 @@ std::uint64_t DescriptorAllocator::capacity(DescriptorType type) const {
 std::uint64_t DescriptorAllocator::allocated(DescriptorType type) const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::uint64_t result = 0;
-    for (const auto& pool : pools_) {
-        if (pool->description().type == type) result += pool->stats().allocated;
+    for (const auto &pool : pools_) {
+        if (pool->description().type == type)
+            result += pool->stats().allocated;
     }
     return result;
 }

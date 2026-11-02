@@ -67,16 +67,19 @@ struct InputBinding {
 };
 
 class IInputBackend {
-public:
+  public:
     virtual ~IInputBackend() = default;
     virtual bool initialize() = 0;
-    virtual void shutdown() {}
-    virtual void attach_window(void* nativeWindow) { (void)nativeWindow; }
+    virtual void shutdown() {
+    }
+    virtual void attach_window(void *nativeWindow) {
+        (void)nativeWindow;
+    }
     virtual void poll() = 0;
     virtual float control_value(std::string_view control) const = 0;
-    virtual const MouseState& mouse_state() const = 0;
-    virtual const std::vector<GamepadState>& gamepads() const = 0;
-    virtual const std::vector<InputEvent>& events() const = 0;
+    virtual const MouseState &mouse_state() const = 0;
+    virtual const std::vector<GamepadState> &gamepads() const = 0;
+    virtual const std::vector<InputEvent> &events() const = 0;
 };
 
 class InputSystem final {
@@ -86,14 +89,15 @@ class InputSystem final {
     std::unordered_map<std::string, ActionState> actionStates_;
     std::unordered_map<std::string, float> actionValues_;
 
-    float evaluate_action(const std::vector<InputBinding>& bindings) const;
-public:
+    float evaluate_action(const std::vector<InputBinding> &bindings) const;
+
+  public:
     explicit InputSystem(std::unique_ptr<IInputBackend> backend);
     ~InputSystem();
 
     bool initialize();
     void shutdown();
-    void attach_window(void* nativeWindow);
+    void attach_window(void *nativeWindow);
     void poll();
 
     void bind_action(std::string action, std::vector<InputBinding> bindings);
@@ -106,10 +110,10 @@ public:
     bool is_pressed(std::string_view name) const;
     bool is_released(std::string_view name) const;
 
-    const MouseState& mouse() const;
-    const std::vector<GamepadState>& gamepads() const;
-    const std::vector<InputEvent>& events() const;
+    const MouseState &mouse() const;
+    const std::vector<GamepadState> &gamepads() const;
+    const std::vector<InputEvent> &events() const;
 };
 
 std::unique_ptr<IInputBackend> create_sdl3_input_backend();
-}
+} // namespace shinkou::input

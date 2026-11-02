@@ -1,7 +1,7 @@
 #include "shinkou/editor/EditorModelPreviewRenderer.h"
 
-#include "shinkou/render/Renderer.h"
 #include "shinkou/render/BuiltinShaders.h"
+#include "shinkou/render/Renderer.h"
 #include "shinkou/ui/Render.h"
 
 #include <algorithm>
@@ -188,12 +188,13 @@ float4 main(FragmentInput input) : SV_Target
 }
 )hlsl";
 
-bool finite_vec3(const math::Vec3& value) noexcept {
+bool finite_vec3(const math::Vec3 &value) noexcept {
     return math::IsFinite(value.x) && math::IsFinite(value.y) && math::IsFinite(value.z);
 }
 
 std::uint64_t mix_key(std::uint64_t value, std::uint32_t input) noexcept {
-    value ^= static_cast<std::uint64_t>(input) + 0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
+    value ^=
+        static_cast<std::uint64_t>(input) + 0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
     return value;
 }
 
@@ -204,12 +205,14 @@ std::uint32_t float_bits(float value) noexcept {
     return result;
 }
 
-std::uint64_t projection_key(const EditorModelPreviewSnapshot& snapshot,
-                             const EditorModelPreviewSceneState& scene,
-                             const render::EditorViewportRect& viewport) noexcept {
-    auto result = mix_key(0xcbf29ce484222325ull,
-                          static_cast<std::uint32_t>(snapshot.revision ^ (snapshot.revision >> 32u)));
-    result = mix_key(result, static_cast<std::uint32_t>(scene.projectionRevision ^ (scene.projectionRevision >> 32u)));
+std::uint64_t projection_key(const EditorModelPreviewSnapshot &snapshot,
+                             const EditorModelPreviewSceneState &scene,
+                             const render::EditorViewportRect &viewport) noexcept {
+    auto result =
+        mix_key(0xcbf29ce484222325ull,
+                static_cast<std::uint32_t>(snapshot.revision ^ (snapshot.revision >> 32u)));
+    result = mix_key(result, static_cast<std::uint32_t>(scene.projectionRevision ^
+                                                        (scene.projectionRevision >> 32u)));
     result = mix_key(result, float_bits(viewport.width));
     result = mix_key(result, float_bits(viewport.height));
     return result == 0 ? 1 : result;
@@ -217,59 +220,71 @@ std::uint64_t projection_key(const EditorModelPreviewSnapshot& snapshot,
 
 std::string backend_label(render::BackendApi api) {
     switch (api) {
-    case render::BackendApi::DirectX11: return "D3D11";
-    case render::BackendApi::DirectX12: return "D3D12";
-    case render::BackendApi::Vulkan: return "Vulkan";
-    case render::BackendApi::Null: break;
+    case render::BackendApi::DirectX11:
+        return "D3D11";
+    case render::BackendApi::DirectX12:
+        return "D3D12";
+    case render::BackendApi::Vulkan:
+        return "Vulkan";
+    case render::BackendApi::Null:
+        break;
     }
     return "Null";
 }
 
-bool valid_buffer_description(const render::Renderer& renderer, render::ResourceHandle handle,
+bool valid_buffer_description(const render::Renderer &renderer, render::ResourceHandle handle,
                               std::size_t bytes, bool vertex, bool index) noexcept {
-    const auto* description = renderer.resource_description(handle);
-    const auto* buffer = description ? std::get_if<render::BufferDesc>(description) : nullptr;
-    return buffer && buffer->size >= bytes && buffer->vertexBuffer == vertex && buffer->indexBuffer == index;
+    const auto *description = renderer.resource_description(handle);
+    const auto *buffer = description ? std::get_if<render::BufferDesc>(description) : nullptr;
+    return buffer && buffer->size >= bytes && buffer->vertexBuffer == vertex &&
+           buffer->indexBuffer == index;
 }
 
 std::uint32_t preview_target_dimension(float value) noexcept {
-    if (!std::isfinite(value) || value <= 0.0f) return 0;
+    if (!std::isfinite(value) || value <= 0.0f)
+        return 0;
     const auto rounded = static_cast<long long>(std::ceil(value));
-    if (rounded <= 0 || rounded > static_cast<long long>(kMaxPreviewRenderTargetDimension)) return 0;
+    if (rounded <= 0 || rounded > static_cast<long long>(kMaxPreviewRenderTargetDimension))
+        return 0;
     return static_cast<std::uint32_t>(rounded);
 }
 
-std::vector<std::uint8_t> copy_bytes(const void* source, std::size_t bytes) {
+std::vector<std::uint8_t> copy_bytes(const void *source, std::size_t bytes) {
     std::vector<std::uint8_t> result(bytes);
-    if (bytes != 0) std::memcpy(result.data(), source, bytes);
+    if (bytes != 0)
+        std::memcpy(result.data(), source, bytes);
     return result;
 }
 
-PreviewSceneFrame make_scene_frame(const EditorModelPreviewSnapshot& snapshot,
-                                   const EditorModelPreviewSceneState& scene,
-                                   const render::EditorViewportRect& viewport) noexcept {
+PreviewSceneFrame make_scene_frame(const EditorModelPreviewSnapshot &snapshot,
+                                   const EditorModelPreviewSceneState &scene,
+                                   const render::EditorViewportRect &viewport) noexcept {
     PreviewSceneFrame frame;
     math::Vec3 minimum{snapshot.minX, snapshot.minY, snapshot.minZ};
     math::Vec3 maximum{snapshot.maxX, snapshot.maxY, snapshot.maxZ};
     if (scene.transformedVertices && scene.transformedVertices->size() == snapshot.vertexCount &&
         !scene.transformedVertices->empty()) {
-        minimum = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
-        maximum = {std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
-        for (const auto& point : *scene.transformedVertices) {
-            if (!finite_vec3(point)) continue;
-            minimum.x = std::min(minimum.x, point.x); minimum.y = std::min(minimum.y, point.y); minimum.z = std::min(minimum.z, point.z);
-            maximum.x = std::max(maximum.x, point.x); maximum.y = std::max(maximum.y, point.y); maximum.z = std::max(maximum.z, point.z);
+        minimum = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                   std::numeric_limits<float>::max()};
+        maximum = {std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                   std::numeric_limits<float>::lowest()};
+        for (const auto &point : *scene.transformedVertices) {
+            if (!finite_vec3(point))
+                continue;
+            minimum.x = std::min(minimum.x, point.x);
+            minimum.y = std::min(minimum.y, point.y);
+            minimum.z = std::min(minimum.z, point.z);
+            maximum.x = std::max(maximum.x, point.x);
+            maximum.y = std::max(maximum.y, point.y);
+            maximum.z = std::max(maximum.z, point.z);
         }
     }
-    const math::Vec3 center{(minimum.x + maximum.x) * 0.5f,
-                            (minimum.y + maximum.y) * 0.5f,
+    const math::Vec3 center{(minimum.x + maximum.x) * 0.5f, (minimum.y + maximum.y) * 0.5f,
                             (minimum.z + maximum.z) * 0.5f};
-    const math::Vec3 extent{maximum.x - minimum.x,
-                            maximum.y - minimum.y,
-                            maximum.z - minimum.z};
+    const math::Vec3 extent{maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z};
     const float radius = std::max(1.0e-4f, 0.5f * math::Length(extent));
     const auto rotation = math::FromAxisAngle({0.0f, 1.0f, 0.0f}, scene.camera.yaw) *
-        math::FromAxisAngle({1.0f, 0.0f, 0.0f}, scene.camera.pitch);
+                          math::FromAxisAngle({1.0f, 0.0f, 0.0f}, scene.camera.pitch);
     const float distance = std::max(0.75f, scene.camera.distance) * radius;
     const auto forward = math::Normalize(math::Rotate(rotation, {0.0f, 0.0f, 1.0f}));
     const auto up = math::Normalize(math::Rotate(rotation, {0.0f, 1.0f, 0.0f}));
@@ -283,31 +298,43 @@ PreviewSceneFrame make_scene_frame(const EditorModelPreviewSnapshot& snapshot,
     return frame;
 }
 
-PreviewMaterialFrame make_material_frame(const EditorModelPreviewSnapshot& snapshot,
+PreviewMaterialFrame make_material_frame(const EditorModelPreviewSnapshot &snapshot,
                                          std::int32_t materialIndex) noexcept {
     PreviewMaterialFrame frame;
     if (!snapshot.materials || materialIndex < 0 ||
-        static_cast<std::size_t>(materialIndex) >= snapshot.materials->size()) return frame;
-    const auto& material = (*snapshot.materials)[static_cast<std::size_t>(materialIndex)];
-    const auto& source = material.baseColorFactor;
+        static_cast<std::size_t>(materialIndex) >= snapshot.materials->size())
+        return frame;
+    const auto &material = (*snapshot.materials)[static_cast<std::size_t>(materialIndex)];
+    const auto &source = material.baseColorFactor;
     for (std::size_t index = 0; index < frame.baseColor.size(); ++index)
-        if (math::IsFinite(source[index])) frame.baseColor[index] = std::clamp(source[index], 0.0f, 1.0f);
-    if (math::IsFinite(material.metallicFactor)) frame.metallic = std::clamp(material.metallicFactor, 0.0f, 1.0f);
-    if (math::IsFinite(material.roughnessFactor)) frame.roughness = std::clamp(material.roughnessFactor, 0.04f, 1.0f);
+        if (math::IsFinite(source[index]))
+            frame.baseColor[index] = std::clamp(source[index], 0.0f, 1.0f);
+    if (math::IsFinite(material.metallicFactor))
+        frame.metallic = std::clamp(material.metallicFactor, 0.0f, 1.0f);
+    if (math::IsFinite(material.roughnessFactor))
+        frame.roughness = std::clamp(material.roughnessFactor, 0.04f, 1.0f);
     return frame;
 }
 
 } // namespace
 
-void EditorModelPreviewRenderer::clear_pipeline(render::Renderer& renderer) noexcept {
-    if (compositeMaterial_) renderer.destroy_resource(compositeMaterial_);
-    if (compositePipeline_) renderer.destroy_resource(compositePipeline_);
-    if (compositeFragmentShader_) renderer.destroy_resource(compositeFragmentShader_);
-    if (compositeVertexShader_) renderer.destroy_resource(compositeVertexShader_);
-    if (material_) renderer.destroy_resource(material_);
-    if (pipeline_) renderer.destroy_resource(pipeline_);
-    if (fragmentShader_) renderer.destroy_resource(fragmentShader_);
-    if (vertexShader_) renderer.destroy_resource(vertexShader_);
+void EditorModelPreviewRenderer::clear_pipeline(render::Renderer &renderer) noexcept {
+    if (compositeMaterial_)
+        renderer.destroy_resource(compositeMaterial_);
+    if (compositePipeline_)
+        renderer.destroy_resource(compositePipeline_);
+    if (compositeFragmentShader_)
+        renderer.destroy_resource(compositeFragmentShader_);
+    if (compositeVertexShader_)
+        renderer.destroy_resource(compositeVertexShader_);
+    if (material_)
+        renderer.destroy_resource(material_);
+    if (pipeline_)
+        renderer.destroy_resource(pipeline_);
+    if (fragmentShader_)
+        renderer.destroy_resource(fragmentShader_);
+    if (vertexShader_)
+        renderer.destroy_resource(vertexShader_);
     material_ = {};
     compositeMaterial_ = {};
     compositePipeline_ = {};
@@ -327,20 +354,32 @@ void EditorModelPreviewRenderer::clear_pipeline(render::Renderer& renderer) noex
     pipelineColorFormat_.clear();
 }
 
-void EditorModelPreviewRenderer::clear(render::Renderer& renderer) noexcept {
+void EditorModelPreviewRenderer::clear(render::Renderer &renderer) noexcept {
     clear_pipeline(renderer);
-    if (baseColorSampler_) renderer.destroy_resource(baseColorSampler_);
-    if (baseColorTexture_) renderer.destroy_resource(baseColorTexture_);
-    if (normalSampler_) renderer.destroy_resource(normalSampler_);
-    if (normalTexture_) renderer.destroy_resource(normalTexture_);
-    if (metallicRoughnessSampler_) renderer.destroy_resource(metallicRoughnessSampler_);
-    if (metallicRoughnessTexture_) renderer.destroy_resource(metallicRoughnessTexture_);
-    if (offscreenDepth_) renderer.destroy_resource(offscreenDepth_);
-    if (offscreenColor_) renderer.destroy_resource(offscreenColor_);
-    if (materialBuffer_) renderer.destroy_resource(materialBuffer_);
-    if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
-    if (indexBuffer_) renderer.destroy_resource(indexBuffer_);
-    if (vertexBuffer_) renderer.destroy_resource(vertexBuffer_);
+    if (baseColorSampler_)
+        renderer.destroy_resource(baseColorSampler_);
+    if (baseColorTexture_)
+        renderer.destroy_resource(baseColorTexture_);
+    if (normalSampler_)
+        renderer.destroy_resource(normalSampler_);
+    if (normalTexture_)
+        renderer.destroy_resource(normalTexture_);
+    if (metallicRoughnessSampler_)
+        renderer.destroy_resource(metallicRoughnessSampler_);
+    if (metallicRoughnessTexture_)
+        renderer.destroy_resource(metallicRoughnessTexture_);
+    if (offscreenDepth_)
+        renderer.destroy_resource(offscreenDepth_);
+    if (offscreenColor_)
+        renderer.destroy_resource(offscreenColor_);
+    if (materialBuffer_)
+        renderer.destroy_resource(materialBuffer_);
+    if (sceneBuffer_)
+        renderer.destroy_resource(sceneBuffer_);
+    if (indexBuffer_)
+        renderer.destroy_resource(indexBuffer_);
+    if (vertexBuffer_)
+        renderer.destroy_resource(vertexBuffer_);
     materialBuffer_ = {};
     baseColorSampler_ = {};
     baseColorTexture_ = {};
@@ -374,10 +413,8 @@ void EditorModelPreviewRenderer::clear(render::Renderer& renderer) noexcept {
 }
 
 EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
-    render::Renderer& renderer,
-    const EditorModelPreviewSnapshot& snapshot,
-    const EditorModelPreviewSceneState& scene,
-    std::int32_t materialIndex,
+    render::Renderer &renderer, const EditorModelPreviewSnapshot &snapshot,
+    const EditorModelPreviewSceneState &scene, std::int32_t materialIndex,
     std::shared_ptr<const ui::UiImageSnapshot> textureSnapshot,
     EditorModelPreviewTextureRole textureRole, bool compositeToViewport, bool wireframe) {
     EditorModelPreviewRenderState state;
@@ -393,12 +430,13 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         return state;
     }
     if (!capabilities.deviceReady) {
-        state.status = "GPU model preview unavailable: " + backend_label(capabilities.api) + " device is not ready";
+        state.status = "GPU model preview unavailable: " + backend_label(capabilities.api) +
+                       " device is not ready";
         return state;
     }
     if (!capabilities.supportsEditorModelRendering) {
         state.status = "GPU model preview fallback: " + backend_label(capabilities.api) +
-            " shader path is pending; retained/WIC preview remains active";
+                       " shader path is pending; retained/WIC preview remains active";
         return state;
     }
     if (!capabilities.supportsEditorViewportScissor || !renderer.editor_viewport().enabled ||
@@ -413,25 +451,30 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     // The native inspector samples a square texture, independently of the
     // main scene's aspect ratio. Using the scene viewport here stretched FBX
     // cubes vertically when the editor's scene dock was wide.
-    const auto viewport = compositeToViewport ? renderer.editor_viewport().viewport :
-        render::EditorViewportRect{0.0f,0.0f,512.0f,512.0f};
+    const auto viewport = compositeToViewport
+                              ? renderer.editor_viewport().viewport
+                              : render::EditorViewportRect{0.0f, 0.0f, 512.0f, 512.0f};
     const auto targetWidth = preview_target_dimension(viewport.width);
     const auto targetHeight = preview_target_dimension(viewport.height);
     if (targetWidth == 0 || targetHeight == 0) {
-        state.status = "GPU model preview rejected: editor viewport exceeds the bounded offscreen target limit";
+        state.status = "GPU model preview rejected: editor viewport exceeds the bounded offscreen "
+                       "target limit";
         return state;
     }
     // D3D11's editor swapchain is BGRA8. The preview target deliberately uses
     // the same format so the pass-local composite has no format conversion or
     // implicit scene-target dependency.
     const std::string colorFormat = "bgra8";
-    const auto* targetDescription = renderer.resource_description(offscreenColor_);
-    const auto* targetTexture = targetDescription ? std::get_if<render::TextureDesc>(targetDescription) : nullptr;
+    const auto *targetDescription = renderer.resource_description(offscreenColor_);
+    const auto *targetTexture =
+        targetDescription ? std::get_if<render::TextureDesc>(targetDescription) : nullptr;
     const bool targetCompatible = targetTexture && targetTexture->width == targetWidth &&
-        targetTexture->height == targetHeight && targetTexture->format == colorFormat &&
-        targetTexture->renderTarget;
+                                  targetTexture->height == targetHeight &&
+                                  targetTexture->format == colorFormat &&
+                                  targetTexture->renderTarget;
     if (!targetCompatible) {
-        if (offscreenColor_) renderer.destroy_resource(offscreenColor_);
+        if (offscreenColor_)
+            renderer.destroy_resource(offscreenColor_);
         render::TextureDesc description;
         description.width = targetWidth;
         description.height = targetHeight;
@@ -444,18 +487,22 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         offscreenColorFormat_ = offscreenColor_ ? colorFormat : std::string{};
     }
     if (!offscreenColor_) {
-        state.status = "GPU model preview offscreen target creation failed: " + renderer.last_error();
+        state.status =
+            "GPU model preview offscreen target creation failed: " + renderer.last_error();
         return state;
     }
     state.offscreenTargetReady = true;
     const std::string depthFormat = "d24s8";
-    const auto* depthDescription = renderer.resource_description(offscreenDepth_);
-    const auto* depthTexture = depthDescription ? std::get_if<render::TextureDesc>(depthDescription) : nullptr;
+    const auto *depthDescription = renderer.resource_description(offscreenDepth_);
+    const auto *depthTexture =
+        depthDescription ? std::get_if<render::TextureDesc>(depthDescription) : nullptr;
     const bool depthCompatible = offscreenDepth_ && depthTexture &&
-        depthTexture->width == targetWidth && depthTexture->height == targetHeight &&
-        depthTexture->format == depthFormat && depthTexture->depthStencil;
+                                 depthTexture->width == targetWidth &&
+                                 depthTexture->height == targetHeight &&
+                                 depthTexture->format == depthFormat && depthTexture->depthStencil;
     if (!depthCompatible) {
-        if (offscreenDepth_) renderer.destroy_resource(offscreenDepth_);
+        if (offscreenDepth_)
+            renderer.destroy_resource(offscreenDepth_);
         render::TextureDesc description;
         description.width = targetWidth;
         description.height = targetHeight;
@@ -471,13 +518,15 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     }
     state.depthTargetReady = true;
 
-    if (snapshot.vertices->size() > kMaxPreviewVertices || snapshot.indices->size() > kMaxPreviewIndices ||
+    if (snapshot.vertices->size() > kMaxPreviewVertices ||
+        snapshot.indices->size() > kMaxPreviewIndices ||
         snapshot.vertices->size() > std::numeric_limits<std::size_t>::max() / sizeof(math::Vec3) ||
-        snapshot.indices->size() > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
+        snapshot.indices->size() >
+            std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
         state.status = "GPU model preview rejected: geometry exceeds the bounded upload limit";
         return state;
     }
-    for (const auto& vertex : *snapshot.vertices) {
+    for (const auto &vertex : *snapshot.vertices) {
         if (!finite_vec3(vertex)) {
             state.status = "GPU model preview rejected: geometry contains non-finite vertices";
             return state;
@@ -485,29 +534,36 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     }
     for (const auto index : *snapshot.indices) {
         if (index >= snapshot.vertices->size()) {
-            state.status = "GPU model preview rejected: index buffer references a vertex outside the snapshot";
+            state.status =
+                "GPU model preview rejected: index buffer references a vertex outside the snapshot";
             return state;
         }
     }
 
     std::vector<PreviewVertex> previewVertices;
     previewVertices.reserve(snapshot.vertices->size());
-    const bool hasTextureCoordinates = snapshot.textureCoordinates &&
+    const bool hasTextureCoordinates =
+        snapshot.textureCoordinates &&
         snapshot.textureCoordinates->size() == snapshot.vertices->size();
-    const bool hasNormals = snapshot.normals && snapshot.normals->size() == snapshot.vertices->size();
-    const auto& positions = scene.transformedVertices &&
-        scene.transformedVertices->size() == snapshot.vertices->size()
-        ? *scene.transformedVertices : *snapshot.vertices;
+    const bool hasNormals =
+        snapshot.normals && snapshot.normals->size() == snapshot.vertices->size();
+    const auto &positions =
+        scene.transformedVertices && scene.transformedVertices->size() == snapshot.vertices->size()
+            ? *scene.transformedVertices
+            : *snapshot.vertices;
     for (std::size_t index = 0; index < positions.size(); ++index) {
-        const auto& position = positions[index];
+        const auto &position = positions[index];
         if (!finite_vec3(position)) {
-            state.status = "GPU model preview rejected: animated vertices contain non-finite values";
+            state.status =
+                "GPU model preview rejected: animated vertices contain non-finite values";
             return state;
         }
         const auto fallback = math::Vec2{position.x * 0.5f + 0.5f, position.y * 0.5f + 0.5f};
-        const auto coordinate = hasTextureCoordinates ? (*snapshot.textureCoordinates)[index] : fallback;
+        const auto coordinate =
+            hasTextureCoordinates ? (*snapshot.textureCoordinates)[index] : fallback;
         if (!math::IsFinite(coordinate.x) || !math::IsFinite(coordinate.y)) {
-            state.status = "GPU model preview rejected: texture coordinates contain a non-finite value";
+            state.status =
+                "GPU model preview rejected: texture coordinates contain a non-finite value";
             return state;
         }
         const auto normal = hasNormals ? (*snapshot.normals)[index] : math::Vec3{0.0f, 0.0f, 1.0f};
@@ -523,7 +579,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     const auto vertexData = copy_bytes(previewVertices.data(), vertexBytes);
     const auto indexData = copy_bytes(snapshot.indices->data(), indexBytes);
     if (!valid_buffer_description(renderer, vertexBuffer_, vertexBytes, true, false)) {
-        if (vertexBuffer_) renderer.destroy_resource(vertexBuffer_);
+        if (vertexBuffer_)
+            renderer.destroy_resource(vertexBuffer_);
         render::BufferDesc description;
         description.size = vertexBytes;
         description.stride = sizeof(PreviewVertex);
@@ -533,7 +590,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         vertexBytes_ = vertexBuffer_ ? vertexBytes : 0;
         geometryRevision_ = 0;
         vertexAnimationRevision_ = 0;
-    } else if (geometryRevision_ != snapshot.revision || vertexAnimationRevision_ != scene.animationRevision) {
+    } else if (geometryRevision_ != snapshot.revision ||
+               vertexAnimationRevision_ != scene.animationRevision) {
         if (!renderer.update_buffer({vertexBuffer_, 0, vertexData})) {
             state.status = "GPU model preview upload failed for vertices: " + renderer.last_error();
             return state;
@@ -544,7 +602,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         return state;
     }
     if (!valid_buffer_description(renderer, indexBuffer_, indexBytes, false, true)) {
-        if (indexBuffer_) renderer.destroy_resource(indexBuffer_);
+        if (indexBuffer_)
+            renderer.destroy_resource(indexBuffer_);
         render::BufferDesc description;
         description.size = indexBytes;
         description.stride = sizeof(std::uint32_t);
@@ -571,13 +630,14 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
 
     const auto sceneFrame = make_scene_frame(snapshot, scene, viewport);
     const bool hasMaterial = snapshot.materials && materialIndex >= 0 &&
-        static_cast<std::size_t>(materialIndex) < snapshot.materials->size();
+                             static_cast<std::size_t>(materialIndex) < snapshot.materials->size();
     const bool hasTextureSnapshot = textureSnapshot && textureSnapshot->valid() &&
-        textureSnapshot->width <= 512u && textureSnapshot->height <= 512u;
-    const bool useBaseColorTexture = textureRole == EditorModelPreviewTextureRole::BaseColor &&
-        hasTextureSnapshot;
-    const bool useNormalTexture = textureRole == EditorModelPreviewTextureRole::Normal &&
-        hasTextureSnapshot;
+                                    textureSnapshot->width <= 512u &&
+                                    textureSnapshot->height <= 512u;
+    const bool useBaseColorTexture =
+        textureRole == EditorModelPreviewTextureRole::BaseColor && hasTextureSnapshot;
+    const bool useNormalTexture =
+        textureRole == EditorModelPreviewTextureRole::Normal && hasTextureSnapshot;
     const bool useMetallicRoughnessTexture =
         textureRole == EditorModelPreviewTextureRole::MetallicRoughness && hasTextureSnapshot;
     auto materialFrame = make_material_frame(snapshot, materialIndex);
@@ -585,7 +645,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     materialFrame.metallicRoughnessTextureEnabled = useMetallicRoughnessTexture ? 1.0f : 0.0f;
     const auto projectionKey = projection_key(snapshot, scene, viewport);
     if (!valid_buffer_description(renderer, sceneBuffer_, sizeof(sceneFrame), false, false)) {
-        if (sceneBuffer_) renderer.destroy_resource(sceneBuffer_);
+        if (sceneBuffer_)
+            renderer.destroy_resource(sceneBuffer_);
         render::BufferDesc description;
         description.size = sizeof(sceneFrame);
         description.uniformBuffer = true;
@@ -598,14 +659,17 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         return state;
     }
     if (projectionKey_ != projectionKey) {
-        if (!renderer.update_buffer({sceneBuffer_, 0, copy_bytes(&sceneFrame, sizeof(sceneFrame))})) {
-            state.status = "GPU model preview upload failed for camera frame: " + renderer.last_error();
+        if (!renderer.update_buffer(
+                {sceneBuffer_, 0, copy_bytes(&sceneFrame, sizeof(sceneFrame))})) {
+            state.status =
+                "GPU model preview upload failed for camera frame: " + renderer.last_error();
             return state;
         }
         projectionKey_ = projectionKey;
     }
     if (!valid_buffer_description(renderer, materialBuffer_, sizeof(materialFrame), false, false)) {
-        if (materialBuffer_) renderer.destroy_resource(materialBuffer_);
+        if (materialBuffer_)
+            renderer.destroy_resource(materialBuffer_);
         render::BufferDesc description;
         description.size = sizeof(materialFrame);
         description.uniformBuffer = true;
@@ -616,13 +680,16 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         materialTextureRole_ = EditorModelPreviewTextureRole::BaseColor;
     }
     if (!materialBuffer_) {
-        state.status = "GPU model preview upload failed for material frame: " + renderer.last_error();
+        state.status =
+            "GPU model preview upload failed for material frame: " + renderer.last_error();
         return state;
     }
     if (materialRevision_ != snapshot.revision || materialIndex_ != materialIndex ||
         materialTextureRole_ != textureRole) {
-        if (!renderer.update_buffer({materialBuffer_, 0, copy_bytes(&materialFrame, sizeof(materialFrame))})) {
-            state.status = "GPU model preview upload failed for material frame: " + renderer.last_error();
+        if (!renderer.update_buffer(
+                {materialBuffer_, 0, copy_bytes(&materialFrame, sizeof(materialFrame))})) {
+            state.status =
+                "GPU model preview upload failed for material frame: " + renderer.last_error();
             return state;
         }
         materialRevision_ = snapshot.revision;
@@ -634,25 +701,31 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     // UiImageSnapshot stores BGRA bytes. A flat tangent-space normal is RGB
     // (128, 128, 255), therefore its BGRA representation is (255, 128, 128).
     const std::vector<std::uint8_t> fallbackNormal{255u, 128u, 128u, 255u};
-    const auto& baseColorBytes = useBaseColorTexture ? textureSnapshot->bgraPremultiplied : fallbackBaseColor;
-    const auto& normalBytes = useNormalTexture ? textureSnapshot->bgraPremultiplied : fallbackNormal;
-    const auto& metallicRoughnessBytes =
+    const auto &baseColorBytes =
+        useBaseColorTexture ? textureSnapshot->bgraPremultiplied : fallbackBaseColor;
+    const auto &normalBytes =
+        useNormalTexture ? textureSnapshot->bgraPremultiplied : fallbackNormal;
+    const auto &metallicRoughnessBytes =
         useMetallicRoughnessTexture ? textureSnapshot->bgraPremultiplied : fallbackBaseColor;
     if (baseColorBytes.size() > 512u * 512u * 4u || normalBytes.size() > 512u * 512u * 4u ||
         metallicRoughnessBytes.size() > 512u * 512u * 4u) {
-        state.status = "GPU model preview texture rejected: decoded image exceeds the 512x512 upload limit";
+        state.status =
+            "GPU model preview texture rejected: decoded image exceeds the 512x512 upload limit";
         return state;
     }
-    const auto upload_texture = [&](render::ResourceHandle& handle, std::uint64_t& revision,
-                                    const std::vector<std::uint8_t>& bytes, std::uint32_t width,
+    const auto upload_texture = [&](render::ResourceHandle &handle, std::uint64_t &revision,
+                                    const std::vector<std::uint8_t> &bytes, std::uint32_t width,
                                     std::uint32_t height, std::uint64_t wantedRevision,
-                                    const char* label) {
-        const auto* description = renderer.resource_description(handle);
-        const auto* existing = description ? std::get_if<render::TextureDesc>(description) : nullptr;
-        const bool compatible = existing && existing->width == width && existing->height == height &&
-            existing->format == "bgra8" && !existing->renderTarget;
+                                    const char *label) {
+        const auto *description = renderer.resource_description(handle);
+        const auto *existing =
+            description ? std::get_if<render::TextureDesc>(description) : nullptr;
+        const bool compatible = existing && existing->width == width &&
+                                existing->height == height && existing->format == "bgra8" &&
+                                !existing->renderTarget;
         if (!compatible) {
-            if (handle) renderer.destroy_resource(handle);
+            if (handle)
+                renderer.destroy_resource(handle);
             render::TextureDesc textureDescription;
             textureDescription.width = width;
             textureDescription.height = height;
@@ -663,15 +736,15 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
             revision = 0;
         }
         if (!handle) {
-            state.status = std::string("GPU model preview ") + label + " texture creation failed: " +
-                renderer.last_error();
+            state.status = std::string("GPU model preview ") + label +
+                           " texture creation failed: " + renderer.last_error();
             return false;
         }
         if (revision != wantedRevision) {
-            if (!renderer.update_texture({handle, 0, 0, width, height,
-                                          static_cast<std::size_t>(width) * 4u, bytes})) {
-                state.status = std::string("GPU model preview ") + label + " texture upload failed: " +
-                    renderer.last_error();
+            if (!renderer.update_texture(
+                    {handle, 0, 0, width, height, static_cast<std::size_t>(width) * 4u, bytes})) {
+                state.status = std::string("GPU model preview ") + label +
+                               " texture upload failed: " + renderer.last_error();
                 return false;
             }
             revision = wantedRevision;
@@ -684,14 +757,17 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     const auto normalHeight = useNormalTexture ? textureSnapshot->height : 1u;
     const auto metallicRoughnessWidth = useMetallicRoughnessTexture ? textureSnapshot->width : 1u;
     const auto metallicRoughnessHeight = useMetallicRoughnessTexture ? textureSnapshot->height : 1u;
-    if (!upload_texture(baseColorTexture_, textureRevision_, baseColorBytes, textureWidth, textureHeight,
-                        useBaseColorTexture ? textureSnapshot->revision : 0u, "base color") ||
-        !upload_texture(normalTexture_, normalTextureRevision_, normalBytes, normalWidth, normalHeight,
-                        useNormalTexture ? textureSnapshot->revision : 0u, "normal") ||
+    if (!upload_texture(baseColorTexture_, textureRevision_, baseColorBytes, textureWidth,
+                        textureHeight, useBaseColorTexture ? textureSnapshot->revision : 0u,
+                        "base color") ||
+        !upload_texture(normalTexture_, normalTextureRevision_, normalBytes, normalWidth,
+                        normalHeight, useNormalTexture ? textureSnapshot->revision : 0u,
+                        "normal") ||
         !upload_texture(metallicRoughnessTexture_, metallicRoughnessTextureRevision_,
                         metallicRoughnessBytes, metallicRoughnessWidth, metallicRoughnessHeight,
                         useMetallicRoughnessTexture ? textureSnapshot->revision : 0u,
-                        "metallic/roughness")) return state;
+                        "metallic/roughness"))
+        return state;
     if (!baseColorSampler_) {
         render::SamplerDesc samplerDescription;
         samplerDescription.filter = "linear";
@@ -725,7 +801,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         metallicRoughnessSampler_ = renderer.create_sampler(samplerDescription);
     }
     if (!metallicRoughnessSampler_) {
-        state.status = "GPU model preview metallic/roughness sampler creation failed: " + renderer.last_error();
+        state.status = "GPU model preview metallic/roughness sampler creation failed: " +
+                       renderer.last_error();
         return state;
     }
     actualBaseColorTexture_ = useBaseColorTexture;
@@ -745,7 +822,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         render::ShaderDesc fragmentDescription;
         fragmentDescription.stage = render::ShaderStage::Fragment;
         fragmentDescription.name = "editor_model_preview_fragment";
-        fragmentDescription.source = std::string(render::pbr_shader_library()) + std::string(kPreviewFragmentShader);
+        fragmentDescription.source =
+            std::string(render::pbr_shader_library()) + std::string(kPreviewFragmentShader);
         fragmentDescription.profile = "ps_5_0";
         fragmentDescription.sourceKind = render::ShaderSourceKind::Source;
         fragmentDescription.revision = 1;
@@ -756,7 +834,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
             return state;
         }
         render::PipelineDesc pipelineDescription;
-        pipelineDescription.name = "editor_model_preview_pipeline_" + colorFormat + (wireframe?"_wire":"_solid");
+        pipelineDescription.name =
+            "editor_model_preview_pipeline_" + colorFormat + (wireframe ? "_wire" : "_solid");
         pipelineDescription.vertexShader = vertexShader_.id;
         pipelineDescription.fragmentShader = fragmentShader_.id;
         pipelineDescription.depthTest = true;
@@ -795,12 +874,14 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         compositeFragmentDescription.revision = 1;
         compositeFragmentShader_ = renderer.create_shader(compositeFragmentDescription);
         if (!compositeVertexShader_ || !compositeFragmentShader_) {
-            state.status = "GPU model preview composite shader creation failed: " + renderer.last_error();
+            state.status =
+                "GPU model preview composite shader creation failed: " + renderer.last_error();
             clear_pipeline(renderer);
             return state;
         }
         render::PipelineDesc compositePipelineDescription;
-        compositePipelineDescription.name = "editor_model_preview_composite_pipeline_" + colorFormat;
+        compositePipelineDescription.name =
+            "editor_model_preview_composite_pipeline_" + colorFormat;
         compositePipelineDescription.vertexShader = compositeVertexShader_.id;
         compositePipelineDescription.fragmentShader = compositeFragmentShader_.id;
         compositePipelineDescription.depthTest = false;
@@ -813,7 +894,8 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         compositePipelineDescription.depthFormat = "none";
         compositePipeline_ = renderer.create_pipeline(compositePipelineDescription);
         if (!compositePipeline_) {
-            state.status = "GPU model preview composite pipeline creation failed: " + renderer.last_error();
+            state.status =
+                "GPU model preview composite pipeline creation failed: " + renderer.last_error();
             clear_pipeline(renderer);
             return state;
         }
@@ -821,24 +903,61 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         pipelineWireframe_ = wireframe;
     }
 
-    if (!material_ || materialTextureId_ != baseColorTexture_.id || materialSamplerId_ != baseColorSampler_.id ||
+    if (!material_ || materialTextureId_ != baseColorTexture_.id ||
+        materialSamplerId_ != baseColorSampler_.id ||
         materialNormalTextureId_ != normalTexture_.id || normalSamplerId_ != normalSampler_.id ||
         materialMetallicRoughnessTextureId_ != metallicRoughnessTexture_.id ||
         metallicRoughnessSamplerId_ != metallicRoughnessSampler_.id) {
-        if (material_) renderer.destroy_resource(material_);
+        if (material_)
+            renderer.destroy_resource(material_);
         material_ = {};
         render::MaterialDesc materialDescription;
         materialDescription.name = "editor_model_preview_material";
         materialDescription.pipeline = pipeline_;
         materialDescription.bindings = {
-            {"BaseColorTexture", baseColorTexture_, render::DescriptorType::Texture, 0, 0, 1, false, {}},
-            {"BaseColorSampler", baseColorSampler_, render::DescriptorType::Sampler, 1, 0, 1, false, {}},
+            {"BaseColorTexture",
+             baseColorTexture_,
+             render::DescriptorType::Texture,
+             0,
+             0,
+             1,
+             false,
+             {}},
+            {"BaseColorSampler",
+             baseColorSampler_,
+             render::DescriptorType::Sampler,
+             1,
+             0,
+             1,
+             false,
+             {}},
             {"NormalTexture", normalTexture_, render::DescriptorType::Texture, 5, 0, 1, false, {}},
             {"NormalSampler", normalSampler_, render::DescriptorType::Sampler, 6, 0, 1, false, {}},
-            {"MetallicRoughnessTexture", metallicRoughnessTexture_, render::DescriptorType::Texture, 7, 0, 1, false, {}},
-            {"MetallicRoughnessSampler", metallicRoughnessSampler_, render::DescriptorType::Sampler, 8, 0, 1, false, {}},
+            {"MetallicRoughnessTexture",
+             metallicRoughnessTexture_,
+             render::DescriptorType::Texture,
+             7,
+             0,
+             1,
+             false,
+             {}},
+            {"MetallicRoughnessSampler",
+             metallicRoughnessSampler_,
+             render::DescriptorType::Sampler,
+             8,
+             0,
+             1,
+             false,
+             {}},
             {"SceneFrame", sceneBuffer_, render::DescriptorType::UniformBuffer, 2, 0, 1, false, {}},
-            {"PreviewMaterial", materialBuffer_, render::DescriptorType::UniformBuffer, 4, 0, 1, false, {}}};
+            {"PreviewMaterial",
+             materialBuffer_,
+             render::DescriptorType::UniformBuffer,
+             4,
+             0,
+             1,
+             false,
+             {}}};
         material_ = renderer.create_material(materialDescription);
         if (!material_) {
             state.status = "GPU model preview material creation failed: " + renderer.last_error();
@@ -854,17 +973,26 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     }
     if (!compositeMaterial_ || compositeTextureId_ != offscreenColor_.id ||
         compositeSamplerId_ != baseColorSampler_.id) {
-        if (compositeMaterial_) renderer.destroy_resource(compositeMaterial_);
+        if (compositeMaterial_)
+            renderer.destroy_resource(compositeMaterial_);
         compositeMaterial_ = {};
         render::MaterialDesc compositeDescription;
         compositeDescription.name = "editor_model_preview_composite_material";
         compositeDescription.pipeline = compositePipeline_;
         compositeDescription.bindings = {
             {"SourceTexture", offscreenColor_, render::DescriptorType::Texture, 0, 0, 1, false, {}},
-            {"SourceSampler", baseColorSampler_, render::DescriptorType::Sampler, 1, 0, 1, false, {}}};
+            {"SourceSampler",
+             baseColorSampler_,
+             render::DescriptorType::Sampler,
+             1,
+             0,
+             1,
+             false,
+             {}}};
         compositeMaterial_ = renderer.create_material(compositeDescription);
         if (!compositeMaterial_) {
-            state.status = "GPU model preview composite material creation failed: " + renderer.last_error();
+            state.status =
+                "GPU model preview composite material creation failed: " + renderer.last_error();
             clear_pipeline(renderer);
             return state;
         }
@@ -873,8 +1001,9 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     }
 
     const auto import_resource = [&](render::ResourceHandle handle) {
-        const auto* description = renderer.resource_description(handle);
-        if (!description) return false;
+        const auto *description = renderer.resource_description(handle);
+        if (!description)
+            return false;
         renderer.graph().import_resource(handle, *description);
         return true;
     };
@@ -883,44 +1012,54 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
         !import_resource(offscreenColor_) || !import_resource(offscreenDepth_) ||
         !import_resource(baseColorTexture_) || !import_resource(baseColorSampler_) ||
         !import_resource(normalTexture_) || !import_resource(normalSampler_) ||
-        !import_resource(metallicRoughnessTexture_) || !import_resource(metallicRoughnessSampler_) ||
-        !import_resource(material_) || !import_resource(compositeMaterial_)) {
-        state.status = "GPU model preview graph import failed: persistent resource description is missing";
+        !import_resource(metallicRoughnessTexture_) ||
+        !import_resource(metallicRoughnessSampler_) || !import_resource(material_) ||
+        !import_resource(compositeMaterial_)) {
+        state.status =
+            "GPU model preview graph import failed: persistent resource description is missing";
         return state;
     }
     const auto indexCount = static_cast<std::uint32_t>(snapshot.indices->size());
-    renderer.graph().add_pass("editor_model_preview", {
-        {offscreenColor_, render::ResourceUsage::ColorAttachment0},
-        {offscreenDepth_, render::ResourceUsage::DepthStencil},
-        {material_, render::ResourceUsage::ShaderRead},
-        {baseColorTexture_, render::ResourceUsage::ShaderRead},
-        {baseColorSampler_, render::ResourceUsage::ShaderRead},
-        {normalTexture_, render::ResourceUsage::ShaderRead},
-        {normalSampler_, render::ResourceUsage::ShaderRead},
-        {metallicRoughnessTexture_, render::ResourceUsage::ShaderRead},
-        {metallicRoughnessSampler_, render::ResourceUsage::ShaderRead},
-        {sceneBuffer_, render::ResourceUsage::UniformBuffer},
-        {materialBuffer_, render::ResourceUsage::UniformBuffer},
-        {vertexBuffer_, render::ResourceUsage::VertexBuffer},
-        {indexBuffer_, render::ResourceUsage::IndexBuffer}},
+    renderer.graph().add_pass(
+        "editor_model_preview",
+        {{offscreenColor_, render::ResourceUsage::ColorAttachment0},
+         {offscreenDepth_, render::ResourceUsage::DepthStencil},
+         {material_, render::ResourceUsage::ShaderRead},
+         {baseColorTexture_, render::ResourceUsage::ShaderRead},
+         {baseColorSampler_, render::ResourceUsage::ShaderRead},
+         {normalTexture_, render::ResourceUsage::ShaderRead},
+         {normalSampler_, render::ResourceUsage::ShaderRead},
+         {metallicRoughnessTexture_, render::ResourceUsage::ShaderRead},
+         {metallicRoughnessSampler_, render::ResourceUsage::ShaderRead},
+         {sceneBuffer_, render::ResourceUsage::UniformBuffer},
+         {materialBuffer_, render::ResourceUsage::UniformBuffer},
+         {vertexBuffer_, render::ResourceUsage::VertexBuffer},
+         {indexBuffer_, render::ResourceUsage::IndexBuffer}},
         [material = material_, scene = sceneBuffer_, parameters = materialBuffer_,
-         vertex = vertexBuffer_, index = indexBuffer_, indexCount,
-         offscreen = offscreenColor_, depth = offscreenDepth_](auto& backend, const auto&) {
-            if (!backend.bind_editor_render_target(offscreen, depth, true)) return;
+         vertex = vertexBuffer_, index = indexBuffer_, indexCount, offscreen = offscreenColor_,
+         depth = offscreenDepth_](auto &backend, const auto &) {
+            if (!backend.bind_editor_render_target(offscreen, depth, true))
+                return;
             backend.bind_material(material);
             backend.bind_uniform_buffer(scene, 2, 0);
             backend.bind_uniform_buffer(parameters, 4, 0);
             backend.draw_mesh({vertex, index, indexCount, math::Mat4::Identity()});
-        }, render::RenderQueue::Graphics, true, false);
-    if (compositeToViewport) renderer.graph().add_pass("editor_model_preview_composite", {
-        {offscreenColor_, render::ResourceUsage::ShaderRead},
-        {compositeMaterial_, render::ResourceUsage::ShaderRead},
-        {baseColorSampler_, render::ResourceUsage::ShaderRead}},
-        [material = compositeMaterial_, offscreen = offscreenColor_](auto& backend, const auto&) {
-            if (!backend.bind_editor_render_target({}, {}, false)) return;
-            backend.bind_material(material);
-            backend.draw_sprite({offscreen, {0.0f, 0.0f}, {1.0f, 1.0f}, 0.0f});
-        }, render::RenderQueue::Graphics, true, false);
+        },
+        render::RenderQueue::Graphics, true, false);
+    if (compositeToViewport)
+        renderer.graph().add_pass(
+            "editor_model_preview_composite",
+            {{offscreenColor_, render::ResourceUsage::ShaderRead},
+             {compositeMaterial_, render::ResourceUsage::ShaderRead},
+             {baseColorSampler_, render::ResourceUsage::ShaderRead}},
+            [material = compositeMaterial_, offscreen = offscreenColor_](auto &backend,
+                                                                         const auto &) {
+                if (!backend.bind_editor_render_target({}, {}, false))
+                    return;
+                backend.bind_material(material);
+                backend.draw_sprite({offscreen, {0.0f, 0.0f}, {1.0f, 1.0f}, 0.0f});
+            },
+            render::RenderQueue::Graphics, true, false);
 
     state.rendererReady = true;
     state.materialApplied = true;
@@ -929,27 +1068,35 @@ EditorModelPreviewRenderState EditorModelPreviewRenderer::render(
     state.baseColorTextureSampled = actualBaseColorTexture_;
     state.normalTextureSampled = actualNormalTexture_;
     state.metallicRoughnessTextureSampled = actualMetallicRoughnessTexture_;
-    state.textureSampled = actualBaseColorTexture_ || actualNormalTexture_ ||
-        actualMetallicRoughnessTexture_;
+    state.textureSampled =
+        actualBaseColorTexture_ || actualNormalTexture_ || actualMetallicRoughnessTexture_;
     state.offscreenTargetReady = true;
     state.offscreenCompositeApplied = compositeToViewport;
     state.status = hasMaterial
-        ? (actualMetallicRoughnessTexture_
-            ? "GPU lit preview ready (D3D11); offscreen target composited, metallic/roughness texture sampled, factors applied"
-            : actualNormalTexture_
-            ? "GPU lit preview ready (D3D11); offscreen target composited, metallic/roughness factors applied, normal texture sampled"
-            : actualBaseColorTexture_
-                ? "GPU lit preview ready (D3D11); offscreen target composited, metallic/roughness factors applied, base color texture sampled"
-                : "GPU lit preview ready (D3D11); offscreen target composited, metallic/roughness factors applied, texture artifact unavailable")
-        : (actualMetallicRoughnessTexture_
-            ? "GPU geometry preview ready (D3D11); offscreen target composited, metallic/roughness texture sampled"
-            : actualNormalTexture_
-            ? "GPU geometry preview ready (D3D11); offscreen target composited, normal texture sampled"
-            : actualBaseColorTexture_
-                ? "GPU geometry preview ready (D3D11); offscreen target composited, base color texture sampled"
-                : "GPU geometry preview ready (D3D11); offscreen target composited, base color applied, texture artifact unavailable");
+                       ? (actualMetallicRoughnessTexture_
+                              ? "GPU lit preview ready (D3D11); offscreen target composited, "
+                                "metallic/roughness texture sampled, factors applied"
+                          : actualNormalTexture_
+                              ? "GPU lit preview ready (D3D11); offscreen target composited, "
+                                "metallic/roughness factors applied, normal texture sampled"
+                          : actualBaseColorTexture_
+                              ? "GPU lit preview ready (D3D11); offscreen target composited, "
+                                "metallic/roughness factors applied, base color texture sampled"
+                              : "GPU lit preview ready (D3D11); offscreen target composited, "
+                                "metallic/roughness factors applied, texture artifact unavailable")
+                       : (actualMetallicRoughnessTexture_
+                              ? "GPU geometry preview ready (D3D11); offscreen target composited, "
+                                "metallic/roughness texture sampled"
+                          : actualNormalTexture_ ? "GPU geometry preview ready (D3D11); offscreen "
+                                                   "target composited, normal texture sampled"
+                          : actualBaseColorTexture_
+                              ? "GPU geometry preview ready (D3D11); offscreen target composited, "
+                                "base color texture sampled"
+                              : "GPU geometry preview ready (D3D11); offscreen target composited, "
+                                "base color applied, texture artifact unavailable");
     state.status += "; depth-tested";
-    if (!compositeToViewport) state.status="GPU model preview ready in offscreen texture";
+    if (!compositeToViewport)
+        state.status = "GPU model preview ready in offscreen texture";
     return state;
 }
 

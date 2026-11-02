@@ -1,14 +1,14 @@
-#include <cstdlib>
 #include "shinkou/Engine.h"
 #include "shinkou/ui/Performance.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 
 namespace shinkou {
 namespace {
 
-assets::AssetSystemConfig asset_config_for(const EngineConfig& config) {
+assets::AssetSystemConfig asset_config_for(const EngineConfig &config) {
     auto result = config.assets;
     // Editor resource URIs are project-relative. Keep the runtime AssetSystem
     // on the same root unless the caller explicitly supplied an asset root.
@@ -17,30 +17,37 @@ assets::AssetSystemConfig asset_config_for(const EngineConfig& config) {
     return result;
 }
 
-audio::AudioConfig audio_config_for(const EngineConfig& config) {
+audio::AudioConfig audio_config_for(const EngineConfig &config) {
     auto result = config.audio;
     if (result.assetRoot.empty()) {
-        if (!config.editorProjectRoot.empty()) result.assetRoot = config.editorProjectRoot;
-        else if (!config.assets.projectRoot.empty()) result.assetRoot = config.assets.projectRoot;
+        if (!config.editorProjectRoot.empty())
+            result.assetRoot = config.editorProjectRoot;
+        else if (!config.assets.projectRoot.empty())
+            result.assetRoot = config.assets.projectRoot;
     }
     return result;
 }
 
 } // namespace
 
-Engine::Engine(const EngineConfig& config)
+Engine::Engine(const EngineConfig &config)
     : config_(config), assets_(asset_config_for(config)), renderer_(config.renderBackend),
       physics_(config.enablePhysics ? physics::create_physics_world(config.physics) : nullptr),
-      audio_(audio::create_audio_backend(), audio_config_for(config)), network_(config.network), input_(input::create_sdl3_input_backend()),
-      scripts_(scripting::create_runtime(scripting::Language::CSharp)) {
-    if (!log::initialize(config_.logging)) return;
+      audio_(audio::create_audio_backend(), audio_config_for(config)), network_(config.network),
+      input_(input::create_sdl3_input_backend()),
+      scripts_(scripting::create_runtime(scripting::Language::CSharp)),
+      coroutines_(config.coroutines) {
+    if (!log::initialize(config_.logging))
+        return;
     SHINKOU_LOG_DEBUG("Engine object created");
 }
 
 bool Engine::initialize() {
-    if (initialized_) return true;
+    if (initialized_)
+        return true;
     SHINKOU_LOG_INFO("Engine initialization started; backend={}, window={}x{}",
-        static_cast<int>(config_.renderBackend), config_.window.width, config_.window.height);
+                     static_cast<int>(config_.renderBackend), config_.window.width,
+                     config_.window.height);
     if (!assets_.initialize()) {
         SHINKOU_LOG_ERROR("Asset system initialization failed");
         return false;
@@ -60,21 +67,27 @@ bool Engine::initialize() {
     windowHeight_ = window_.height();
     if (config_.editor) {
         editor_.set_native_window(window_.native_handle());
-        window_.set_file_drop_handler([this](std::string path, std::int32_t clientX, std::int32_t clientY) {
+        window_.set_file_drop_handler([this](std::string path, std::int32_t clientX,
+                                             std::int32_t clientY) {
             editor_.create_asset_reference_from_window_drop(
-                world_, std::move(path), editor::WindowClientPx{static_cast<float>(clientX), static_cast<float>(clientY)});
+                world_, std::move(path),
+                editor::WindowClientPx{static_cast<float>(clientX), static_cast<float>(clientY)});
         });
         window_.set_close_handler([this] {
-            editor_.execute_command(editor::EditorCommand::Quit,{},world_);
+            editor_.execute_command(editor::EditorCommand::Quit, {}, world_);
             return editor_.quit_requested();
         });
-        editor_.set_display_size(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_), window_.dpi_scale());
+        editor_.set_display_size(static_cast<float>(windowWidth_),
+                                 static_cast<float>(windowHeight_), window_.dpi_scale());
         window_.set_menu_command_handler([this](std::uint32_t command) {
-            if (command == 49001 && std::getenv("SHINKOU_UI_CAPTURE_PATH")) renderer_.request_ui_capture();
-            else editor_.handle_native_menu_command(command, world_);
+            if (command == 49001 && std::getenv("SHINKOU_UI_CAPTURE_PATH"))
+                renderer_.request_ui_capture();
+            else
+                editor_.handle_native_menu_command(command, world_);
         });
     }
-    renderer_.set_config({window_.native_handle(), windowWidth_, windowHeight_, true});
+    renderer_.set_config({window_.native_handle(), windowWidth_, windowHeight_, true,
+                          config_.enableRenderValidation});
     if (!renderer_.initialize()) {
         SHINKOU_LOG_ERROR("Renderer initialization failed: {}", renderer_.last_error());
         shutdown();
@@ -91,7 +104,7 @@ bool Engine::initialize() {
         editor_.set_audio_system(&audio_);
         editor_.set_audio_scene_system(&audioScene_);
         editor_.set_asset_system(&assets_);
-        if (!editor_.initialize(renderer_.capabilities().supportsImGui)) {
+        if (!editor_.initialize(true)) {
             SHINKOU_LOG_ERROR("Editor subsystem initialization failed");
             shutdown();
             return false;
@@ -108,13 +121,15 @@ bool Engine::initialize() {
         if (currentWidth > 0 && currentHeight > 0 &&
             (currentWidth != windowWidth_ || currentHeight != windowHeight_)) {
             if (!renderer_.resize(currentWidth, currentHeight)) {
-                SHINKOU_LOG_ERROR("Renderer resize after editor shell setup failed: {}", renderer_.last_error());
+                SHINKOU_LOG_ERROR("Renderer resize after editor shell setup failed: {}",
+                                  renderer_.last_error());
                 shutdown();
                 return false;
             }
             windowWidth_ = currentWidth;
             windowHeight_ = currentHeight;
-            editor_.set_display_size(static_cast<float>(currentWidth), static_cast<float>(currentHeight), window_.dpi_scale());
+            editor_.set_display_size(static_cast<float>(currentWidth),
+                                     static_cast<float>(currentHeight), window_.dpi_scale());
         }
     }
     initialized_ = true;
@@ -125,19 +140,27 @@ bool Engine::initialize() {
 }
 
 void Engine::tick(Seconds dt) {
-    if (!initialized_ || !running_) return;
-    if (config_.editor) ui::ui_performance().begin_frame();
+    if (!initialized_ || !running_)
+        return;
+    if (config_.editor)
+        ui::ui_performance().begin_frame();
+    if (config_.editor)
+        ui::ui_performance().add(ui::UiStage::FrameInterval, static_cast<double>(dt) * 1000);
     lastDeltaSeconds_ = std::clamp(dt, 0.0f, config_.maxDeltaSeconds);
     window_.process_events();
     const auto currentWidth = window_.width();
     const auto currentHeight = window_.height();
     // DPI can change without a client resize when moving across monitors.
     if (config_.editor && currentWidth && currentHeight)
-        editor_.set_display_size(static_cast<float>(currentWidth),static_cast<float>(currentHeight),window_.dpi_scale());
-    if (currentWidth != windowWidth_ || currentHeight != windowHeight_) {
+        editor_.set_display_size(static_cast<float>(currentWidth),
+                                 static_cast<float>(currentHeight), window_.dpi_scale());
+    if (currentWidth != windowWidth_ || currentHeight != windowHeight_ ||
+        renderer_.capabilities().deviceState == render::RenderDeviceState::NeedsResize) {
         if (currentWidth > 0 && currentHeight > 0) {
             renderer_.resize(currentWidth, currentHeight);
-            if (config_.editor) editor_.set_display_size(static_cast<float>(currentWidth), static_cast<float>(currentHeight), window_.dpi_scale());
+            if (config_.editor)
+                editor_.set_display_size(static_cast<float>(currentWidth),
+                                         static_cast<float>(currentHeight), window_.dpi_scale());
             windowWidth_ = currentWidth;
             windowHeight_ = currentHeight;
         }
@@ -146,20 +169,28 @@ void Engine::tick(Seconds dt) {
     input_.poll();
     assets_.poll();
     assets_.trim();
-    if (config_.editor) editor_.process_input(input_, world_);
-    const bool quitRequested = std::any_of(input_.events().begin(), input_.events().end(),
-        [](const input::InputEvent& event) { return event.type == input::InputEventType::Quit; });
+    if (config_.editor)
+        editor_.process_input(input_, world_);
+    const bool quitRequested = std::any_of(
+        input_.events().begin(), input_.events().end(),
+        [](const input::InputEvent &event) { return event.type == input::InputEventType::Quit; });
     if (quitRequested || !window_.is_open() || (config_.editor && editor_.quit_requested())) {
         running_ = false;
         return;
     }
-    if (!config_.editor || editor_.consume_simulation_step()) {
-        if (physics_) physics_->step(lastDeltaSeconds_);
+    const bool simulate = !config_.editor || editor_.consume_simulation_step();
+    coroutines_.begin_frame(simulate ? lastDeltaSeconds_ : 0.0, static_cast<double>(dt));
+    coroutines_.run(coroutines::Phase::Update);
+    if (simulate) {
+        if (physics_)
+            physics_->step(lastDeltaSeconds_);
         world_.update(lastDeltaSeconds_);
     }
     audio_.update(lastDeltaSeconds_);
     audioScene_.sync(world_, audio_, &assets_);
-    if (config_.editor) world_.refresh_transforms();
+    coroutines_.run(coroutines::Phase::LateUpdate);
+    if (config_.editor)
+        world_.refresh_transforms();
     renderer_.begin_graph();
     if (config_.editor) {
         renderer_.begin_editor_frame();
@@ -167,19 +198,36 @@ void Engine::tick(Seconds dt) {
         // callback therefore renders only into the active LevelViewport seam.
         editor_.prepare_frame(renderer_, world_);
     }
-    if (renderCallback_) renderCallback_(renderer_, world_, dt, frame_);
-    if (config_.editor) editor_.draw(renderer_, world_, lastDeltaSeconds_, frame_);
-    renderer_.submit();
-    if (config_.editor) ui::ui_performance().end_frame();
+    if (renderCallback_)
+        renderCallback_(renderer_, world_, dt, frame_);
+    if (config_.editor)
+        editor_.draw(renderer_, world_, lastDeltaSeconds_, frame_);
+    {
+        ui::UiTimer timer(ui::UiStage::Submit);
+        renderer_.submit();
+    }
+    coroutines_.run(coroutines::Phase::EndOfFrame);
+    if (auto failure = coroutines_.take_exception()) {
+        try {
+            std::rethrow_exception(failure);
+        } catch (const std::exception &error) {
+            SHINKOU_LOG_ERROR("Coroutine failed: {}", error.what());
+        } catch (...) {
+            SHINKOU_LOG_ERROR("Coroutine failed with a non-standard exception");
+        }
+    }
+    if (config_.editor)
+        ui::ui_performance().end_frame();
     ++frame_;
 }
 
 bool Engine::run(std::uint64_t maxFrames) {
-    if (!initialized_ && !initialize()) return false;
+    if (!initialized_ && !initialize())
+        return false;
     SHINKOU_LOG_INFO("Engine run started; maxFrames={}", maxFrames);
     const auto targetFrameTime = config_.targetFrameRate > 0.0
-        ? std::chrono::duration<double>(1.0 / config_.targetFrameRate)
-        : std::chrono::duration<double>::zero();
+                                     ? std::chrono::duration<double>(1.0 / config_.targetFrameRate)
+                                     : std::chrono::duration<double>::zero();
     std::uint64_t executedFrames = 0;
     auto previous = std::chrono::steady_clock::now();
     while (running_ && (maxFrames == 0 || executedFrames < maxFrames)) {
@@ -191,7 +239,8 @@ bool Engine::run(std::uint64_t maxFrames) {
         if (targetFrameTime > std::chrono::duration<double>::zero()) {
             const auto elapsed = std::chrono::steady_clock::now() - frameStart;
             const auto remaining = targetFrameTime - elapsed;
-            if (remaining > std::chrono::duration<double>::zero()) std::this_thread::sleep_for(remaining);
+            if (remaining > std::chrono::duration<double>::zero())
+                std::this_thread::sleep_for(remaining);
         }
     }
     SHINKOU_LOG_INFO("Engine run stopped; frames={}, running={}", executedFrames, running_);
@@ -199,7 +248,9 @@ bool Engine::run(std::uint64_t maxFrames) {
 }
 
 void Engine::shutdown() {
-    if (!initialized_ && !window_.is_open() && !assets_.initialized()) return;
+    coroutines_.cancel_all();
+    if (!initialized_ && !window_.is_open() && !assets_.initialized())
+        return;
     SHINKOU_LOG_INFO("Engine shutdown started");
     running_ = false;
     network_.shutdown();
@@ -222,4 +273,4 @@ void Engine::shutdown() {
     lastDeltaSeconds_ = 0;
     log::flush();
 }
-}
+} // namespace shinkou

@@ -1,3 +1,4 @@
+#include "shinkou/core/Hash.h"
 #include "shinkou/editor/EditorAudioPreview.h"
 
 #include <algorithm>
@@ -18,17 +19,12 @@ constexpr std::uint32_t kMaxChannels = 32u;
 constexpr std::uint32_t kMaxPeakCount = 512u;
 constexpr std::uint64_t kMaxProbeFramesPerBin = 4096u;
 
-std::uint64_t audio_revision(std::string_view path, std::uint64_t stamp,
-                             std::uint32_t channels, std::uint32_t sampleRate,
-                             std::uint64_t totalFrames) noexcept {
+std::uint64_t audio_revision(std::string_view path, std::uint64_t stamp, std::uint32_t channels,
+                             std::uint32_t sampleRate, std::uint64_t totalFrames) noexcept {
     std::uint64_t hash = 1469598103934665603ull;
-    const auto mix = [&hash](const void* data, std::size_t size) {
-        const auto* bytes = static_cast<const unsigned char*>(data);
-        for (std::size_t index = 0; index < size; ++index) {
-            hash ^= bytes[index];
-            hash *= 1099511628211ull;
-        }
-    };
+    const auto mix = [&hash](const void *data, std::size_t size) {
+        hash = core::hash_bytes(data, size, hash);
+};
     mix(path.data(), path.size());
     mix(&stamp, sizeof(stamp));
     mix(&channels, sizeof(channels));
@@ -55,28 +51,30 @@ std::string decoder_error(ma_result result) {
 
 } // namespace
 
-EditorAudioPreviewResult load_editor_audio_preview(const FileSystemService& files,
-                                                   std::string_view relativePath,
-                                                   std::uint64_t generation,
-                                                   std::uint64_t sourceStamp,
-                                                   std::uint32_t peakCount,
-                                                   const std::atomic_bool* cancel) {
+EditorAudioPreviewResult
+load_editor_audio_preview(const FileSystemService &files, std::string_view relativePath,
+                          std::uint64_t generation, std::uint64_t sourceStamp,
+                          std::uint32_t peakCount, const std::atomic_bool *cancel) {
     const std::string path(relativePath);
     const auto absolute = files.resolve_existing(path);
-    if (absolute.empty()) return failed(path, generation, sourceStamp,
-        "audio path is outside the project or no longer exists");
+    if (absolute.empty())
+        return failed(path, generation, sourceStamp,
+                      "audio path is outside the project or no longer exists");
     std::error_code sizeError;
     const auto sourceBytes = std::filesystem::file_size(absolute, sizeError);
-    if (sizeError) return failed(path, generation, sourceStamp, "audio file size is unavailable");
-    if (sourceBytes > kMaxSourceBytes) return failed(path, generation, sourceStamp,
-        "audio file exceeds the 256 MiB preview limit");
+    if (sizeError)
+        return failed(path, generation, sourceStamp, "audio file size is unavailable");
+    if (sourceBytes > kMaxSourceBytes)
+        return failed(path, generation, sourceStamp,
+                      "audio file exceeds the 256 MiB preview limit");
     peakCount = std::clamp(peakCount, 1u, kMaxPeakCount);
     const auto cancelled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
-    if (cancelled()) return failed(path, generation, sourceStamp, "audio preview cancelled");
+    if (cancelled())
+        return failed(path, generation, sourceStamp, "audio preview cancelled");
 
 #if !defined(SHINKOU_WITH_MINIAUDIO)
     return failed(path, generation, sourceStamp,
-        "audio preview provider is unavailable without miniaudio");
+                  "audio preview provider is unavailable without miniaudio");
 #else
     ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0, 0);
     ma_decoder decoder{};
@@ -88,24 +86,27 @@ EditorAudioPreviewResult load_editor_audio_preview(const FileSystemService& file
     ma_uint32 channels = 0;
     ma_uint32 sampleRate = 0;
     ma_channel channelMap[MA_MAX_CHANNELS]{};
-    const auto dataResult = ma_decoder_get_data_format(&decoder, &format, &channels,
-        &sampleRate, channelMap, MA_MAX_CHANNELS);
+    const auto dataResult = ma_decoder_get_data_format(&decoder, &format, &channels, &sampleRate,
+                                                       channelMap, MA_MAX_CHANNELS);
     if (dataResult != MA_SUCCESS || channels == 0 || channels > kMaxChannels || sampleRate == 0) {
         ma_decoder_uninit(&decoder);
         return failed(path, generation, sourceStamp,
-            dataResult == MA_SUCCESS ? "audio format exceeds the preview limits" : decoder_error(dataResult));
+                      dataResult == MA_SUCCESS ? "audio format exceeds the preview limits"
+                                               : decoder_error(dataResult));
     }
     ma_uint64 totalFrames = 0;
     const auto lengthResult = ma_decoder_get_length_in_pcm_frames(&decoder, &totalFrames);
     if (lengthResult != MA_SUCCESS || totalFrames == 0) {
         ma_decoder_uninit(&decoder);
         return failed(path, generation, sourceStamp,
-            lengthResult == MA_SUCCESS ? "audio stream has no frames" : decoder_error(lengthResult));
+                      lengthResult == MA_SUCCESS ? "audio stream has no frames"
+                                                 : decoder_error(lengthResult));
     }
 
     const auto duration = static_cast<double>(totalFrames) / static_cast<double>(sampleRate);
     std::vector<float> peaks(peakCount, 0.0f);
-    const auto frameWindow = std::min<std::uint64_t>(kMaxProbeFramesPerBin,
+    const auto frameWindow = std::min<std::uint64_t>(
+        kMaxProbeFramesPerBin,
         std::max<std::uint64_t>(1u, (totalFrames + peakCount - 1u) / peakCount));
     std::vector<float> samples(static_cast<std::size_t>(frameWindow) * channels);
     for (std::uint32_t bin = 0; bin < peakCount; ++bin) {
@@ -118,12 +119,15 @@ EditorAudioPreviewResult load_editor_audio_preview(const FileSystemService& file
         const auto requested = std::min(frameWindow, remaining);
         if (ma_decoder_seek_to_pcm_frame(&decoder, start) != MA_SUCCESS) {
             ma_decoder_uninit(&decoder);
-            return failed(path, generation, sourceStamp, "audio decoder seek failed while sampling waveform");
+            return failed(path, generation, sourceStamp,
+                          "audio decoder seek failed while sampling waveform");
         }
         ma_uint64 framesRead = 0;
-        if (ma_decoder_read_pcm_frames(&decoder, samples.data(), requested, &framesRead) != MA_SUCCESS) {
+        if (ma_decoder_read_pcm_frames(&decoder, samples.data(), requested, &framesRead) !=
+            MA_SUCCESS) {
             ma_decoder_uninit(&decoder);
-            return failed(path, generation, sourceStamp, "audio decoder read failed while sampling waveform");
+            return failed(path, generation, sourceStamp,
+                          "audio decoder read failed while sampling waveform");
         }
         if (cancelled()) {
             ma_decoder_uninit(&decoder);
@@ -133,7 +137,8 @@ EditorAudioPreviewResult load_editor_audio_preview(const FileSystemService& file
         const auto sampleCount = static_cast<std::size_t>(framesRead) * channels;
         for (std::size_t index = 0; index < sampleCount; ++index) {
             const float value = samples[index];
-            if (std::isfinite(value)) peak = std::max(peak, std::abs(value));
+            if (std::isfinite(value))
+                peak = std::max(peak, std::abs(value));
         }
         peaks[bin] = std::clamp(peak, 0.0f, 1.0f);
     }

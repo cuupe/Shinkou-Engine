@@ -62,7 +62,7 @@ round-tripping, typed values and gesture-level undo/cancel. Invoke it with
 from correctness. `Tools/UiCapture/InspectorInteraction.txt` drives real Win32
 input for XYZ editing, detachment, edits in secondary windows, redocking,
 4K and narrow panels. The capture helper can read the secondary window's actual
-DX11 render target; recorded regions include their owning HWND.
+DX11, DX12 or Vulkan render target; recorded regions include their owning HWND.
 Unattended runs use explicitly marked targeted Win32 messages. In that mode,
 hardware mouse-leave notifications are ignored and ImGui's geometry fallback
 infers the hovered viewport from those messages. Production uses the official
@@ -80,3 +80,11 @@ also preserved its values. Evidence is under
 `out/qa/inspector-accepted-{dark,light,high-contrast}-20261024`; PNG previews and
 machine-readable HWND/value checks are under
 `out/deliverables/inspector-20261024`.
+
+DX12 and Vulkan now expose the same editor viewport/model capability seams and
+official native platform-window adapters. Each backend additionally passed an
+88-step dark inspector scenario, a 51-step world viewport/DPI scenario, and a
+27-step detached-world rendering/input scenario. Vulkan synchronization
+validation was enabled. Current evidence directories and consolidated previews
+are indexed in `docs/EditorRendererBackends.md` and the workspace's
+`out/deliverables/render-backends-20261025`.

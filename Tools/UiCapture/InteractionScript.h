@@ -77,6 +77,7 @@ bool run_interaction_script(HWND window, const std::filesystem::path& script,
         PostMessageW(activeWindow,up ? WM_KEYUP : WM_KEYDOWN,vk,flags);
     };
     std::string lastState, lastCamera, rememberedCamera, lastObject;
+    std::unordered_map<std::string,std::string> rememberedProperties;
     auto region = [&](const std::string& id) {
         DeleteFileW(snapshot.wstring().c_str());
         PostMessageW(window,WM_COMMAND,49000,0);
@@ -169,23 +170,46 @@ bool run_interaction_script(HWND window, const std::filesystem::path& script,
                 pointer((r.left+r.right)/2,(r.top+r.bottom)/2);
                 if(op=="sweep") {int count=60;row>>count;for(int i=0;i<std::clamp(count,1,600);++i) pointer(r.left+2+(r.right-r.left-4)*(i%20)/20,(r.top+r.bottom)/2);}
                 else if(op!="hover") for(int i=0;i<(op=="double"?2:1);++i) {mouse(op=="right"?MOUSEEVENTF_RIGHTDOWN:MOUSEEVENTF_LEFTDOWN);pause(35);mouse(op=="right"?MOUSEEVENTF_RIGHTUP:MOUSEEVENTF_LEFTUP);pause(60);}
-            } else if(op=="orbit" || op=="look" || op=="pan") {
+            } else if(op=="orbit" || op=="look" || op=="look-hold" || op=="pan") {
                 const auto r=region("viewport.surface");
                 int dx=60,dy=20;row>>dx>>dy;
-                const bool look=op=="look";
+                const bool look=op=="look" || op=="look-hold";
                 pointer((r.left+r.right)/2,(r.top+r.bottom)/2);mouse(look?MOUSEEVENTF_RIGHTDOWN:MOUSEEVENTF_MIDDLEDOWN);pause(50);
                 for(int i=1;i<=20;++i) pointer((r.left+r.right)/2+dx*i/20,(r.top+r.bottom)/2+dy*i/20);
+                if (op=="look-hold") {
+                    pause(100);region("viewport.surface");const auto heldCamera=lastCamera;
+                    pause(600);region("viewport.surface");
+                    if (lastCamera!=heldCamera) throw std::runtime_error("Camera drifted while the right button was held stationary");
+                }
                 mouse(look?MOUSEEVENTF_RIGHTUP:MOUSEEVENTF_MIDDLEUP);
             } else if(op=="click-at" || op=="slide") {
                 std::string id;float x=0.5f,y=0.5f;row>>std::quoted(id)>>x>>y;const auto r=region(id);
                 pointer(static_cast<LONG>(r.left+(r.right-r.left)*x),static_cast<LONG>(r.top+(r.bottom-r.top)*y));
                 mouse(MOUSEEVENTF_LEFTDOWN);pause(100);mouse(MOUSEEVENTF_LEFTUP);pause(100);
-            } else if(op=="detach" || op=="axis-drag") {
+            } else if(op=="gizmo-rotate") {
+                const auto r=region("viewport.gizmo-center");const auto surface=region("viewport.surface");
+                const LONG cx=(r.left+r.right)/2,cy=(r.top+r.bottom)/2;
+                bool hit=false;POINT start{};
+                // Discover a real ring through upstream hit testing. No
+                // transform values or gizmo internals are injected by QA.
+                for(int radius=std::max(10L,(surface.bottom-surface.top)/25);radius<(surface.bottom-surface.top)/7 && !hit;radius+=3)
+                    for(int angle=0;angle<360 && !hit;angle+=45) {
+                        const double theta=angle*3.141592653589793/180;
+                        start={cx+LONG(radius*std::cos(theta)),cy+LONG(radius*std::sin(theta))};pointer(start.x,start.y);pause(35);
+                        try {region("viewport.gizmo-hover");hit=true;}catch(const std::runtime_error&){}
+                    }
+                if(!hit)throw std::runtime_error("No rotation ring accepted mouse hover");
+                pointer(start.x,start.y);mouse(MOUSEEVENTF_LEFTDOWN);pause(70);
+                const double theta=std::atan2(double(start.y-cy),double(start.x-cx)),radius=std::hypot(double(start.x-cx),double(start.y-cy));
+                for(int i=1;i<=30;++i)pointer(cx+LONG(radius*std::cos(theta+i*.025)),cy+LONG(radius*std::sin(theta+i*.025)));
+                mouse(MOUSEEVENTF_LEFTUP);
+            } else if(op=="detach" || op=="axis-drag" || op=="axis-drag-cancel") {
                 std::string id;int dx=0,dy=0;row>>std::quoted(id)>>dx>>dy;const auto r=region(id);
                 const auto origin=activeWindow;POINT start{(r.left+r.right)/2,(r.top+r.bottom)/2};
                 POINT desktopStart=start;ClientToScreen(activeWindow,&desktopStart);
                 pointer(start.x,start.y);mouse(MOUSEEVENTF_LEFTDOWN);pause(70);
                 for(int i=1;i<=30;++i){POINT point{desktopStart.x+dx*i/30,desktopStart.y+dy*i/30};ScreenToClient(activeWindow,&point);pointer(point.x,point.y);}
+                if(op=="axis-drag-cancel") {key(VK_ESCAPE);pause(100);key(VK_ESCAPE,true);pause(50);}
                 mouse(MOUSEEVENTF_LEFTUP);activeWindow=origin;
             } else if(op=="redock") {
                 std::string source,target;row>>std::quoted(source)>>std::quoted(target);const auto destination=region(target);
@@ -216,6 +240,17 @@ bool run_interaction_script(HWND window, const std::filesystem::path& script,
                     found=same&&count>0&&actual.eof()&&wanted.eof();
                 }
                 if(!found)throw std::runtime_error("Typed property mismatch: "+name+" expected "+expected);
+            } else if(op=="remember-property" || op=="property-changed" || op=="property-unchanged") {
+                std::string name;row>>std::quoted(name);region("command:play");
+                std::ifstream current(snapshot);std::string text,key,value;bool found=false;
+                while(std::getline(current,text)) {std::istringstream fields(text);fields>>key;if(key!="typed")continue;fields>>std::quoted(key)>>std::quoted(value);if(key==name){found=true;break;}}
+                if(!found)throw std::runtime_error("No typed property: "+name);
+                if(op=="remember-property")rememberedProperties[name]=value;
+                else {
+                    const auto saved=rememberedProperties.find(name);
+                    if(saved==rememberedProperties.end())throw std::runtime_error("Property has not been remembered: "+name);
+                    if((saved->second==value)!=(op=="property-unchanged"))throw std::runtime_error("Property change assertion failed: "+name+" before="+saved->second+" after="+value);
+                }
             } else if(op=="capture-window") {
                 std::string id,name;row>>std::quoted(id)>>name;region(id);capture(name);
             } else if(op=="drag") {

@@ -64,17 +64,17 @@ struct NetworkStats {
     std::string lastError;
 };
 
-using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
+using HttpHandler = std::function<HttpResponse(const HttpRequest &)>;
 using WebSocketHandler = std::function<void(std::uint64_t, std::string_view)>;
 using TcpHandler = std::function<void(std::uint64_t, std::string_view, std::string_view)>;
 using UdpHandler = std::function<void(std::string_view, std::string_view)>;
 
 class NetworkSystem final {
-public:
+  public:
     explicit NetworkSystem(NetworkConfig config = {});
     ~NetworkSystem();
-    NetworkSystem(const NetworkSystem&) = delete;
-    NetworkSystem& operator=(const NetworkSystem&) = delete;
+    NetworkSystem(const NetworkSystem &) = delete;
+    NetworkSystem &operator=(const NetworkSystem &) = delete;
 
     bool initialize();
     void poll();
@@ -91,9 +91,11 @@ public:
 
     bool initialized() const noexcept;
     NetworkStats stats() const;
-    const NetworkConfig& config() const noexcept { return config_; }
+    const NetworkConfig &config() const noexcept {
+        return config_;
+    }
 
-private:
+  private:
     struct Impl;
     NetworkConfig config_;
     std::unique_ptr<Impl> impl_;

@@ -59,16 +59,21 @@ struct ViewportRectPx {
 
 using ScissorRectPx = ViewportRectPx;
 
-std::optional<WindowClientRectPx> ui_logical_to_window_client_rect_px(UiLogicalRect rect, float dpiScale) noexcept;
-std::optional<UiLogicalRect> window_client_to_ui_logical_rect_px(WindowClientRectPx rect, float dpiScale) noexcept;
-std::optional<ViewportRectPx> ui_logical_to_viewport_rect_px(UiLogicalRect rect, float dpiScale) noexcept;
+std::optional<WindowClientRectPx> ui_logical_to_window_client_rect_px(UiLogicalRect rect,
+                                                                      float dpiScale) noexcept;
+std::optional<UiLogicalRect> window_client_to_ui_logical_rect_px(WindowClientRectPx rect,
+                                                                 float dpiScale) noexcept;
+std::optional<ViewportRectPx> ui_logical_to_viewport_rect_px(UiLogicalRect rect,
+                                                             float dpiScale) noexcept;
 
-std::optional<ViewportLocalPx> window_client_to_viewport_local_px(
-    WindowClientPx point, const ViewportRectPx& viewport) noexcept;
-std::optional<WindowClientPx> viewport_local_to_window_client_px(
-    ViewportLocalPx point, const ViewportRectPx& viewport) noexcept;
-std::optional<Ndc> viewport_local_to_ndc(ViewportLocalPx point, const ViewportRectPx& viewport) noexcept;
-std::optional<ViewportLocalPx> ndc_to_viewport_local(Ndc ndc, const ViewportRectPx& viewport) noexcept;
+std::optional<ViewportLocalPx>
+window_client_to_viewport_local_px(WindowClientPx point, const ViewportRectPx &viewport) noexcept;
+std::optional<WindowClientPx>
+viewport_local_to_window_client_px(ViewportLocalPx point, const ViewportRectPx &viewport) noexcept;
+std::optional<Ndc> viewport_local_to_ndc(ViewportLocalPx point,
+                                         const ViewportRectPx &viewport) noexcept;
+std::optional<ViewportLocalPx> ndc_to_viewport_local(Ndc ndc,
+                                                     const ViewportRectPx &viewport) noexcept;
 
 enum class RenderViewMode : std::uint8_t {
     Perspective,
@@ -172,23 +177,39 @@ struct WorldRay {
 };
 
 class RenderView {
-public:
+  public:
     RenderView() noexcept = default;
 
     // Transactional: an invalid description leaves finite identity matrices
     // and no renderable rectangle.
-    bool configure(const RenderViewDescription& description) noexcept;
+    bool configure(const RenderViewDescription &description) noexcept;
 
-    bool valid() const noexcept { return valid_; }
+    bool valid() const noexcept {
+        return valid_;
+    }
     bool is_orthographic() const noexcept;
-    const RenderViewDescription& description() const noexcept { return description_; }
-    const ViewportRectPx& viewport() const noexcept { return description_.viewport; }
-    const ScissorRectPx& scissor() const noexcept { return description_.scissor; }
-    const CameraState& camera() const noexcept { return description_.camera; }
+    const RenderViewDescription &description() const noexcept {
+        return description_;
+    }
+    const ViewportRectPx &viewport() const noexcept {
+        return description_.viewport;
+    }
+    const ScissorRectPx &scissor() const noexcept {
+        return description_.scissor;
+    }
+    const CameraState &camera() const noexcept {
+        return description_.camera;
+    }
     GridPlane grid_plane() const noexcept;
-    const math::Mat4& view_matrix() const noexcept { return viewMatrix_; }
-    const math::Mat4& projection_matrix() const noexcept { return projectionMatrix_; }
-    const math::Mat4& view_projection_matrix() const noexcept { return viewProjectionMatrix_; }
+    const math::Mat4 &view_matrix() const noexcept {
+        return viewMatrix_;
+    }
+    const math::Mat4 &projection_matrix() const noexcept {
+        return projectionMatrix_;
+    }
+    const math::Mat4 &view_projection_matrix() const noexcept {
+        return viewProjectionMatrix_;
+    }
 
     std::optional<Ndc> world_to_ndc(World world) const noexcept;
     std::optional<ViewportLocalPx> world_to_viewport_local(World world) const noexcept;
@@ -200,7 +221,7 @@ public:
     // deterministic and bounded by GridSettings::maxLineCount.
     GridGeometry build_grid_geometry() const;
 
-private:
+  private:
     RenderViewDescription description_{};
     math::Mat4 viewMatrix_{math::Mat4::Identity()};
     math::Mat4 projectionMatrix_{math::Mat4::Identity()};

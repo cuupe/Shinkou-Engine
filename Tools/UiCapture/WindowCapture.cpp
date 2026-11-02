@@ -20,6 +20,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace {
 
@@ -414,6 +415,18 @@ int run_capture(int argc, wchar_t** argv) {
                << L" captured=" << (captured ? L"1" : L"0") << L"\n";
 
     PostMessageW(window, WM_CLOSE, 0, 0);
+    // This process owns a disposable QA editor/fixture. Close its unsaved
+    // changes prompt through the native button, so shutdown can export timing
+    // evidence rather than silently killing the process after five seconds.
+    if (!scriptPath.empty()) for (int attempt=0;attempt<30;++attempt) {
+        if (WaitForSingleObject(process.hProcess,100)!=WAIT_TIMEOUT) break;
+        const HWND dialog=GetWindow(window,GW_ENABLEDPOPUP);
+        DWORD owner{};GetWindowThreadProcessId(dialog,&owner);
+        wchar_t title[80]{};GetWindowTextW(dialog,title,80);
+        if (dialog!=window && owner==process.dwProcessId && std::wstring(title)==L"Shinkou Editor") {
+            if (const HWND discard=GetDlgItem(dialog,IDNO)) PostMessageW(dialog,WM_COMMAND,MAKEWPARAM(IDNO,BN_CLICKED),reinterpret_cast<LPARAM>(discard));
+        }
+    }
     if (WaitForSingleObject(process.hProcess, 5000) == WAIT_TIMEOUT) TerminateProcess(process.hProcess, 0);
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);

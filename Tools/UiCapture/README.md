@@ -1,5 +1,11 @@
 # Editor interaction capture
 
+`RunHierarchyPerformance.ps1` uses the optional `shinkou_editor_ui_benchmarks`
+target to open a real 20,001-object editor, select the last row and filter it.
+Build with `SHINKOU_BUILD_BENCHMARKS=ON`. It supports DX11/DX12/Vulkan and the
+three editor themes. QA snapshots include cached/submitted hierarchy rows,
+rebuild count and region count; normal editor sessions leave QA recording off.
+
 The native editor now uses Dear ImGui Docking. Run
 `Tools/UiCapture/RunImGuiInteraction.ps1 -Theme dark` from the repository root
 after building `out/build/mingw-debug`. The same runner supports `light` and
@@ -18,34 +24,15 @@ cleared on exit. `--native-keyboard` remains available for foreground `SendInput
 tests and refuses to type if the editor does not own foreground focus.
 The `object-name` assertion checks the complete selected name, including Unicode.
 
-The older retained-UI runner below remains available for compatibility tests.
+The retained editor runner and its legacy interaction/splitter scripts have been removed. Use the ImGui, Inspector, AssetInspection and Viewport runners for the active editor. All functional actions travel through the official Win32 ImGui backend. Environment-gated snapshot/capture messages only observe state or request GPU readback.
 
-`RunViewportInteraction.ps1` verifies the native world framebuffer at 1440x900,
-3840x2160, 1024x768, and 2560x1440; actual world triangle picking; right-button
-look without camera translation; middle-button motion in the camera plane; and
-font-atlas rebuild on user scale changes. It restores the initial client size
-before exit and preserves GPU captures for every resolution and scaling stage.
-
-Build with `cmake --build out/build/ui-current -j 2` from the repository root.
-Run `Tools/UiCapture/RunEditorInteraction.ps1` to create an isolated fixture project,
-launch the real D3D11 editor, execute the checked-in script and save evidence.
-Use `-Theme light` or `-Theme high-contrast` for the other palettes. Every run
-requires a new output directory; the runner preserves existing evidence.
-
-The runner uses targeted Win32 window messages through SDL and InputSystem.
-It moves the cursor to keep SDL's native coordinates consistent, then restores
-the previous cursor position. This is automated native-message evidence, not
-a recording of physical keyboard/mouse hardware or a foreground SendInput test.
-The editor's environment-gated snapshot and capture messages only read state
-and request GPU readback; functional actions use normal window input events.
+`RunViewportInteraction.ps1` verifies the native world framebuffer at multiple resolutions, triangle picking, right-button look, middle-button pan, and font rebuild on user scale changes. It supports DX11, DX12 and Vulkan; `-Detached` exercises an independent native world window.
 
 Outputs:
 
 - `interactive.bmp.steps.jsonl`: actions and assertions; any failure exits nonzero.
 - `*.state.txt`: UI regions, selection, status, camera and inspected property values.
 - `*.bmp`: complete 32-bit GPU client-surface readbacks, captured after each phase.
-- `interactive.bmp.timings.csv`: bounded per-workload CPU stage percentiles,
-  upload bytes and per-frame surface cache hits; GPU execution time is unavailable.
 - `run.log`: backend capability, client/surface size and actual window DPI.
 
 Script grammar is one command per line. Quoted strings support paths with spaces.
@@ -60,11 +47,6 @@ UI scale is a user preference and must not be presented as another system DPI.
 GPU capture and profiler collection have overhead, especially on capture and
 resize frames. Small sample counts do not establish a stable p95.
 
-`SplitterInteraction.txt` additionally drags the default center/bottom divider.
-Pass it with `shinkou_ui_capture --script <absolute-script-path>` and compare the
-`viewport.surface` rectangle in `before-splitter.state.txt` and
-`after-splitter.state.txt`. Use a fixture project because workspace persistence
-is intentionally exercised on shutdown.
 # Asset inspector regression
 
 `RunAssetInspection.ps1` creates generated TXT/script, DOCX, WAV/MP3, MP4 and FBX
@@ -85,7 +67,7 @@ a new project and preserves its step log, snapshots and GPU captures.
 The script checks independent XYZ inputs, Euler degrees, scale, text editing,
 undo/cancel, native detachment, edits inside the detached window, closing and
 reopening that panel, redocking, layout reset/save, 3840×2160 and 1024×768.
-`capture-window "region" name` reads that region's owning DX11 render target;
+`capture-window "region" name` reads that region's owning native GPU render target;
 secondary RGBA swapchains are converted to BMP channel order during readback.
 
 Additional script commands are `typed "component:label" "value"`,
@@ -102,3 +84,13 @@ official Win32 cursor/window detection. Pointer records include requested and
 observed hardware coordinates, because remote/background desktops may reject
 cursor warps. These runs establish the message route and actual GPU output;
 they do not establish physical mouse or multi-monitor DPI transitions.
+
+`RunInspectorInteraction.ps1` and `RunViewportInteraction.ps1` accept
+`-Backend dx11|dx12|vulkan` and optional `-RenderValidation`. Vulkan inline HLSL
+uses the GLSLC path recorded at CMake configuration; `TEMP`/`TMP` must be writable.
+`RunViewportInteraction.ps1 -Detached -Backend vulkan` selects
+`DetachedViewportInteraction.txt` and additionally verifies the world image,
+selection, right-button look and camera-plane pan in a distinct HWND, then
+redocks that viewport. It uses the same capture helper and `--require-gpu` flag.
+See [backend contracts](../../docs/EditorRendererBackends.md) for synchronization
+and coordinate conventions.

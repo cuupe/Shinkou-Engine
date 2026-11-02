@@ -1,151 +1,138 @@
 #pragma once
 
 #include "shinkou/Types.h"
-#include <entt/entt.hpp>
-#include <cassert>
+#include "shinkou/ecs/EntityStore.h"
+
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace shinkou::ecs {
+
+// EnTT-shaped facade over the chunk store.
+//
+// The facade exists so that simulation code keeps its familiar
+// create/emplace/get/view vocabulary while the storage underneath is the
+// DOTS-style archetype/chunk store.  There is no sparse-set indirection and no
+// native-entity translation: an Entity is exactly the 8-byte store handle.
 class Registry {
-    using DestroyObserver = void (*)(void*, Entity) noexcept;
+  public:
+    using DestroyObserver = void (*)(void *, Entity) noexcept;
 
-    entt::registry registry_;
-    EntityId nextId_{1};
-    std::vector<Generation> generations_{1, 0};
-    std::vector<EntityId> freeIds_;
-    std::vector<entt::entity> entities_{entt::null};
-    std::unordered_map<std::uint32_t, Entity> entityLookup_;
-    std::vector<Entity> pendingDestroy_;
-    void* destroyObserverContext_{nullptr};
-    DestroyObserver destroyObserver_{nullptr};
+    Registry() = default;
+    ~Registry() = default;
+    Registry(const Registry &) = delete;
+    Registry &operator=(const Registry &) = delete;
 
-    entt::entity native(Entity entity) const noexcept {
-        return valid(entity) ? entities_[entity.id] : entt::null;
+    Entity create() {
+        return store_.create();
     }
-
-    Entity from_native(entt::entity entity) const noexcept {
-        const auto it = entityLookup_.find(entt::to_integral(entity));
-        return it == entityLookup_.end() ? Entity{} : it->second;
+    Entity create(Archetype &archetype) {
+        return store_.create(archetype);
     }
-
-public:
-    Entity create();
+    void create_batch(Archetype &archetype, Entity *output, std::size_t count) {
+        store_.create_batch(archetype, output, count);
+    }
     void destroy(Entity entity);
     void destroy_deferred(Entity entity);
     std::size_t flush_destroyed() noexcept;
     void clear() noexcept;
-    bool valid(Entity entity) const noexcept;
-    void set_destroy_observer(void* context, DestroyObserver observer) noexcept {
+    bool valid(Entity entity) const noexcept {
+        return store_.valid(entity);
+    }
+    void set_destroy_observer(void *context, DestroyObserver observer) noexcept {
         destroyObserverContext_ = context;
         destroyObserver_ = observer;
     }
-    void reserve(std::size_t entityCapacity);
-    std::size_t alive_count() const noexcept { return entityLookup_.size(); }
-    std::size_t capacity() const noexcept { return generations_.size() > 0 ? generations_.size() - 1u : 0u; }
-    std::size_t pending_destroy_count() const noexcept { return pendingDestroy_.size(); }
-
-    template<class Fn>
-    void each_pending_destroy(Fn&& fn) const {
-        for (const auto entity : pendingDestroy_)
-            if (valid(entity)) fn(entity);
+    void reserve(std::size_t entityCapacity) {
+        store_.reserve(entityCapacity);
+    }
+    std::size_t alive_count() const noexcept {
+        return store_.alive_count();
+    }
+    std::size_t capacity() const noexcept {
+        return store_.capacity();
+    }
+    std::size_t pending_destroy_count() const noexcept {
+        return pendingDestroy_.size();
     }
 
-    entt::registry& native_registry() noexcept { return registry_; }
-    const entt::registry& native_registry() const noexcept { return registry_; }
-
-    // Returns the native EnTT view directly.  This is intentionally a thin
-    // zero-allocation facade for ECS hot loops: it avoids converting every
-    // entity through entityLookup_.  Use Registry::each when a generational
-    // shinkou::Entity is required by the callback.
-    template<class... Components>
-    auto view() noexcept {
-        return registry_.view<Components...>();
+    template <class Fn> void each_pending_destroy(Fn &&fn) const {
+        for (const auto entity : pendingDestroy_) {
+            if (store_.valid(entity))
+                fn(entity);
+        }
     }
 
-    template<class... Components>
-    auto view() const noexcept {
-        return registry_.view<Components...>();
+    EntityStore &store() noexcept {
+        return store_;
+    }
+    const EntityStore &store() const noexcept {
+        return store_;
     }
 
-    template<class T>
-    bool has(Entity entity) const {
-        return valid(entity) && registry_.all_of<T>(native(entity));
+    // Mirrors the EnTT view surface the engine already used.  Iteration is
+    // chunk-major and allocation-free once the query cache is warm.
+    template <class... Components> struct View {
+        Query *query{nullptr};
+
+        template <class Fn> void each(Fn &&fn) {
+            query->template each<Components...>(std::forward<Fn>(fn));
+        }
+        std::size_t size() {
+            return query->entity_count();
+        }
+        bool empty() {
+            return size() == 0u;
+        }
+    };
+
+    template <class... Components> View<Components...> view() const {
+        return View<Components...>{&store_.query<Components...>()};
     }
 
-    template<class T, class... Args>
-    T& emplace(Entity entity, Args&&... args) {
-        assert(valid(entity));
-        return registry_.emplace<T>(native(entity), std::forward<Args>(args)...);
+    template <class T> bool has(Entity entity) const {
+        return store_.has<T>(entity);
     }
 
-    template<class T, class... Args>
-    T& emplace_or_replace(Entity entity, Args&&... args) {
-        assert(valid(entity));
-        return registry_.emplace_or_replace<T>(native(entity), std::forward<Args>(args)...);
+    template <class T, class... Args> T &emplace(Entity entity, Args &&...args) {
+        return store_.emplace<T>(entity, std::forward<Args>(args)...);
     }
 
-    template<class T>
-    T& get(Entity entity) {
-        assert(valid(entity));
-        return registry_.get<T>(native(entity));
+    template <class T, class... Args> T &emplace_or_replace(Entity entity, Args &&...args) {
+        return store_.emplace_or_replace<T>(entity, std::forward<Args>(args)...);
     }
 
-    template<class T>
-    const T& get(Entity entity) const {
-        assert(valid(entity));
-        return registry_.get<T>(native(entity));
+    template <class T> T &get(Entity entity) {
+        return store_.get<T>(entity);
     }
 
-    template<class T>
-    T* try_get(Entity entity) {
-        return valid(entity) ? registry_.try_get<T>(native(entity)) : nullptr;
+    template <class T> const T &get(Entity entity) const {
+        return store_.get<T>(entity);
     }
 
-    template<class T>
-    const T* try_get(Entity entity) const {
-        return valid(entity) ? registry_.try_get<T>(native(entity)) : nullptr;
+    template <class T> T *try_get(Entity entity) {
+        return store_.try_get<T>(entity);
     }
 
-    template<class T>
-    void remove(Entity entity) {
-        if (valid(entity)) registry_.remove<T>(native(entity));
+    template <class T> const T *try_get(Entity entity) const {
+        return store_.try_get<T>(entity);
     }
 
-    template<class T, class Fn>
-    void each(Fn&& fn) {
-        registry_.view<T>().each([this, &fn](const auto entity, T& component) {
-            fn(from_native(entity), component);
-        });
+    template <class T> void remove(Entity entity) {
+        store_.remove<T>(entity);
     }
 
-    template<class T, class Fn>
-    void each(Fn&& fn) const {
-        registry_.view<T>().each([this, &fn](const auto entity, const T& component) {
-            fn(from_native(entity), component);
-        });
+    template <class... Components, class Fn> void each(Fn &&fn) const {
+        view<Components...>().each(std::forward<Fn>(fn));
     }
 
-    template<class First, class Second, class... Rest, class Fn>
-    void each(Fn&& fn) {
-        registry_.view<First, Second, Rest...>().each([this, &fn](const auto entity,
-                                                                  First& first, Second& second,
-                                                                  Rest&... rest) {
-            fn(from_native(entity), first, second, rest...);
-        });
-    }
-
-    template<class First, class Second, class... Rest, class Fn>
-    void each(Fn&& fn) const {
-        registry_.view<First, Second, Rest...>().each([this, &fn](const auto entity,
-                                                                                    const First& first,
-                                                                                    const Second& second,
-                                                                                    const Rest&... rest) {
-            fn(from_native(entity), first, second, rest...);
-        });
-    }
+  private:
+    EntityStore store_;
+    std::vector<Entity> pendingDestroy_;
+    void *destroyObserverContext_{nullptr};
+    DestroyObserver destroyObserver_{nullptr};
 };
-}
+
+} // namespace shinkou::ecs

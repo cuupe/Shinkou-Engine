@@ -113,6 +113,8 @@ IMGUI_IMPL_API bool             ImGui_ImplVulkan_Init(ImGui_ImplVulkan_InitInfo*
 IMGUI_IMPL_API void             ImGui_ImplVulkan_Shutdown();
 IMGUI_IMPL_API void             ImGui_ImplVulkan_NewFrame();
 IMGUI_IMPL_API void             ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer command_buffer, VkPipeline pipeline = VK_NULL_HANDLE);
+// Shinkou integration: acquired secondary image, borrowed until SwapBuffers.
+IMGUI_IMPL_API bool ImGui_ImplVulkan_GetViewportBackBuffer(ImGuiViewport*,VkImage*,VkFormat*,VkExtent2D*);
 IMGUI_IMPL_API bool             ImGui_ImplVulkan_CreateFontsTexture();
 IMGUI_IMPL_API void             ImGui_ImplVulkan_DestroyFontsTexture();
 IMGUI_IMPL_API void             ImGui_ImplVulkan_SetMinImageCount(uint32_t min_image_count); // To override MinImageCount after initialization (e.g. if swap chain is recreated)

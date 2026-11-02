@@ -1,6 +1,15 @@
 # ShinkouEngine reflection
 
-ShinkouEngine reflection is a runtime metadata layer for engine and gameplay modules. It is split into a dependency-free core (`Reflection.h`), JSON serialization (`Serialization.h`), and engine registrations (`EngineReflection.h`). It does not depend on editor, renderer, scripting, RTTI, or a global singleton.
+ShinkouEngine reflection is a runtime metadata layer for engine and gameplay modules. It is split into metadata (`Reflection.h`), structured conversion and JSON serialization (`Serialization.h`), and engine registrations (`EngineReflection.h`). Primitive helpers and the shared Value/JSON contract come from `ShinkouEngine::Core`.
+
+`serialize_value` and `deserialize_value` exchange `shinkou::data::Value` directly.
+`serialize_json` and `deserialize_json` compose that traversal with the common
+codec; reflection no longer owns a JSON parser or text writer. Scene documents,
+editor preferences and workspace DTOs share this route. Integer values remain
+exact through uint64 max; non-finite/out-of-range floating values fail explicitly.
+`JsonOptions` controls depth, bytes and node budgets. Serialized output is committed
+only on success; callers needing transactional typed deserialization should stage
+a temporary DTO. See [the shared contract](../../docs/CoreArchitecture.md).
 
 ## Registration
 

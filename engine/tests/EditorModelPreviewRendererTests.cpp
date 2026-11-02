@@ -1,5 +1,6 @@
 #include "shinkou/editor/EditorModelPreviewRenderer.h"
 #include "shinkou/render/Renderer.h"
+#include "shinkou/platform/Window.h"
 #include "shinkou/ui/Render.h"
 
 #include <cassert>
@@ -11,7 +12,11 @@
 using namespace shinkou;
 using namespace shinkou::editor;
 
-int main() {
+int main(int argc, char** argv) {
+    const std::string backendName = argc > 1 ? argv[1] : "dx11";
+    const auto backend = backendName == "dx12" ? render::BackendApi::DirectX12 :
+        backendName == "vulkan" ? render::BackendApi::Vulkan : render::BackendApi::DirectX11;
+    const bool requireNative = argc > 2 && std::string(argv[2]) == "--require-native";
     auto vertices = std::make_shared<std::vector<math::Vec3>>();
     vertices->push_back({-1.0f, -1.0f, 0.0f});
     vertices->push_back({1.0f, -1.0f, 0.0f});
@@ -89,7 +94,13 @@ int main() {
     bool nativeAnimatedReadbackExercised = false;
     bool nativeDepthTargetExercised = false;
     bool nativeTextureReadbackExercised = false;
-    render::Renderer nativeRenderer(render::BackendApi::DirectX11);
+    platform::Window nativeWindow;
+    const bool windowReady = nativeWindow.create({"Model Preview GPU QA", 640, 480, false});
+    render::RenderBackendConfig backendConfig{nativeWindow.native_handle(), 640, 480, false};
+    backendConfig.enableValidation = requireNative;
+    {
+    render::Renderer nativeRenderer(backend, backendConfig);
+    if (requireNative) assert(windowReady);
     if (nativeRenderer.initialize()) {
         const auto capabilities = nativeRenderer.capabilities();
         if (capabilities.deviceReady && capabilities.supportsEditorViewportScissor) {
@@ -185,14 +196,13 @@ int main() {
                         render::TextureReadback readback;
                         render::TextureReadbackRequest request;
                         request.texture = previewRenderer.offscreen_color();
-                        request.width = 64;
-                        request.height = 64;
-                        request.maxBytes = 64u * 64u * 4u;
+                        request.maxBytes = 16u * 1024u * 1024u;
                         if (nativeRenderer.read_texture(request, readback) && readback.valid() &&
-                            readback.width == 64 && readback.height == 64) {
+                            readback.width > 0 && readback.height > 0) {
                             nativeOffscreenReadbackExercised = true;
-                            nativeOffscreenPixelActivityExercised = std::any_of(
-                                readback.data.begin(), readback.data.end(), [](std::uint8_t value) { return value != 0; });
+                            for (std::size_t pixel = 0; pixel + 3 < readback.data.size(); pixel += 4)
+                                nativeOffscreenPixelActivityExercised |= readback.data[pixel] > 16 ||
+                                    readback.data[pixel + 1] > 16 || readback.data[pixel + 2] > 16;
                             nativeAnimatedReadbackExercised = nativeOffscreenReadbackExercised &&
                                 nativeOffscreenPixelActivityExercised;
                         } else {
@@ -210,7 +220,8 @@ int main() {
                         readbackTextureDescription.width = 4;
                         readbackTextureDescription.height = 4;
                         readbackTextureDescription.format = "bgra8";
-                        readbackTextureDescription.initialData.assign(4u * 4u * 4u, 77u);
+                        for (unsigned i = 0; i < 4u * 4u * 4u; ++i)
+                            readbackTextureDescription.initialData.push_back(static_cast<std::uint8_t>(i * 3u));
                         const auto readbackTexture = nativeRenderer.create_texture(readbackTextureDescription);
                         render::TextureReadback uploadedReadback;
                         render::TextureReadbackRequest uploadedRequest;
@@ -218,8 +229,16 @@ int main() {
                         uploadedRequest.maxBytes = 4u * 4u * 4u;
                         nativeTextureReadbackExercised = nativeRenderer.read_texture(
                             uploadedRequest, uploadedReadback) && uploadedReadback.valid() &&
-                            std::all_of(uploadedReadback.data.begin(), uploadedReadback.data.end(),
-                                        [](std::uint8_t value) { return value == 77u; });
+                            uploadedReadback.data == readbackTextureDescription.initialData;
+                        auto regionRequest = uploadedRequest;
+                        regionRequest.x = 1; regionRequest.y = 2; regionRequest.width = 2; regionRequest.height = 1;
+                        regionRequest.maxBytes = 8;
+                        render::TextureReadback region;
+                        assert(nativeRenderer.read_texture(regionRequest, region) && region.rowPitch == 8 &&
+                            region.width == 2 && region.height == 1);
+                        assert(std::equal(region.data.begin(), region.data.end(), readbackTextureDescription.initialData.begin() + 36));
+                        regionRequest.maxBytes = 7;
+                        assert(!nativeRenderer.read_texture(regionRequest, region));
                         if (!nativeTextureReadbackExercised) {
                             std::cerr << "native uploaded texture readback failure: "
                                       << nativeRenderer.last_error() << "\n";
@@ -253,9 +272,13 @@ int main() {
             EditorModelPreviewTextureRole::BaseColor,false,true);
         assert(resized.rendererReady && previewRenderer.offscreen_color().id==textureBefore.id);
     }
-    std::cout << "Editor model preview renderer capability fallback passed"
-              << " native-d3d11-attempted=" << (nativePathAttempted ? 1 : 0)
-              << " native-d3d11-pass=" << (nativePathExercised ? 1 : 0)
+    if (requireNative) {
+        assert(nativePathExercised && nativeOffscreenExecutionExercised && nativeDepthTargetExercised);
+        assert(nativeOffscreenReadbackExercised && nativeOffscreenPixelActivityExercised && nativeTextureReadbackExercised);
+    }
+    std::cout << "Editor model preview renderer backend=" << backendName
+              << " native-attempted=" << (nativePathAttempted ? 1 : 0)
+              << " native-pass=" << (nativePathExercised ? 1 : 0)
               << " native-material-factors=" << (nativeMaterialFactorsExercised ? 1 : 0)
               << " native-texture-sampled=" << (nativeTextureExercised ? 1 : 0)
               << " native-metallic-roughness-texture="
@@ -269,5 +292,13 @@ int main() {
               << " native-depth-target=" << (nativeDepthTargetExercised ? 1 : 0)
               << " native-uploaded-texture-readback="
               << (nativeTextureReadbackExercised ? 1 : 0) << "\n";
+    previewRenderer.clear(nativeRenderer);
+    nativeRenderer.wait_idle();
+    if (requireNative) {
+        for (const auto& diagnostic : nativeRenderer.stats().validationDiagnostics)
+            assert(diagnostic.rfind("error:", 0) != 0);
+    }
+    }
+    nativeWindow.destroy();
     return 0;
 }

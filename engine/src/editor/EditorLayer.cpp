@@ -2,32 +2,35 @@
 #include "EditorImGuiView.h"
 #include "shinkou/editor/EditorGltfPreview.h"
 #include "shinkou/editor/EditorLocalization.h"
+#include "shinkou/editor/EditorPrimitiveMesh.h"
 
 #include "shinkou/GameObject.h"
 #include "shinkou/World.h"
 #include "shinkou/audio/AudioSceneSystem.h"
-#include "shinkou/render/RenderScene.h"
 #include "shinkou/reflection/Reflection.h"
 #include "shinkou/reflection/Serialization.h"
-#include "shinkou/ui/ImGuiAdapter.h"
+#include "shinkou/render/RenderScene.h"
 #include "shinkou/ui/Performance.h"
-#include <cstdlib>
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cctype>
+#include <charconv>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
 
 #if defined(SHINKOU_PLATFORM_WINDOWS)
+// Win32 common dialogs require the Windows types before their declarations.
+// clang-format off
 #include <windows.h>
 #include <commdlg.h>
+// clang-format on
 #endif
 
 #if defined(SHINKOU_WITH_IMGUI)
@@ -57,18 +60,20 @@ std::string normalized_project_path(std::string_view value) {
 bool path_is_or_below(std::string_view path, std::string_view prefix) {
     const auto normalizedPath = normalized_project_path(path);
     const auto normalizedPrefix = normalized_project_path(prefix);
-    if (normalizedPath.empty() || normalizedPrefix.empty()) return false;
+    if (normalizedPath.empty() || normalizedPrefix.empty())
+        return false;
     return normalizedPath == normalizedPrefix ||
-        normalizedPath.rfind(normalizedPrefix + '/', 0) == 0;
+           normalizedPath.rfind(normalizedPrefix + '/', 0) == 0;
 }
 
-std::string remap_project_path(std::string_view path, std::string_view from,
-                               std::string_view to) {
+std::string remap_project_path(std::string_view path, std::string_view from, std::string_view to) {
     const auto normalizedPath = normalized_project_path(path);
     const auto normalizedFrom = normalized_project_path(from);
     const auto normalizedTo = normalized_project_path(to);
-    if (!path_is_or_below(normalizedPath, normalizedFrom)) return normalizedPath;
-    if (normalizedPath == normalizedFrom) return normalizedTo;
+    if (!path_is_or_below(normalizedPath, normalizedFrom))
+        return normalizedPath;
+    if (normalizedPath == normalizedFrom)
+        return normalizedTo;
     return normalizedTo + normalizedPath.substr(normalizedFrom.size());
 }
 
@@ -100,106 +105,54 @@ enum NativeEditorMenuId : UINT {
     kNativeLightTheme,
     kNativeHighContrastTheme,
     kNativeAbout,
-    kNativeSaveAs, kNativeSaveLayout, kNativeReloadLayout, kNativeResetLayout,
-    kNativeSettings, kNativeDeleteObject, kNativeFrameSelection,
-    kNativeBuildProject, kNativeCancelBuild, kNativeRefreshBuildTools,
-    kNativeRefreshProjectFiles, kNativeAssociateProjectFile, kNativeGenerateClangdConfig,
-    kNativeImportCompileCommands, kNativeExportCompileCommands,
-    kNativeOpenVisualStudio, kNativeOpenRider, kNativeOpenVisualStudioCode,
-    kNativeSaveBuildProfile, kNativeReloadBuildProfile,
+    kNativeSaveAs,
+    kNativeSaveLayout,
+    kNativeReloadLayout,
+    kNativeResetLayout,
+    kNativeSettings,
+    kNativeDeleteObject,
+    kNativeFrameSelection,
+    kNativeBuildProject,
+    kNativeCancelBuild,
+    kNativeRefreshBuildTools,
+    kNativeRefreshProjectFiles,
+    kNativeAssociateProjectFile,
+    kNativeGenerateClangdConfig,
+    kNativeImportCompileCommands,
+    kNativeExportCompileCommands,
+    kNativeOpenVisualStudio,
+    kNativeOpenRider,
+    kNativeOpenVisualStudioCode,
+    kNativeSaveBuildProfile,
+    kNativeReloadBuildProfile,
 };
 
-void append_native_item(HMENU menu, UINT id, const char* label, bool enabled = true) {
-    const int count=MultiByteToWideChar(CP_UTF8,0,label,-1,nullptr,0);
-    std::wstring text(static_cast<std::size_t>(std::max(1,count)),L'\0');
-    MultiByteToWideChar(CP_UTF8,0,label,-1,text.data(),count);
-    AppendMenuW(menu, MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED), id, text.c_str());
-}
-
-void append_native_submenu(HMENU menu, HMENU submenu, const char* label) {
-    const int count=MultiByteToWideChar(CP_UTF8,0,label,-1,nullptr,0);
-    std::wstring text(static_cast<std::size_t>(std::max(1,count)),L'\0');
-    MultiByteToWideChar(CP_UTF8,0,label,-1,text.data(),count);
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), text.c_str());
-}
 #endif
 
-void register_layout_types(reflection::TypeRegistry& registry) {
-    std::string ignored;
-    registry.register_type(reflection::TypeBuilder<EditorLayoutState>("shinkou.editor.EditorLayoutState")
-        .field("layoutVersion", &EditorLayoutState::layoutVersion)
-        .field("theme", &EditorLayoutState::theme)
-        .field("language", &EditorLayoutState::language)
-        .field("workspace", &EditorLayoutState::workspace)
-        .field("projectRoot", &EditorLayoutState::projectRoot)
-        .field("layoutFile", &EditorLayoutState::layoutFile)
-        .field("dockLayoutFile", &EditorLayoutState::dockLayoutFile)
-        .field("styleFile", &EditorLayoutState::styleFile)
-        .field("fontPath", &EditorLayoutState::fontPath)
-        .field("fontSize", &EditorLayoutState::fontSize)
-        .field("backgroundColor", &EditorLayoutState::backgroundColor)
-        .field("backgroundImage", &EditorLayoutState::backgroundImage)
-        .field("compactControls", &EditorLayoutState::compactControls)
-        .field("reduceMotion", &EditorLayoutState::reduceMotion)
-        .field("selectedObject", &EditorLayoutState::selectedObject)
-        .field("uiScale", &EditorLayoutState::uiScale)
-        .field("allowDocking", &EditorLayoutState::allowDocking)
-        .field("showToolbar", &EditorLayoutState::showToolbar)
-        .field("showStatusBar", &EditorLayoutState::showStatusBar)
-        .field("showHierarchy", &EditorLayoutState::showHierarchy)
-        .field("showInspector", &EditorLayoutState::showInspector)
-        .field("showViewport", &EditorLayoutState::showViewport)
-        .field("showGame", &EditorLayoutState::showGame)
-        .field("showAssets", &EditorLayoutState::showAssets)
-        .field("showConsole", &EditorLayoutState::showConsole)
-        .field("showProfiler", &EditorLayoutState::showProfiler)
-        .field("showRenderGraph", &EditorLayoutState::showRenderGraph)
-        .field("showSettings", &EditorLayoutState::showSettings)
-        .field("showMedia", &EditorLayoutState::showMedia)
-        .field("showBuild", &EditorLayoutState::showBuild)
-        .field("showRecovery", &EditorLayoutState::showRecovery)
-        .take(), &ignored);
-}
-
-[[maybe_unused]] const char* backend_name(render::BackendApi api) noexcept {
+[[maybe_unused]] const char *backend_name(render::BackendApi api) noexcept {
     switch (api) {
-    case render::BackendApi::DirectX11: return "DirectX 11";
-    case render::BackendApi::DirectX12: return "DirectX 12";
-    case render::BackendApi::Vulkan: return "Vulkan";
-    default: return "Null";
+    case render::BackendApi::DirectX11:
+        return "DirectX 11";
+    case render::BackendApi::DirectX12:
+        return "DirectX 12";
+    case render::BackendApi::Vulkan:
+        return "Vulkan";
+    default:
+        return "Null";
     }
 }
 
-[[maybe_unused]] const char* device_state_name(render::RenderDeviceState state) noexcept {
+[[maybe_unused]] const char *device_state_name(render::RenderDeviceState state) noexcept {
     switch (state) {
-    case render::RenderDeviceState::Ready: return "Ready";
-    case render::RenderDeviceState::NeedsResize: return "Needs resize";
-    case render::RenderDeviceState::Lost: return "Lost";
-    default: return "Uninitialized";
+    case render::RenderDeviceState::Ready:
+        return "Ready";
+    case render::RenderDeviceState::NeedsResize:
+        return "Needs resize";
+    case render::RenderDeviceState::Lost:
+        return "Lost";
+    default:
+        return "Uninitialized";
     }
-}
-
-ui::ThemeColor parse_hex_color(std::string_view value, ui::ThemeColor fallback) noexcept {
-    if (value.size() != 7 || value.front() != '#') return fallback;
-    unsigned result = 0;
-    for (std::size_t index = 1; index < value.size(); ++index) {
-        const char character = value[index];
-        const unsigned digit = character >= '0' && character <= '9' ? static_cast<unsigned>(character - '0') :
-            character >= 'a' && character <= 'f' ? static_cast<unsigned>(character - 'a' + 10) :
-            character >= 'A' && character <= 'F' ? static_cast<unsigned>(character - 'A' + 10) : 16u;
-        if (digit > 15u) return fallback;
-        result = (result << 4u) | digit;
-    }
-    return {((result >> 16u) & 0xffu) / 255.0f, ((result >> 8u) & 0xffu) / 255.0f,
-            (result & 0xffu) / 255.0f, 1.0f};
-}
-
-std::string hex_color(ui::ThemeColor color) {
-    const auto byte = [](float value) { return static_cast<unsigned>(std::round(std::clamp(value, 0.0f, 1.0f) * 255.0f)); };
-    std::ostringstream output;
-    output << '#' << std::uppercase << std::hex << std::setfill('0') << std::setw(2) << byte(color.r)
-           << std::setw(2) << byte(color.g) << std::setw(2) << byte(color.b);
-    return output.str();
 }
 
 } // namespace
@@ -207,22 +160,20 @@ std::string hex_color(ui::ThemeColor color) {
 EditorLayer::EditorLayer() = default;
 EditorLayer::~EditorLayer() = default;
 
-bool EditorLayer::initialize(bool enableImGui) {
-    (void)enableImGui;
-    if (initialized_) return true;
+bool EditorLayer::initialize(bool enablePresentation) {
+    if (initialized_)
+        return true;
     register_builtin_panels();
-    if (uiComponents_.size() == 0) {
-        uiComponents_.emplace<ui::Button>("play", "Play");
-        uiComponents_.emplace<ui::Button>("pause", "Pause");
-        uiComponents_.emplace<ui::Button>("step", "Step");
-        uiComponents_.emplace<ui::Button>("save", "Save");
-        uiComponents_.emplace<ui::Button>("build", "Build");
-        uiComponents_.emplace<ui::Button>("reset", "Reset");
-    }
     build_default_workspace();
     load_layout_file();
-    if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
+    if (!projectRootOverride_.empty())
+        layout_.projectRoot = projectRootOverride_;
     fileSystem_.set_root(layout_.projectRoot);
+    if (fileSystem_.exists(editor_preferences_path)) {
+        std::string preferenceError;
+        if (!load_editor_preferences(fileSystem_, preferences_, preferenceError))
+            push_console("Preferences load failed: " + preferenceError);
+    }
     load_file_history();
     buildSystem_.set_project_root(fileSystem_.root());
     buildSystem_.refresh_toolchains();
@@ -233,93 +184,39 @@ bool EditorLayer::initialize(bool enableImGui) {
     load_style_file();
     sync_style_to_layout();
     load_workspace_file();
-    if (!themeRegistry_.find(layout_.theme)) layout_.theme = std::string(kDarkTheme);
+    if (!themeRegistry_.find(layout_.theme))
+        layout_.theme = std::string(kDarkTheme);
     themeRegistry_.switch_theme(layout_.theme);
     sync_page_visibility();
     sync_workspace_visibility();
     refresh_asset_cache();
-    install_native_menu();
-    // The retained UI owns the portable menu on platforms without a native
-    // menu integration. Inject only the capability result so the UI core
-    // stays independent of Win32/Cocoa/GTK/etc.
-    editorUi_.set_native_main_menu_available(nativeMenu_ != nullptr);
-    editorUi_.initialize({
-        [this](EditorCommand command, std::string_view target) {
-            if (activeWorld_) dispatch_command(command, target, *activeWorld_);
-        },
-        [this](ObjectId id) {
-            layout_.selectedObject = id;
-            uiModel_.select_object(id);
-            set_selected_asset({});
-        },
-        [this](ObjectId id, std::string name) {
-            if (activeWorld_) {
-                if (auto* object = activeWorld_->find_object(id)) {
-                    object->set_name(std::move(name));
-                    uiModel_.invalidate();
-                }
-            }
-        },
-        [this](ObjectId id, bool active) {
-            if (activeWorld_) {
-                if (auto* object = activeWorld_->find_object(id)) {
-                    object->set_active(active);
-                    uiModel_.invalidate();
-                }
-            }
-        },
-        [this](std::string filter) { uiModel_.set_object_filter(std::move(filter)); },
-        [this](std::string path) { set_selected_asset(std::move(path)); },
-        [this](EditorAssetAction action, std::string path, std::string value) {
-            handle_asset_action(action, std::move(path), std::move(value));
-        },
-        [this](std::string_view mode) {
-            renderViewMode_ = std::string(mode);
-            if (activeWorld_) apply_render_view_mode(*activeWorld_, renderViewMode_);
-        },
-        [this](std::string_view panelId) {
-            // Closing a tab is a visibility operation, so it remains
-            // reversible through the Window menu and preserves the user's
-            // dock topology instead of destroying the panel registration.
-            set_panel_visible(panelId, false);
-        },
-        [this](std::string_view id, std::string_view value) {
-            if (id.rfind("build-profile.", 0) == 0) return edit_build_profile_field(id, value);
-            return edit_field(id, value);
-        },
-        [this](ViewportNavigation action, math::Vec2 delta) { navigate_viewport(action, delta); },
-        [this](ViewportNavigation action, math::Vec2 delta) { navigate_model_preview(action, delta); },
-        [this]() { reset_model_preview(); },
-        [this](std::int32_t delta) { select_model_material(delta); },
-        [this](std::int32_t delta) { select_model_texture(delta); },
-        [this]() { toggle_model_animation(); },
-        [this](std::int32_t delta) { select_model_animation(delta); },
-        [this](float normalizedTime) { seek_model_animation(normalizedTime); },
-        [this](std::string path, math::Vec2 point) { drop_asset_to_viewport(std::move(path), point); }
-    });
 #if defined(SHINKOU_WITH_IMGUI)
-    imguiEnabled_ = enableImGui;
-    if (imguiEnabled_) {
-        uninstall_native_menu();
-        editorUi_.set_native_main_menu_available(false);
-        if (!ImGui::GetCurrentContext()) {
-            ImGui::CreateContext();
-            uiContextOwned_ = true;
-        }
-        auto& io = ImGui::GetIO();
+    if (enablePresentation) {
+        previousUiContext_ = ImGui::GetCurrentContext();
+        uiContext_ = ImGui::CreateContext();
+        auto &io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 #if defined(IMGUI_HAS_DOCK)
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
         imguiView_ = std::make_unique<EditorImGuiView>();
+        const auto *qa = std::getenv("SHINKOU_EDITOR_UI_QA");
+        uiQaEnabled_ = uiQaEnabled_ || (qa && std::string_view(qa) == "1") ||
+                       std::getenv("SHINKOU_UI_QA_SNAPSHOT");
+        imguiView_->set_qa_enabled(uiQaEnabled_);
         imguiView_->initialize(*this);
 #if defined(SHINKOU_PLATFORM_WINDOWS)
         if (nativeWindow_) {
             imguiPlatformInitialized_ = ImGui_ImplWin32_Init(nativeWindow_);
-            if (!imguiPlatformInitialized_) push_console("ImGui Win32 platform initialization failed");
+            if (!imguiPlatformInitialized_)
+                push_console("ImGui Win32 platform initialization failed");
         }
 #endif
-        apply_theme();
+    }
+#else
+    if (enablePresentation) {
+        push_console("Editor presentation requires SHINKOU_ENABLE_IMGUI");
+        return false;
     }
 #endif
     initialized_ = true;
@@ -327,249 +224,137 @@ bool EditorLayer::initialize(bool enableImGui) {
     return true;
 }
 
-void EditorLayer::process_input(const input::InputSystem& input, World& world) {
-    if (!initialized_) return;
+void EditorLayer::process_input(const input::InputSystem &input, World &world) {
+    if (!initialized_)
+        return;
+#if defined(SHINKOU_WITH_IMGUI)
+    if (uiContext_)
+        ImGui::SetCurrentContext(static_cast<ImGuiContext *>(uiContext_));
+#endif
     activeWorld_ = &world;
-    if (fileRecoveryUiDirty_) sync_file_recovery_ui_state();
+    if (fileRecoveryUiDirty_)
+        sync_file_recovery_ui_state();
     // The component is registered on every active world so a dropped asset
     // reference can survive scene document capture/restore and editor undo.
     world.register_component_type<AssetReferenceComponent>("AssetReference");
     poll_build();
     poll_ide_process();
-    // EditorUi is the authoritative editor input route. The previous
-    // compatibility runtime was laid out and dispatched every event even
-    // though it had no editor host, doubling input work on the frame thread.
-    uiInputStats_ = {};
-    if (imguiEnabled_) return; // Official Win32 backend owns native widget input.
-    editorUi_.set_display_size(displayWidth_, displayHeight_, effective_editor_ui_scale(displayDpiScale_, layout_.uiScale));
-    editorUi_.process_input(input);
+    // Native input is owned by the official Win32 adapter. Offscreen tests
+    // feed the same ImGui controls through the engine input adapter.
+    if (imguiView_ && !imguiPlatformInitialized_)
+        imguiView_->process_input(input);
 }
 
 void EditorLayer::navigate_viewport(ViewportNavigation action, math::Vec2 delta) {
-    if (!activeWorld_ || !math::IsFinite(delta.x) || !math::IsFinite(delta.y)) return;
-    bool moved = false;
-    activeWorld_->ecs().each<render::CameraComponent, render::TransformComponent>(
-        [&](Entity, auto& camera, auto& transform) {
-            if (moved || !camera.active || !transform.visible) return;
-            moved = true;
-            const float dpi=imguiEnabled_ ? ui_dpi_scale() : 1.0f;
-            const float height=std::max(1.0f,ui_viewport_rect().height*dpi);
-            navigate_editor_camera(camera,transform.local,action,delta,height,dpi,orbitDistance_);
-        });
-    if (!moved) lastStatus_ = "No active scene camera";
-}
-
-void EditorLayer::apply_render_view_mode(World& world, std::string_view mode) {
-    orbitDistance_ = 5.0f;
-    bool applied = false;
-    world.ecs().each<render::CameraComponent, render::TransformComponent>(
-        [mode, &applied](Entity, render::CameraComponent& camera, render::TransformComponent& transform) {
-            if (applied || !camera.active || !transform.visible) return;
-            applied = true;
-            camera.orthographic = mode != "Perspective";
-            if (mode == "Front") {
-                transform.local.position = {0.0f, 0.0f, -5.0f};
-                transform.local.rotation = math::Quat::Identity();
-            } else if (mode == "Side" || mode == "Right") {
-                transform.local.position = {5.0f, 0.0f, 0.0f};
-                transform.local.rotation = math::FromEulerXYZ({0.0f, -math::Pi * 0.5f, 0.0f});
-            } else if (mode == "Left") {
-                transform.local.position = {-5,0,0}; transform.local.rotation = math::FromEulerXYZ({0,math::Pi*0.5f,0});
-            } else if (mode == "Back") {
-                transform.local.position = {0,0,5}; transform.local.rotation = math::FromEulerXYZ({0,math::Pi,0});
-            } else if (mode == "Bottom") {
-                transform.local.position = {0,-5,0}; transform.local.rotation = math::FromEulerXYZ({-math::Pi*0.5f,0,0});
-            } else if (mode == "Top") {
-                transform.local.position = {0.0f, 5.0f, 0.0f};
-                transform.local.rotation = math::FromEulerXYZ({math::Pi * 0.5f, 0.0f, 0.0f});
-            } else {
-                transform.local.position = {0.0f, 0.0f, -5.0f};
-                transform.local.rotation = math::Quat::Identity();
-            }
-    });
-}
-
-void EditorLayer::prepare_frame(render::Renderer& renderer, World& world) {
-    if (!initialized_) return;
-    activeWorld_ = &world;
-    const float uiScale = effective_editor_ui_scale(displayDpiScale_, layout_.uiScale);
-    if (imguiEnabled_ && imguiView_) {
-        render::EditorViewportSeam seam;
-        seam.viewport = {0,0,displayWidth_,displayHeight_};
-        seam.scissor=seam.viewport; seam.enabled=true; seam.strictTarget=false;
-        renderer.set_editor_viewport(seam);
+    if (!activeWorld_)
         return;
-    }
-    editorUi_.set_display_size(displayWidth_, displayHeight_, uiScale);
-    editorUi_.prepare_layout(layout_, dockWorkspace_);
+    ensure_viewport_camera(*activeWorld_);
+    const float layoutScale = imguiView_ ? ui_dpi_scale() : 1;
+    viewportController_.navigate(action, delta,
+                                 std::max(1.f, ui_viewport_rect().height * layoutScale),
+                                 displayDpiScale_, preferences_.camera);
+}
+void EditorLayer::fly_viewport(const EditorActionBatch &actions, float seconds) {
+    viewportController_.fly(actions, seconds, preferences_.camera);
+}
+void EditorLayer::apply_render_view_mode(World &, std::string_view mode) {
+    viewportController_.set_view_mode(mode);
+}
 
-    const auto viewport = editorUi_.viewport_rect();
-    if (!layout_.showViewport || viewport.width <= 1.0f || viewport.height <= 1.0f) {
+void EditorLayer::prepare_frame(render::Renderer &renderer, World &world) {
+    if (!initialized_)
+        return;
+#if defined(SHINKOU_WITH_IMGUI)
+    if (uiContext_)
+        ImGui::SetCurrentContext(static_cast<ImGuiContext *>(uiContext_));
+#endif
+    activeWorld_ = &world;
+    ensure_viewport_camera(world);
+    viewportController_.apply_settings(preferences_.camera);
+    if (!imguiView_) {
         renderer.clear_editor_viewport();
         return;
     }
-
-    // DockLayout is expressed in logical Slate-style coordinates. Renderer
-    // seams are expressed in physical client pixels, just like D3D viewports.
     render::EditorViewportSeam seam;
-    seam.viewport = {viewport.x * uiScale, viewport.y * uiScale,
-                     viewport.width * uiScale, viewport.height * uiScale};
+    seam.viewport = {0, 0, displayWidth_, displayHeight_};
     seam.scissor = seam.viewport;
     seam.enabled = true;
-    seam.strictTarget = true;
+    seam.strictTarget = false;
     if (!renderer.set_editor_viewport(seam) && !uiPresentationWarningEmitted_) {
-        push_console("Editor RenderView seam rejected: " + renderer.last_error());
+        push_console("Editor viewport rejected: " + renderer.last_error());
         uiPresentationWarningEmitted_ = true;
     }
 }
 
-void EditorLayer::install_native_menu() {
-#if defined(SHINKOU_PLATFORM_WINDOWS)
-    if (!nativeWindow_ || nativeMenu_) return;
-    const HWND window = static_cast<HWND>(nativeWindow_);
-    const EditorLocalization localization(layout_.language);
-    const auto item = [&](HMENU menu, UINT id, const char* label, bool enabled = true) {
-        const auto translated = std::string(localization.text(label));
-        append_native_item(menu, id, translated.c_str(), enabled);
-    };
-    const auto submenu = [&](HMENU menu, HMENU child, const char* label) {
-        const auto translated = std::string(localization.text(label));
-        append_native_submenu(menu, child, translated.c_str());
-    };
-    HMENU mainMenu = CreateMenu();
-    if (!mainMenu) return;
-
-    HMENU fileMenu = CreatePopupMenu();
-    item(fileMenu, kNativeNewScene, "New Scene");
-    item(fileMenu, kNativeOpenScene, "Open Scene...");
-    item(fileMenu, kNativeSaveScene, "Save Scene");
-    item(fileMenu, kNativeSaveAs, "Save Scene As...");
-    item(fileMenu, kNativeSaveLayout, "Save Layout");
-    item(fileMenu, kNativeReloadLayout, "Reload Layout");
-    item(fileMenu, kNativeResetLayout, "Reset Layout");
-    AppendMenuA(fileMenu, MF_SEPARATOR, 0, nullptr);
-    item(fileMenu, kNativeExit, "Exit");
-    submenu(mainMenu, fileMenu, "File");
-
-    HMENU editMenu = CreatePopupMenu();
-    item(editMenu, kNativeUndo, "Undo");
-    item(editMenu, kNativeRedo, "Redo");
-    item(editMenu, kNativeDeleteObject, "Delete Object");
-    item(editMenu, kNativeFrameSelection, "Frame Selected");
-    item(editMenu, kNativeSettings, "Editor Settings");
-    submenu(mainMenu, editMenu, "Edit");
-
-    HMENU assetsMenu = CreatePopupMenu();
-    item(assetsMenu, kNativeRefreshAssets, "Refresh");
-    submenu(mainMenu, assetsMenu, "Assets");
-
-    HMENU buildMenu = CreatePopupMenu();
-    item(buildMenu, kNativeBuildProject, "Build Project");
-    item(buildMenu, kNativeCancelBuild, "Cancel Build");
-    item(buildMenu, kNativeRefreshBuildTools, "Refresh Toolchains");
-    item(buildMenu, kNativeRefreshProjectFiles, "Discover Project Files");
-    item(buildMenu, kNativeAssociateProjectFile, "Associate Recommended Project");
-    item(buildMenu, kNativeGenerateClangdConfig, "Generate .clangd");
-    item(buildMenu, kNativeImportCompileCommands, "Import compile_commands.json");
-    item(buildMenu, kNativeExportCompileCommands, "Export compile_commands.json");
-    item(buildMenu, kNativeOpenVisualStudio, "Open in Visual Studio");
-    item(buildMenu, kNativeOpenRider, "Open in Rider");
-    item(buildMenu, kNativeOpenVisualStudioCode, "Open in VS Code");
-    item(buildMenu, kNativeSaveBuildProfile, "Save Build Profile");
-    item(buildMenu, kNativeReloadBuildProfile, "Reload Build Profile");
-    submenu(mainMenu, buildMenu, "Build");
-
-    HMENU gameObjectMenu = CreatePopupMenu();
-    item(gameObjectMenu, kNativeCreateEmpty, "Create Empty");
-    item(gameObjectMenu, kNativeCreateChild, "Create Child");
-    HMENU create3dMenu = CreatePopupMenu();
-    item(create3dMenu, kNativeCreate3D, "3D Object (factory unavailable)", false);
-    submenu(gameObjectMenu, create3dMenu, "3D Object");
-    HMENU create2dMenu = CreatePopupMenu();
-    item(create2dMenu, kNativeCreate2D, "2D Object (factory unavailable)", false);
-    submenu(gameObjectMenu, create2dMenu, "2D Object");
-    item(gameObjectMenu, kNativeCreateUi, "UI Object (factory unavailable)", false);
-    submenu(mainMenu, gameObjectMenu, "GameObject");
-
-    HMENU componentMenu = CreatePopupMenu();
-    item(componentMenu, kNativeAddComponent, "Add Component");
-    submenu(mainMenu, componentMenu, "Component");
-
-    HMENU windowMenu = CreatePopupMenu();
-    item(windowMenu, kNativeScenePage, "Scene");
-    item(windowMenu, kNativeGamePage, "Game");
-    item(windowMenu, kNativeHierarchyPage, "Hierarchy");
-    item(windowMenu, kNativeInspectorPage, "Inspector");
-    item(windowMenu, kNativeProjectPage, "Project");
-    item(windowMenu, kNativeConsolePage, "Console");
-    item(windowMenu, kNativeProfilerPage, "Profiler");
-    item(windowMenu, kNativeRenderGraphPage, "Render Graph");
-    item(windowMenu, kNativeBuildPage, "Build");
-    item(windowMenu, kNativeSettings, "Editor Settings");
-    submenu(mainMenu, windowMenu, "Window");
-
-    HMENU themeMenu = CreatePopupMenu();
-    item(themeMenu, kNativeDarkTheme, "Dark");
-    item(themeMenu, kNativeLightTheme, "Light");
-    item(themeMenu, kNativeHighContrastTheme, "High Contrast");
-    submenu(mainMenu, themeMenu, "Theme");
-
-    HMENU helpMenu = CreatePopupMenu();
-    item(helpMenu, kNativeAbout, "About ShinkouEngine");
-    submenu(mainMenu, helpMenu, "Help");
-
-    SetMenu(window, mainMenu);
-    DrawMenuBar(window);
-    nativeMenu_ = mainMenu;
-#endif
-}
-
-void EditorLayer::uninstall_native_menu() {
-#if defined(SHINKOU_PLATFORM_WINDOWS)
-    if (!nativeWindow_ || !nativeMenu_) return;
-    const HWND window = static_cast<HWND>(nativeWindow_);
-    SetMenu(window, nullptr);
-    DestroyMenu(static_cast<HMENU>(nativeMenu_));
-    nativeMenu_ = nullptr;
-#endif
-}
-
-void EditorLayer::handle_native_menu_command(std::uint32_t command, World& world) {
+void EditorLayer::handle_native_menu_command(std::uint32_t command, World &world) {
     if (command == 49000) {
-        if (const char* path = std::getenv("SHINKOU_UI_QA_SNAPSHOT")) {
+        if (const char *path = std::getenv("SHINKOU_UI_QA_SNAPSHOT")) {
             std::ofstream out(path);
-            const char* view = editorUi_.asset_view()==EditorAssetView::Tree ? "tree" : editorUi_.asset_view()==EditorAssetView::LargeIcons ? "large" : "small";
-            out << "state " << ui_dpi_scale() << ' ' << std::quoted(selectedAsset_) << ' ' << std::quoted(lastStatus_)
-                << " view=" << view << " scroll=" << (imguiView_ ? imguiView_->asset_scroll() : editorUi_.asset_scroll_offset()) << " theme=" << layout_.theme
-                << " playing=" << uiModel_.playing() << " paused=" << uiModel_.paused()
-                << " dir=" << assetDirectory_.generic_string()
-                << " focus=" << std::quoted(imguiView_ ? imguiView_->focused() : editorUi_.focused_region())
-                << " filter=" << std::quoted(imguiView_ ? std::string(imguiView_->asset_filter()) : editorUi_.asset_filter())
-                << " assettab=" << std::quoted(imguiView_ ? imguiView_->asset_tab() : "retained")
-                << " edit=" << std::quoted(editorUi_.asset_edit_target())
-                << " preview=" << std::quoted(assetPreviewState_.status)
-                << " textlines=" << (assetPreviewState_.textPreview ? assetPreviewState_.textPreview->lines.size() : 0)
+            const char *view = assetBrowser_.view == EditorAssetView::Tree         ? "tree"
+                               : assetBrowser_.view == EditorAssetView::LargeIcons ? "large"
+                                                                                   : "small";
+            const auto performance = ui_performance();
+            out << "state " << ui_dpi_scale() << ' ' << std::quoted(assetBrowser_.selection) << ' '
+                << std::quoted(lastStatus_) << " view=" << view
+                << " scroll=" << (imguiView_ ? imguiView_->asset_scroll() : 0.0f)
+                << " theme=" << layout_.theme << " playing=" << uiModel_.playing()
+                << " paused=" << uiModel_.paused()
+                << " dir=" << assetBrowser_.directory.generic_string()
+                << " focus=" << std::quoted(imguiView_ ? imguiView_->focused() : std::string{})
+                << " filter=" << std::quoted(assetBrowser_.filter)
+                << " assettab=" << std::quoted(imguiView_ ? imguiView_->asset_tab() : "none")
+                << " edit="
+                << std::quoted(imguiView_ ? imguiView_->asset_edit_target() : std::string{})
+                << " preview=" << std::quoted(assetPreviewState_.status) << " textlines="
+                << (assetPreviewState_.textPreview ? assetPreviewState_.textPreview->lines.size()
+                                                   : 0)
                 << " media=" << std::quoted(uiModel_.media_state().playbackState)
                 << " cursor=" << uiModel_.media_state().currentTime
                 << " videoframe=" << (videoPreviewSnapshot_ ? videoPreviewSnapshot_->frameTime : -1)
                 << " settings=" << std::quoted(assetSettingsStatus_)
                 << " pitch=" << assetSettings_.pitch << " pan=" << assetSettings_.pan
-                << " videorate=" << assetSettings_.videoRate
-                << " wrap=" << assetSettings_.wordWrap << " rotate=" << assetSettings_.modelAutoRotate
+                << " videorate=" << assetSettings_.videoRate << " wrap=" << assetSettings_.wordWrap
+                << " rotate=" << assetSettings_.modelAutoRotate
                 << " fontpixels=" << (imguiView_ ? imguiView_->font_pixels() : 0)
-                << " framebuffer=" << (imguiView_ ? imguiView_->framebuffer_size() : "retained") << '\n';
-            world.ecs().each<render::CameraComponent, render::TransformComponent>([&](Entity, const auto& camera, const auto& pose) {
-                if(camera.active) out << "camera " << property_text(pose.local.position) << ' ' << property_text(pose.local.rotation) << ' ' << camera.orthographicSize << '\n';
-            });
-            for (const auto& pair : ui_interaction_regions())
-                out << "region " << std::quoted(pair.first) << ' ' << pair.second.x << ' ' << pair.second.y << ' ' << pair.second.width << ' ' << pair.second.height << '\n';
-            if(imguiView_)for(const auto& [id,surface]:imguiView_->region_surfaces())
-                out<<"surface "<<std::quoted(id)<<' '<<surface.window<<' '<<surface.pixels.x<<' '<<surface.pixels.y<<' '<<surface.pixels.width<<' '<<surface.pixels.height<<'\n';
-            if (auto* object = world.find_object(layout_.selectedObject)) {
+                << " framebuffer=" << (imguiView_ ? imguiView_->framebuffer_size() : "none")
+                << " hierarchy-rows=" << performance.hierarchyRows
+                << " hierarchy-submitted=" << performance.hierarchySubmitted
+                << " hierarchy-rebuilds=" << performance.hierarchyRebuilds
+                << " qa-regions=" << performance.qaRegions << " scene-ready="
+                << (modelSceneRenderState_.rendererReady && modelSceneRenderState_.pipelineReady &&
+                    modelSceneRenderState_.submittedInstances > 0)
+                << " scene-instances=" << modelSceneRenderState_.submittedInstances
+                << " scene-geometry-bytes=" << modelSceneRenderState_.geometryUploadBytes
+                << " scene-uniform-bytes=" << modelSceneRenderState_.uniformUploadBytes
+                << " scene-material-creations=" << modelSceneRenderState_.materialCreations << '\n';
+            out << "preferences fly-speed=" << preferences_.camera.flySpeed
+                << " render-scale=" << preferences_.viewport.renderScale
+                << " snapping=" << preferences_.gizmo.snapping
+                << " local=" << preferences_.gizmo.localSpace
+                << " tool=" << static_cast<int>(viewportController_.tool())
+                << " settings-visible=" << layout_.showSettings << '\n';
+            for (const auto &binding : preferences_.bindings)
+                out << "binding " << std::quoted(binding.action) << ' '
+                    << std::quoted(editor_binding_name(binding)) << '\n';
+            out << "camera " << property_text(viewportController_.pose().position) << ' '
+                << property_text(viewportController_.pose().rotation) << ' '
+                << viewportController_.camera().orthographicSize << '\n';
+            for (const auto &pair : ui_interaction_regions())
+                out << "region " << std::quoted(pair.first) << ' ' << pair.second.x << ' '
+                    << pair.second.y << ' ' << pair.second.width << ' ' << pair.second.height
+                    << '\n';
+            if (imguiView_)
+                for (const auto &[id, surface] : imguiView_->region_surfaces())
+                    out << "surface " << std::quoted(id) << ' ' << surface.window << ' '
+                        << surface.pixels.x << ' ' << surface.pixels.y << ' '
+                        << surface.pixels.width << ' ' << surface.pixels.height << '\n';
+            if (auto *object = world.find_object(layout_.selectedObject)) {
                 out << "object " << std::quoted(std::string(object->name())) << '\n';
-                for (const auto& field : uiModel_.inspector_fields()) {
-                    out << "field " << std::quoted(field.label) << ' ' << std::quoted(field.value) << '\n';
-                    out << "typed " << std::quoted(field.componentName+":"+field.label) << ' ' << std::quoted(property_text(field.data)) << '\n';
+                for (const auto &field : uiModel_.inspector_fields()) {
+                    out << "field " << std::quoted(field.label) << ' ' << std::quoted(field.value)
+                        << '\n';
+                    out << "typed " << std::quoted(field.componentName + ":" + field.label) << ' '
+                        << std::quoted(property_text(field.data)) << '\n';
                 }
             }
             out << "end\n";
@@ -578,53 +363,146 @@ void EditorLayer::handle_native_menu_command(std::uint32_t command, World& world
     }
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     switch (command) {
-    case kNativeNewScene: dispatch_command(EditorCommand::NewScene, {}, world); break;
-    case kNativeOpenScene: dispatch_command(EditorCommand::OpenScene, {}, world); break;
-    case kNativeSaveScene: dispatch_command(EditorCommand::SaveScene, {}, world); break;
-    case kNativeSaveAs: dispatch_command(EditorCommand::SaveSceneAs, {}, world); break;
-    case kNativeSaveLayout: dispatch_command(EditorCommand::SaveLayout, {}, world); break;
-    case kNativeReloadLayout: dispatch_command(EditorCommand::ReloadLayout, {}, world); break;
-    case kNativeResetLayout: dispatch_command(EditorCommand::ResetLayout, {}, world); break;
-    case kNativeSettings: dispatch_command(EditorCommand::ProjectSettings, {}, world); break;
-    case kNativeDeleteObject: dispatch_command(EditorCommand::DeleteObject, {}, world); break;
-    case kNativeFrameSelection: dispatch_command(EditorCommand::FrameSelection, {}, world); break;
-    case kNativeExit: dispatch_command(EditorCommand::Quit, {}, world); break;
-    case kNativeUndo: dispatch_command(EditorCommand::Undo, {}, world); break;
-    case kNativeRedo: dispatch_command(EditorCommand::Redo, {}, world); break;
-    case kNativeRefreshAssets: dispatch_command(EditorCommand::RefreshAssets, {}, world); break;
-    case kNativeBuildProject: dispatch_command(EditorCommand::BuildProject, {}, world); break;
-    case kNativeCancelBuild: dispatch_command(EditorCommand::CancelBuild, {}, world); break;
-    case kNativeRefreshBuildTools: dispatch_command(EditorCommand::RefreshBuildTools, {}, world); break;
-    case kNativeRefreshProjectFiles: dispatch_command(EditorCommand::RefreshProjectFiles, {}, world); break;
-    case kNativeAssociateProjectFile: dispatch_command(EditorCommand::AssociateProjectFile, {}, world); break;
-    case kNativeGenerateClangdConfig: dispatch_command(EditorCommand::GenerateClangdConfig, {}, world); break;
-    case kNativeImportCompileCommands: dispatch_command(EditorCommand::ImportCompileCommands, {}, world); break;
-    case kNativeExportCompileCommands: dispatch_command(EditorCommand::ExportCompileCommands, {}, world); break;
-    case kNativeOpenVisualStudio: dispatch_command(EditorCommand::OpenProjectInIde, "visual-studio", world); break;
-    case kNativeOpenRider: dispatch_command(EditorCommand::OpenProjectInIde, "rider", world); break;
-    case kNativeOpenVisualStudioCode: dispatch_command(EditorCommand::OpenProjectInIde, "vscode", world); break;
-    case kNativeSaveBuildProfile: dispatch_command(EditorCommand::SaveBuildProfile, {}, world); break;
-    case kNativeReloadBuildProfile: dispatch_command(EditorCommand::ReloadBuildProfile, {}, world); break;
-    case kNativeCreateEmpty: dispatch_command(EditorCommand::CreateEmpty, {}, world); break;
-    case kNativeCreateChild: dispatch_command(EditorCommand::CreateChild, {}, world); break;
-    case kNativeCreate3D: dispatch_command(EditorCommand::Create3DObject, {}, world); break;
-    case kNativeCreate2D: dispatch_command(EditorCommand::Create2DObject, {}, world); break;
-    case kNativeCreateUi: dispatch_command(EditorCommand::CreateUiObject, {}, world); break;
-    case kNativeAddComponent: dispatch_command(EditorCommand::AddComponent, {}, world); break;
-    case kNativeScenePage: dispatch_command(EditorCommand::TogglePage, "scene", world); break;
-    case kNativeGamePage: dispatch_command(EditorCommand::TogglePage, "game", world); break;
-    case kNativeHierarchyPage: dispatch_command(EditorCommand::TogglePage, "hierarchy", world); break;
-    case kNativeInspectorPage: dispatch_command(EditorCommand::TogglePage, "inspector", world); break;
-    case kNativeProjectPage: dispatch_command(EditorCommand::TogglePage, "project", world); break;
-    case kNativeConsolePage: dispatch_command(EditorCommand::TogglePage, "console", world); break;
-    case kNativeProfilerPage: dispatch_command(EditorCommand::TogglePage, "profiler", world); break;
-    case kNativeRenderGraphPage: dispatch_command(EditorCommand::TogglePage, "render-graph", world); break;
-    case kNativeBuildPage: dispatch_command(EditorCommand::TogglePage, "build", world); break;
-    case kNativeDarkTheme: dispatch_command(EditorCommand::SetDarkTheme, {}, world); break;
-    case kNativeLightTheme: dispatch_command(EditorCommand::SetLightTheme, {}, world); break;
-    case kNativeHighContrastTheme: dispatch_command(EditorCommand::SetHighContrastTheme, {}, world); break;
-    case kNativeAbout: push_console("ShinkouEngine Editor"); break;
-    default: break;
+    case kNativeNewScene:
+        dispatch_command(EditorCommand::NewScene, {}, world);
+        break;
+    case kNativeOpenScene:
+        dispatch_command(EditorCommand::OpenScene, {}, world);
+        break;
+    case kNativeSaveScene:
+        dispatch_command(EditorCommand::SaveScene, {}, world);
+        break;
+    case kNativeSaveAs:
+        dispatch_command(EditorCommand::SaveSceneAs, {}, world);
+        break;
+    case kNativeSaveLayout:
+        dispatch_command(EditorCommand::SaveLayout, {}, world);
+        break;
+    case kNativeReloadLayout:
+        dispatch_command(EditorCommand::ReloadLayout, {}, world);
+        break;
+    case kNativeResetLayout:
+        dispatch_command(EditorCommand::ResetLayout, {}, world);
+        break;
+    case kNativeSettings:
+        dispatch_command(EditorCommand::ProjectSettings, {}, world);
+        break;
+    case kNativeDeleteObject:
+        dispatch_command(EditorCommand::DeleteObject, {}, world);
+        break;
+    case kNativeFrameSelection:
+        dispatch_command(EditorCommand::FrameSelection, {}, world);
+        break;
+    case kNativeExit:
+        dispatch_command(EditorCommand::Quit, {}, world);
+        break;
+    case kNativeUndo:
+        dispatch_command(EditorCommand::Undo, {}, world);
+        break;
+    case kNativeRedo:
+        dispatch_command(EditorCommand::Redo, {}, world);
+        break;
+    case kNativeRefreshAssets:
+        dispatch_command(EditorCommand::RefreshAssets, {}, world);
+        break;
+    case kNativeBuildProject:
+        dispatch_command(EditorCommand::BuildProject, {}, world);
+        break;
+    case kNativeCancelBuild:
+        dispatch_command(EditorCommand::CancelBuild, {}, world);
+        break;
+    case kNativeRefreshBuildTools:
+        dispatch_command(EditorCommand::RefreshBuildTools, {}, world);
+        break;
+    case kNativeRefreshProjectFiles:
+        dispatch_command(EditorCommand::RefreshProjectFiles, {}, world);
+        break;
+    case kNativeAssociateProjectFile:
+        dispatch_command(EditorCommand::AssociateProjectFile, {}, world);
+        break;
+    case kNativeGenerateClangdConfig:
+        dispatch_command(EditorCommand::GenerateClangdConfig, {}, world);
+        break;
+    case kNativeImportCompileCommands:
+        dispatch_command(EditorCommand::ImportCompileCommands, {}, world);
+        break;
+    case kNativeExportCompileCommands:
+        dispatch_command(EditorCommand::ExportCompileCommands, {}, world);
+        break;
+    case kNativeOpenVisualStudio:
+        dispatch_command(EditorCommand::OpenProjectInIde, "visual-studio", world);
+        break;
+    case kNativeOpenRider:
+        dispatch_command(EditorCommand::OpenProjectInIde, "rider", world);
+        break;
+    case kNativeOpenVisualStudioCode:
+        dispatch_command(EditorCommand::OpenProjectInIde, "vscode", world);
+        break;
+    case kNativeSaveBuildProfile:
+        dispatch_command(EditorCommand::SaveBuildProfile, {}, world);
+        break;
+    case kNativeReloadBuildProfile:
+        dispatch_command(EditorCommand::ReloadBuildProfile, {}, world);
+        break;
+    case kNativeCreateEmpty:
+        dispatch_command(EditorCommand::CreateEmpty, {}, world);
+        break;
+    case kNativeCreateChild:
+        dispatch_command(EditorCommand::CreateChild, {}, world);
+        break;
+    case kNativeCreate3D:
+        dispatch_command(EditorCommand::Create3DObject, {}, world);
+        break;
+    case kNativeCreate2D:
+        dispatch_command(EditorCommand::Create2DObject, {}, world);
+        break;
+    case kNativeCreateUi:
+        dispatch_command(EditorCommand::CreateUiObject, {}, world);
+        break;
+    case kNativeAddComponent:
+        dispatch_command(EditorCommand::AddComponent, {}, world);
+        break;
+    case kNativeScenePage:
+        dispatch_command(EditorCommand::TogglePage, "scene", world);
+        break;
+    case kNativeGamePage:
+        dispatch_command(EditorCommand::TogglePage, "game", world);
+        break;
+    case kNativeHierarchyPage:
+        dispatch_command(EditorCommand::TogglePage, "hierarchy", world);
+        break;
+    case kNativeInspectorPage:
+        dispatch_command(EditorCommand::TogglePage, "inspector", world);
+        break;
+    case kNativeProjectPage:
+        dispatch_command(EditorCommand::TogglePage, "project", world);
+        break;
+    case kNativeConsolePage:
+        dispatch_command(EditorCommand::TogglePage, "console", world);
+        break;
+    case kNativeProfilerPage:
+        dispatch_command(EditorCommand::TogglePage, "profiler", world);
+        break;
+    case kNativeRenderGraphPage:
+        dispatch_command(EditorCommand::TogglePage, "render-graph", world);
+        break;
+    case kNativeBuildPage:
+        dispatch_command(EditorCommand::TogglePage, "build", world);
+        break;
+    case kNativeDarkTheme:
+        dispatch_command(EditorCommand::SetDarkTheme, {}, world);
+        break;
+    case kNativeLightTheme:
+        dispatch_command(EditorCommand::SetLightTheme, {}, world);
+        break;
+    case kNativeHighContrastTheme:
+        dispatch_command(EditorCommand::SetHighContrastTheme, {}, world);
+        break;
+    case kNativeAbout:
+        push_console("ShinkouEngine Editor");
+        break;
+    default:
+        break;
     }
 #else
     (void)command;
@@ -633,7 +511,8 @@ void EditorLayer::handle_native_menu_command(std::uint32_t command, World& world
 }
 
 void EditorLayer::register_builtin_panels() {
-    if (!panels_.empty()) return;
+    if (!panels_.empty())
+        return;
     const auto add = [this](std::string id, std::string title, bool visible) {
         panels_.push_back(EditorPanel{std::move(id), std::move(title), visible, {}});
         panelVisibility_[panels_.back().id] = visible;
@@ -656,12 +535,14 @@ void EditorLayer::build_default_workspace() {
     auto leaf = [](std::string id, std::string title, bool visible, math::Vec2 minimum) {
         return DockNode::leaf(DockPanel{std::move(id), std::move(title), visible, true, minimum});
     };
-    auto bottom = DockNode::tab_stack({
-        DockPanel{"assets", "Asset Browser", true, true, {180.0f, 90.0f}},
-        DockPanel{"console", "Console", true, true, {180.0f, 90.0f}},
-        DockPanel{"build", "Build", false, true, {220.0f, 180.0f}},
-        DockPanel{"recovery", "File Recovery", false, true, {220.0f, 160.0f}},
-    }, 0);
+    auto bottom = DockNode::tab_stack(
+        {
+            DockPanel{"assets", "Asset Browser", true, true, {180.0f, 90.0f}},
+            DockPanel{"console", "Console", true, true, {180.0f, 90.0f}},
+            DockPanel{"build", "Build", false, true, {220.0f, 180.0f}},
+            DockPanel{"recovery", "File Recovery", false, true, {220.0f, 160.0f}},
+        },
+        0);
     auto center = DockNode::split(leaf("viewport", "Viewport", true, {320.0f, 220.0f}),
                                   std::move(bottom), DockSplitOrientation::Vertical, 0.64f);
     auto right = DockNode::split(leaf("inspector", "Inspector", true, {240.0f, 220.0f}),
@@ -670,25 +551,34 @@ void EditorLayer::build_default_workspace() {
     auto middle = DockNode::split(std::move(center), std::move(right),
                                   DockSplitOrientation::Horizontal, 0.76f);
     dockWorkspace_.set_root(DockNode::split(leaf("hierarchy", "Hierarchy", true, {220.0f, 220.0f}),
-                                            std::move(middle), DockSplitOrientation::Horizontal, 0.2f));
-    dockWorkspace_.add_tab("viewport", DockPanel{"game", "Game", false, true, {320.0f, 220.0f}}, false);
-    dockWorkspace_.add_tab("console", DockPanel{"render-graph", "Render Graph", false, true, {240.0f, 120.0f}}, false);
-    dockWorkspace_.add_tab("console", DockPanel{"settings", "Editor Settings", false, true, {240.0f, 160.0f}}, false);
-    dockWorkspace_.add_tab("viewport", DockPanel{"media", "Media Preview", false, true, {280.0f, 180.0f}}, false);
+                                            std::move(middle), DockSplitOrientation::Horizontal,
+                                            0.2f));
+    dockWorkspace_.add_tab("viewport", DockPanel{"game", "Game", false, true, {320.0f, 220.0f}},
+                           false);
+    dockWorkspace_.add_tab(
+        "console", DockPanel{"render-graph", "Render Graph", false, true, {240.0f, 120.0f}}, false);
+    dockWorkspace_.add_tab(
+        "console", DockPanel{"settings", "Editor Settings", false, true, {240.0f, 160.0f}}, false);
+    dockWorkspace_.add_tab(
+        "viewport", DockPanel{"media", "Media Preview", false, true, {280.0f, 180.0f}}, false);
     const auto isBuiltin = [](std::string_view id) {
-        return id == "hierarchy" || id == "inspector" || id == "viewport" || id == "game" || id == "assets" ||
-            id == "console" || id == "profiler" || id == "render-graph" || id == "settings" || id == "media" ||
-            id == "build" || id == "recovery";
+        return id == "hierarchy" || id == "inspector" || id == "viewport" || id == "game" ||
+               id == "assets" || id == "console" || id == "profiler" || id == "render-graph" ||
+               id == "settings" || id == "media" || id == "build" || id == "recovery";
     };
-    for (const auto& panel : panels_) {
-        if (!isBuiltin(panel.id)) dockWorkspace_.add_tab("viewport", DockPanel{panel.id, panel.title, panel.defaultVisible, true, {160.0f, 100.0f}}, false);
+    for (const auto &panel : panels_) {
+        if (!isBuiltin(panel.id))
+            dockWorkspace_.add_tab(
+                "viewport",
+                DockPanel{panel.id, panel.title, panel.defaultVisible, true, {160.0f, 100.0f}},
+                false);
     }
     sync_workspace_visibility();
 }
 
 void EditorLayer::sync_workspace_visibility() noexcept {
-    for (const auto& [id, visible] : panelVisibility_) dockWorkspace_.set_panel_visibility(id, visible);
-    editorUi_.invalidate_layout();
+    for (const auto &[id, visible] : panelVisibility_)
+        dockWorkspace_.set_panel_visibility(id, visible);
 }
 
 void EditorLayer::sync_page_visibility() noexcept {
@@ -707,22 +597,30 @@ void EditorLayer::sync_page_visibility() noexcept {
 }
 
 bool EditorLayer::register_panel(EditorPanel panel) {
-    if (panel.id.empty() || panel.title.empty() || !panel.draw || panelVisibility_.find(panel.id) != panelVisibility_.end()) return false;
+    if (panel.id.empty() || panel.title.empty() || !panel.draw ||
+        panelVisibility_.find(panel.id) != panelVisibility_.end())
+        return false;
     panelVisibility_[panel.id] = panel.defaultVisible;
-    const DockPanel dockPanel{panel.id, panel.title, panel.defaultVisible, panel.closeable, {panel.minWidth, panel.minHeight}};
+    const DockPanel dockPanel{panel.id,
+                              panel.title,
+                              panel.defaultVisible,
+                              panel.closeable,
+                              {panel.minWidth, panel.minHeight}};
     panels_.push_back(std::move(panel));
     if (initialized_) {
         dockWorkspace_.add_tab("viewport", dockPanel, false);
-        editorUi_.invalidate_layout();
     }
     return true;
 }
 
 bool EditorLayer::unregister_panel(std::string_view id) {
-    const auto it = std::find_if(panels_.begin(), panels_.end(), [id](const EditorPanel& panel) { return panel.id == id; });
-    if (it == panels_.end() || it->id == "hierarchy" || it->id == "inspector" || it->id == "viewport") return false;
+    const auto it = std::find_if(panels_.begin(), panels_.end(),
+                                 [id](const EditorPanel &panel) { return panel.id == id; });
+    if (it == panels_.end() || it->id == "hierarchy" || it->id == "inspector" ||
+        it->id == "viewport")
+        return false;
     dockWorkspace_.remove_tab(it->id);
-    editorUi_.invalidate_layout();
+
     panelVisibility_.erase(it->id);
     panels_.erase(it);
     return true;
@@ -730,23 +628,37 @@ bool EditorLayer::unregister_panel(std::string_view id) {
 
 bool EditorLayer::set_panel_visible(std::string_view id, bool visible) {
     const auto it = panelVisibility_.find(std::string(id));
-    if (it == panelVisibility_.end()) return false;
-    if(id=="inspector"&&!visible)finish_inspector_edit();
+    if (it == panelVisibility_.end())
+        return false;
+    if (id == "inspector" && !visible)
+        finish_inspector_edit();
     it->second = visible;
-    if (id == "hierarchy") layout_.showHierarchy = visible;
-    else if (id == "inspector") layout_.showInspector = visible;
-    else if (id == "viewport") layout_.showViewport = visible;
-    else if (id == "game") layout_.showGame = visible;
-    else if (id == "assets") layout_.showAssets = visible;
-    else if (id == "console") layout_.showConsole = visible;
-    else if (id == "profiler") layout_.showProfiler = visible;
-    else if (id == "render-graph") layout_.showRenderGraph = visible;
-    else if (id == "settings") layout_.showSettings = visible;
-    else if (id == "media") layout_.showMedia = visible;
-    else if (id == "build") layout_.showBuild = visible;
-    else if (id == "recovery") layout_.showRecovery = visible;
+    if (id == "hierarchy")
+        layout_.showHierarchy = visible;
+    else if (id == "inspector")
+        layout_.showInspector = visible;
+    else if (id == "viewport")
+        layout_.showViewport = visible;
+    else if (id == "game")
+        layout_.showGame = visible;
+    else if (id == "assets")
+        layout_.showAssets = visible;
+    else if (id == "console")
+        layout_.showConsole = visible;
+    else if (id == "profiler")
+        layout_.showProfiler = visible;
+    else if (id == "render-graph")
+        layout_.showRenderGraph = visible;
+    else if (id == "settings")
+        layout_.showSettings = visible;
+    else if (id == "media")
+        layout_.showMedia = visible;
+    else if (id == "build")
+        layout_.showBuild = visible;
+    else if (id == "recovery")
+        layout_.showRecovery = visible;
     dockWorkspace_.set_panel_visibility(id, visible);
-    editorUi_.invalidate_layout();
+
     sync_page_visibility();
     return true;
 }
@@ -761,16 +673,18 @@ void EditorLayer::set_project_root(std::string path) {
     clear_audio_asset_bindings();
     reset_model_scene_assets();
     pendingAssetReferenceRefreshes_.clear();
-    if (initialized_ && assetSystem_) assetSystemRootNeedsRestart_ = true;
+    if (initialized_ && assetSystem_)
+        assetSystemRootNeedsRestart_ = true;
     reset_asset_system_preview("AssetSystem root changed; waiting for resource index...");
-    reset_asset_manifest(assetSystemRootNeedsRestart_ ?
-        "AssetSystem root changed; restart editor to reconnect resources..." :
-        "AssetSystem manifest root changed; waiting for rescan...");
+    reset_asset_manifest(assetSystemRootNeedsRestart_
+                             ? "AssetSystem root changed; restart editor to reconnect resources..."
+                             : "AssetSystem manifest root changed; waiting for rescan...");
     layout_.projectRoot = std::move(path);
     if (!initialized_) {
         projectRootOverride_ = layout_.projectRoot;
         const auto root = std::filesystem::absolute(layout_.projectRoot).lexically_normal();
-        if (std::filesystem::path(layout_.layoutFile).is_relative()) set_layout_path((root/layout_.layoutFile).generic_string());
+        if (std::filesystem::path(layout_.layoutFile).is_relative())
+            set_layout_path((root / layout_.layoutFile).generic_string());
     }
     reset_edit_history_for_file_operation();
     expectedFileChanges_.clear();
@@ -792,23 +706,27 @@ void EditorLayer::set_project_root(std::string path) {
     imagePreviewStamp_ = 0;
     ++audioPreviewGeneration_;
     audioPreviewStamp_ = 0;
-    if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
+    if (audioPreviewCancel_)
+        audioPreviewCancel_->store(true, std::memory_order_relaxed);
     audioPreviewCancel_.reset();
     audioPreviewSnapshot_.reset();
     audioPreviewSourcePath_.clear();
     audioPreviewStatus_ = "Audio preview not loaded";
     ++videoPreviewGeneration_;
     videoPreviewStamp_ = 0;
-    if (videoPreviewCancel_) videoPreviewCancel_->store(true, std::memory_order_relaxed);
+    if (videoPreviewCancel_)
+        videoPreviewCancel_->store(true, std::memory_order_relaxed);
     videoPreviewCancel_.reset();
-    if (videoFrameCancel_) videoFrameCancel_->store(true, std::memory_order_relaxed);
+    if (videoFrameCancel_)
+        videoFrameCancel_->store(true, std::memory_order_relaxed);
     videoFrameCancel_.reset();
     pendingVideoSeekSeconds_ = -1.0;
     videoPreviewSnapshot_.reset();
     videoPreviewStatus_ = "Video preview not loaded";
     ++modelPreviewGeneration_;
     modelPreviewStamp_ = 0;
-    if (modelPreviewCancel_) modelPreviewCancel_->store(true, std::memory_order_relaxed);
+    if (modelPreviewCancel_)
+        modelPreviewCancel_->store(true, std::memory_order_relaxed);
     modelPreviewCancel_.reset();
     modelPreviewSnapshot_.reset();
     modelPreviewScene_.clear();
@@ -818,60 +736,77 @@ void EditorLayer::set_project_root(std::string path) {
     modelTexturePreviewPath_.clear();
     modelMaterialSelection_ = -1;
     modelTextureSelection_ = -1;
-    selectedAsset_.clear();
-    editorUi_.select_asset({});
+    assetBrowser_.selection.clear();
     assetPreviewState_ = {};
     uiModel_.set_asset_preview(assetPreviewState_);
     compileCommands_.clear();
     compileCommandsStatus_ = "Not loaded";
     buildUiDirty_ = true;
     assetIndex_.reset();
-    assetDirectory_.clear();
-    editorUi_.set_asset_directory({});
+    assetBrowser_.directory.clear();
+
     set_asset_directory("assets");
     ++fileScanGeneration_;
     assetsDirty_ = true;
-    if (initialized_) request_asset_manifest_scan();
+    if (initialized_)
+        request_asset_manifest_scan();
 }
 
-void EditorLayer::set_asset_system(assets::AssetSystem* assetSystem) {
+void EditorLayer::set_asset_system(assets::AssetSystem *assetSystem) {
     if (assetSystem_ == assetSystem) {
-        if (initialized_) request_asset_manifest_scan();
+        if (initialized_)
+            request_asset_manifest_scan();
         return;
     }
     // A manifest scan captures the current AssetSystem pointer in its worker.
     // Drain it before allowing the owner to replace or destroy that system.
     if (assetManifestFuture_.valid()) {
         assetManifestFuture_.wait();
-        try { assetManifestFuture_.get(); } catch (...) { }
+        try {
+            assetManifestFuture_.get();
+        } catch (...) {
+        }
     }
     if (assetSystemPreviewFuture_.valid()) {
         assetSystemPreviewFuture_.wait();
-        try { assetSystemPreviewFuture_.get(); } catch (...) { }
+        try {
+            assetSystemPreviewFuture_.get();
+        } catch (...) {
+        }
     }
     // Image preview workers may wait on an AssetSystem request and then decode
     // its immutable bytes. Drain that chain before replacing the owner pointer.
     if (imagePreviewFuture_.valid()) {
         imagePreviewFuture_.wait();
-        try { imagePreviewFuture_.get(); } catch (...) { }
+        try {
+            imagePreviewFuture_.get();
+        } catch (...) {
+        }
     }
-    if (modelPreviewCancel_) modelPreviewCancel_->store(true, std::memory_order_relaxed);
+    if (modelPreviewCancel_)
+        modelPreviewCancel_->store(true, std::memory_order_relaxed);
     if (modelPreviewFuture_.valid()) {
         modelPreviewFuture_.wait();
-        try { modelPreviewFuture_.get(); } catch (...) { }
+        try {
+            modelPreviewFuture_.get();
+        } catch (...) {
+        }
     }
     clear_audio_asset_bindings();
     reset_model_scene_assets();
     pendingAssetReferenceRefreshes_.clear();
     assetSystem_ = assetSystem;
-    if (!initialized_) assetSystemRootNeedsRestart_ = false;
-    reset_asset_manifest(assetSystem_ ? "Waiting for AssetSystem manifest..." :
-        "AssetSystem manifest not connected");
-    if (initialized_) request_asset_manifest_scan();
+    if (!initialized_)
+        assetSystemRootNeedsRestart_ = false;
+    reset_asset_manifest(assetSystem_ ? "Waiting for AssetSystem manifest..."
+                                      : "AssetSystem manifest not connected");
+    if (initialized_)
+        request_asset_manifest_scan();
 }
 
-void EditorLayer::set_audio_system(audio::AudioSystem* audioSystem) noexcept {
-    if (audioSystem_ == audioSystem) return;
+void EditorLayer::set_audio_system(audio::AudioSystem *audioSystem) noexcept {
+    if (audioSystem_ == audioSystem)
+        return;
     clear_audio_asset_bindings();
     audioSystem_ = audioSystem;
 }
@@ -883,7 +818,8 @@ void EditorLayer::set_layout_path(std::string path) {
 }
 
 void EditorLayer::set_style_file(std::string path) {
-    if (!path.empty()) layout_.styleFile = std::move(path);
+    if (!path.empty())
+        layout_.styleFile = std::move(path);
 }
 
 void EditorLayer::set_display_size(float width, float height, float dpiScale) noexcept {
@@ -892,392 +828,64 @@ void EditorLayer::set_display_size(float width, float height, float dpiScale) no
     displayDpiScale_ = std::clamp(dpiScale, 0.25f, 8.0f);
 }
 
-bool EditorLayer::save_layout_file() {
-    const std::filesystem::path path(layout_.layoutFile);
-    if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
-    std::string output;
-    reflection::TypeRegistry registry;
-    register_layout_types(registry);
-    const auto result = reflection::serialize_json(registry, reflection::fnv1a("shinkou.editor.EditorLayoutState"), &layout_, output,
-        reflection::JsonOptions{true, false, false, 32});
-    if (!result) {
-        lastStatus_ = "Layout serialization failed: " + result.message;
-        return false;
-    }
-    const auto temporaryPath = path.string() + ".tmp";
-    std::ofstream file(temporaryPath, std::ios::binary | std::ios::trunc);
-    if (!file) {
-        lastStatus_ = "Cannot open layout file: " + temporaryPath;
-        return false;
-    }
-    file << output;
-    file.flush();
-    if (!file) {
-        lastStatus_ = "Layout write failed: " + path.string();
-        file.close();
-        std::error_code ignored;
-        std::filesystem::remove(temporaryPath, ignored);
-        return false;
-    }
-    file.close();
-    std::error_code renameError;
-    std::filesystem::rename(temporaryPath, path, renameError);
-    if (renameError) {
-        std::error_code ignored;
-        std::filesystem::remove(path, ignored);
-        renameError.clear();
-        std::filesystem::rename(temporaryPath, path, renameError);
-    }
-    if (renameError) {
-        lastStatus_ = "Cannot commit layout file: " + renameError.message();
-        std::error_code ignored;
-        std::filesystem::remove(temporaryPath, ignored);
-        return false;
-    }
-    lastStatus_ = "Layout saved: " + path.string();
-    return true;
-}
-
-bool EditorLayer::load_layout_file() {
-    std::ifstream file(layout_.layoutFile, std::ios::binary);
-    if (!file) return false;
-    std::stringstream input;
-    input << file.rdbuf();
-    reflection::TypeRegistry registry;
-    register_layout_types(registry);
-    EditorLayoutState loaded = layout_;
-    const auto result = reflection::deserialize_json(registry, reflection::fnv1a("shinkou.editor.EditorLayoutState"), input.str(), &loaded,
-        reflection::JsonOptions{false, false, false, 32});
-    if (!result) {
-        lastStatus_ = "Layout load failed: " + result.message;
-        return false;
-    }
-    if (loaded.layoutVersion > 3) {
-        lastStatus_ = "Layout load failed: unsupported layout version";
-        return false;
-    }
-    if (loaded.layoutVersion == 0) loaded.layoutVersion = 1;
-    loaded.layoutVersion = 3;
-    if (!EditorLocalization::supported(loaded.language)) loaded.language = "zh-CN";
-    if (!std::isfinite(loaded.uiScale)) loaded.uiScale = 1.0f;
-    loaded.uiScale = std::clamp(loaded.uiScale, 0.5f, 3.0f);
-    layout_ = std::move(loaded);
-    set_panel_visible("hierarchy", layout_.showHierarchy);
-    set_panel_visible("inspector", layout_.showInspector);
-    set_panel_visible("viewport", layout_.showViewport);
-    set_panel_visible("game", layout_.showGame);
-    set_panel_visible("assets", layout_.showAssets);
-    set_panel_visible("console", layout_.showConsole);
-    set_panel_visible("profiler", layout_.showProfiler);
-    set_panel_visible("render-graph", layout_.showRenderGraph);
-    set_panel_visible("settings", layout_.showSettings);
-    set_panel_visible("media", layout_.showMedia);
-    set_panel_visible("build", layout_.showBuild);
-    set_panel_visible("recovery", layout_.showRecovery);
-    lastStatus_ = "Layout loaded: " + layout_.layoutFile;
-    return true;
-}
-
-bool EditorLayer::save_workspace_file() {
-    const std::filesystem::path path(layout_.dockLayoutFile);
-    if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
-    const auto temporaryPath = path.string() + ".tmp";
-    std::ofstream file(temporaryPath, std::ios::binary | std::ios::trunc);
-    if (!file) return false;
-    file << dockWorkspace_.to_json(true);
-    file.flush();
-    file.close();
-    if (!file) return false;
-    std::error_code error;
-    std::filesystem::rename(temporaryPath, path, error);
-    if (error) {
-        std::error_code ignored;
-        std::filesystem::remove(path, ignored);
-        error.clear();
-        std::filesystem::rename(temporaryPath, path, error);
-    }
-    if (error) {
-        std::error_code ignored;
-        std::filesystem::remove(temporaryPath, ignored);
-        return false;
-    }
-    return true;
-}
-
-bool EditorLayer::load_workspace_file() {
-    std::ifstream file(layout_.dockLayoutFile, std::ios::binary);
-    if (!file) return false;
-    std::stringstream input;
-    input << file.rdbuf();
-    DockWorkspace loaded = dockWorkspace_;
-    const auto result = loaded.from_json(input.str());
-    if (!result) {
-        lastStatus_ = "Dock layout load failed: " + result.message;
-        return false;
-    }
-    dockWorkspace_ = std::move(loaded);
-    return true;
-}
-
-void EditorLayer::sync_style_to_layout() noexcept {
-    layout_.theme = styleConfig_.activeTheme;
-    layout_.uiScale = styleConfig_.uiScale;
-    layout_.fontPath = styleConfig_.fontPath;
-    layout_.fontSize = styleConfig_.fontSize;
-    layout_.backgroundColor = hex_color(styleConfig_.background.primary);
-    layout_.backgroundImage = styleConfig_.background.imagePath;
-    layout_.compactControls = styleConfig_.compactControls;
-    layout_.reduceMotion = styleConfig_.reduceMotion;
-}
-
-void EditorLayer::sync_layout_to_style() noexcept {
-    styleConfig_.activeTheme = layout_.theme;
-    styleConfig_.uiScale = std::clamp(std::isfinite(layout_.uiScale) ? layout_.uiScale : 1.0f, 0.5f, 3.0f);
-    styleConfig_.fontPath = layout_.fontPath;
-    styleConfig_.fontSize = std::clamp(std::isfinite(layout_.fontSize) ? layout_.fontSize : 14.0f, 6.0f, 96.0f);
-    styleConfig_.background.primary = parse_hex_color(layout_.backgroundColor, styleConfig_.background.primary);
-    styleConfig_.background.imagePath = layout_.backgroundImage;
-    styleConfig_.compactControls = layout_.compactControls;
-    styleConfig_.reduceMotion = layout_.reduceMotion;
-}
-
-bool EditorLayer::load_style_file() {
-    std::error_code existsError;
-    if (!std::filesystem::exists(layout_.styleFile, existsError)) {
-        sync_layout_to_style();
-        return false;
-    }
-    std::string error;
-    if (!ui::load_style_file(layout_.styleFile, styleConfig_, &error)) {
-        lastStatus_ = "Style load failed: " + error;
-        sync_layout_to_style();
-        return false;
-    }
-    return true;
-}
-
-bool EditorLayer::save_style_file() {
-    sync_layout_to_style();
-    std::string error;
-    if (!ui::save_style_file(layout_.styleFile, styleConfig_, &error)) {
-        lastStatus_ = "Style save failed: " + error;
-        return false;
-    }
-    lastStatus_ = "Style saved: " + layout_.styleFile;
-    return true;
-}
-
-bool EditorLayer::save_layout() {
-#if defined(SHINKOU_WITH_IMGUI)
-    const auto imguiPath = layout_.layoutFile + ".imgui.ini";
-    if (ImGui::GetCurrentContext()) ImGui::SaveIniSettingsToDisk(imguiPath.c_str());
-#endif
-    const bool savedLayout = save_layout_file();
-    const bool savedDock = save_workspace_file();
-    const bool savedStyle = save_style_file();
-    if (!savedDock && savedLayout) lastStatus_ = "Layout saved, dock layout could not be committed";
-    return savedLayout && savedDock && savedStyle;
-}
-
-bool EditorLayer::load_layout() {
-    clear_media_preview();
-    const bool loaded = load_layout_file();
-    if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
-    reset_edit_history_for_file_operation();
-    expectedFileChanges_.clear();
-    externalFileChanges_.clear();
-    externalFileBatchId_ = 0;
-    externalFileBatchStatus_ = "No external change batch";
-    fileScanBaselineReady_ = false;
-    fileScanBaselineScope_.clear();
-    fileRecoveryUiDirty_ = true;
-    fileSystem_.set_root(layout_.projectRoot);
-    load_file_history();
-    buildSystem_.set_project_root(fileSystem_.root());
-    load_build_profile();
-    refresh_ide_tools();
-    refresh_project_integration();
-    ++assetPreviewGeneration_;
-    assetPreviewStamp_ = 0;
-    ++imagePreviewGeneration_;
-    imagePreviewStamp_ = 0;
-    ++audioPreviewGeneration_;
-    audioPreviewStamp_ = 0;
-    if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
-    audioPreviewCancel_.reset();
-    audioPreviewSnapshot_.reset();
-    audioPreviewSourcePath_.clear();
-    audioPreviewStatus_ = "Audio preview not loaded";
-    ++videoPreviewGeneration_;
-    videoPreviewStamp_ = 0;
-    if (videoPreviewCancel_) videoPreviewCancel_->store(true, std::memory_order_relaxed);
-    videoPreviewCancel_.reset();
-    if (videoFrameCancel_) videoFrameCancel_->store(true, std::memory_order_relaxed);
-    videoFrameCancel_.reset();
-    pendingVideoSeekSeconds_ = -1.0;
-    videoPreviewSnapshot_.reset();
-    videoPreviewStatus_ = "Video preview not loaded";
-    ++modelPreviewGeneration_;
-    modelPreviewStamp_ = 0;
-    if (modelPreviewCancel_) modelPreviewCancel_->store(true, std::memory_order_relaxed);
-    modelPreviewCancel_.reset();
-    modelPreviewSnapshot_.reset();
-    modelPreviewScene_.clear();
-    modelPreviewStatus_ = "Model preview not loaded";
-    ++modelTexturePreviewGeneration_;
-    modelTexturePreviewStamp_ = 0;
-    modelTexturePreviewPath_.clear();
-    modelMaterialSelection_ = -1;
-    modelTextureSelection_ = -1;
-    assetPreviewState_ = {};
-    uiModel_.set_asset_preview(assetPreviewState_);
-    compileCommands_.clear();
-    compileCommandsStatus_ = "Not loaded";
-    buildUiDirty_ = true;
-    assetIndex_.reset();
-    assetDirectory_.clear();
-    editorUi_.set_asset_directory({});
-    set_asset_directory("assets");
-    ++fileScanGeneration_;
-    load_style_file();
-    std::error_code dockFileError;
-    const bool hasDockFile = std::filesystem::exists(layout_.dockLayoutFile, dockFileError);
-    const bool dockLoaded = !hasDockFile || load_workspace_file();
-#if defined(SHINKOU_WITH_IMGUI)
-    const auto imguiPath = layout_.layoutFile + ".imgui.ini";
-    if (loaded && ImGui::GetCurrentContext()) ImGui::LoadIniSettingsFromDisk(imguiPath.c_str());
-    apply_theme();
-#endif
-    sync_workspace_visibility();
-    return loaded && dockLoaded;
-}
-
-void EditorLayer::reset_layout() {
-    if (imguiView_) imguiView_->reset_docking();
-    clear_media_preview();
-    const auto layoutPath = layout_.layoutFile;
-    const auto dockPath = layout_.dockLayoutFile;
-    const auto stylePath = layout_.styleFile;
-    const auto selection = layout_.selectedObject;
-    layout_ = EditorLayoutState{};
-    layout_.layoutFile = layoutPath; layout_.dockLayoutFile = dockPath; layout_.styleFile = stylePath;
-    layout_.selectedObject = selection;
-    if (!projectRootOverride_.empty()) layout_.projectRoot = projectRootOverride_;
-    styleConfig_ = ui::UiStyleConfig{};
-    ++assetPreviewGeneration_;
-    assetPreviewStamp_ = 0;
-    ++imagePreviewGeneration_;
-    imagePreviewStamp_ = 0;
-    ++audioPreviewGeneration_;
-    audioPreviewStamp_ = 0;
-    if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
-    audioPreviewCancel_.reset();
-    audioPreviewSnapshot_.reset();
-    audioPreviewSourcePath_.clear();
-    audioPreviewStatus_ = "Audio preview not loaded";
-    ++videoPreviewGeneration_;
-    videoPreviewStamp_ = 0;
-    if (videoPreviewCancel_) videoPreviewCancel_->store(true, std::memory_order_relaxed);
-    videoPreviewCancel_.reset();
-    if (videoFrameCancel_) videoFrameCancel_->store(true, std::memory_order_relaxed);
-    videoFrameCancel_.reset();
-    pendingVideoSeekSeconds_ = -1.0;
-    videoPreviewSnapshot_.reset();
-    videoPreviewStatus_ = "Video preview not loaded";
-    ++modelPreviewGeneration_;
-    modelPreviewStamp_ = 0;
-    if (modelPreviewCancel_) modelPreviewCancel_->store(true, std::memory_order_relaxed);
-    modelPreviewCancel_.reset();
-    modelPreviewSnapshot_.reset();
-    modelPreviewScene_.clear();
-    modelPreviewStatus_ = "Model preview not loaded";
-    ++modelTexturePreviewGeneration_;
-    modelTexturePreviewStamp_ = 0;
-    modelTexturePreviewPath_.clear();
-    modelMaterialSelection_ = -1;
-    modelTextureSelection_ = -1;
-    assetPreviewState_ = {};
-    uiModel_.set_asset_preview(assetPreviewState_);
-    reset_edit_history_for_file_operation();
-    fileSystem_.set_root(layout_.projectRoot);
-    load_file_history();
-    buildSystem_.set_project_root(fileSystem_.root());
-    load_build_profile();
-    refresh_ide_tools();
-    refresh_project_integration();
-    compileCommands_.clear();
-    compileCommandsStatus_ = "Not loaded";
-    buildUiDirty_ = true;
-    assetIndex_.reset();
-    assetDirectory_.clear();
-    editorUi_.set_asset_directory({});
-    set_asset_directory("assets");
-    ++fileScanGeneration_;
-    for (const auto& panel : panels_) panelVisibility_[panel.id] = panel.defaultVisible;
-    build_default_workspace();
-    sync_page_visibility();
-    lastStatus_ = "Layout reset";
-#if defined(SHINKOU_WITH_IMGUI)
-    apply_theme();
-#endif
-}
-
 void EditorLayer::set_theme(std::string theme) {
-    if (!themeRegistry_.find(theme)) theme = std::string(kDarkTheme);
+    if (!themeRegistry_.find(theme))
+        theme = std::string(kDarkTheme);
     layout_.theme = std::move(theme);
     themeRegistry_.switch_theme(layout_.theme);
     styleConfig_.activeTheme = layout_.theme;
-    editorUi_.invalidate_layout();
-#if defined(SHINKOU_WITH_IMGUI)
-    apply_theme();
-#endif
 }
 
 void EditorLayer::push_console(std::string message) {
-    if (message.empty()) return;
+    if (message.empty())
+        return;
     consoleEntries_.push_back(std::move(message));
-    if (consoleEntries_.size() > 256) consoleEntries_.erase(consoleEntries_.begin(), consoleEntries_.begin() + 64);
+    if (consoleEntries_.size() > 256)
+        consoleEntries_.erase(consoleEntries_.begin(), consoleEntries_.begin() + 64);
 }
 
-bool EditorLayer::checkpoint(World& world) {
-    EditorDocument document; std::string error;
-    if (!EditorDocument::capture(world, layout_.selectedObject, document, error)) { lastStatus_ = error; return false; }
+bool EditorLayer::checkpoint(World &world) {
+    EditorDocument document;
+    std::string error;
+    if (!EditorDocument::capture(world, layout_.selectedObject, document, error)) {
+        lastStatus_ = error;
+        return false;
+    }
     record_scene_checkpoint(std::move(document));
     return true;
 }
 
 void EditorLayer::set_language(std::string language) {
-    if (!EditorLocalization::supported(language)) language = "zh-CN";
-    if (language == "zh") language = "zh-CN";
-    if (language == "en") language = "en-US";
+    if (!EditorLocalization::supported(language))
+        language = "zh-CN";
+    if (language == "zh")
+        language = "zh-CN";
+    if (language == "en")
+        language = "en-US";
     layout_.language = std::move(language);
-    editorUi_.invalidate_layout();
-#if defined(SHINKOU_PLATFORM_WINDOWS)
-    if (nativeWindow_ && nativeMenu_) {
-        uninstall_native_menu();
-        install_native_menu();
-        editorUi_.set_native_main_menu_available(nativeMenu_ != nullptr);
-    }
-#endif
+
     lastStatus_ = layout_.language == "zh-CN" ? "语言已切换为中文" : "Language changed to English";
 }
 
 void EditorLayer::reset_edit_history_for_file_operation() {
-    for (const auto& operation : fileUndo_) {
-        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty()) {
+    for (const auto &operation : fileUndo_) {
+        if (operation.kind == FileOperation::Kind::RecycleDelete &&
+            !operation.recyclePath.empty()) {
             expect_editor_file_change(operation.recyclePath, true);
             fileSystem_.remove(operation.recyclePath);
         }
     }
-    for (const auto& operation : fileRedo_) {
-        if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty()) {
+    for (const auto &operation : fileRedo_) {
+        if (operation.kind == FileOperation::Kind::RecycleDelete &&
+            !operation.recyclePath.empty()) {
             expect_editor_file_change(operation.recyclePath, true);
             fileSystem_.remove(operation.recyclePath);
         }
     }
     undo_.clear();
     redo_.clear();
-    propertyUndo_.clear();propertyRedo_.clear();
+    propertyUndo_.clear();
+    propertyRedo_.clear();
     fileUndo_.clear();
     fileRedo_.clear();
     undoHistory_.clear();
@@ -1295,10 +903,11 @@ void EditorLayer::load_file_history() {
                        redoHistory_.end());
 
     std::string json, error;
-    if (!fileSystem_.read_text_limited(".shinkou/file-history.json", 1u * 1024u * 1024u,
-                                      json, nullptr, &error)) {
+    if (!fileSystem_.read_text_limited(".shinkou/file-history.json", 1u * 1024u * 1024u, json,
+                                       nullptr, &error)) {
         bool directory = false;
-        if (!fileSystem_.exists(".shinkou/file-history.json", &directory)) return;
+        if (!fileSystem_.exists(".shinkou/file-history.json", &directory))
+            return;
         push_console("File history journal ignored: " + error);
         return;
     }
@@ -1310,7 +919,7 @@ void EditorLayer::load_file_history() {
 
     std::size_t skipped = 0;
     std::uint64_t maximumSerial = fileOperationSerial_;
-    for (const auto& entry : document.entries) {
+    for (const auto &entry : document.entries) {
         FileOperation operation;
         if (entry.kind == "rename") {
             const auto source = normalized_project_path(entry.sourcePath);
@@ -1326,8 +935,9 @@ void EditorLayer::load_file_history() {
         } else if (entry.kind == "recycle-delete") {
             const auto source = normalized_project_path(entry.sourcePath);
             const auto recycle = normalized_project_path(entry.recyclePath);
-            if (source.empty() || recycle.empty() || !path_is_or_below(recycle, ".shinkou/recycle") ||
-                fileSystem_.exists(source) || !fileSystem_.exists(recycle)) {
+            if (source.empty() || recycle.empty() ||
+                !path_is_or_below(recycle, ".shinkou/recycle") || fileSystem_.exists(source) ||
+                !fileSystem_.exists(recycle)) {
                 ++skipped;
                 continue;
             }
@@ -1336,9 +946,11 @@ void EditorLayer::load_file_history() {
             operation.recyclePath = recycle;
             operation.selectedAssetBefore = entry.selectedAssetBefore;
             operation.assetDirectoryBefore = std::filesystem::u8path(entry.assetDirectoryBefore);
-            const auto serialText = std::filesystem::u8path(recycle).parent_path().filename().string();
+            const auto serialText =
+                std::filesystem::u8path(recycle).parent_path().filename().string();
             std::uint64_t serial = 0;
-            const auto result = std::from_chars(serialText.data(), serialText.data() + serialText.size(), serial);
+            const auto result =
+                std::from_chars(serialText.data(), serialText.data() + serialText.size(), serial);
             if (result.ec == std::errc{} && result.ptr == serialText.data() + serialText.size())
                 maximumSerial = std::max(maximumSerial, serial);
         } else {
@@ -1350,7 +962,8 @@ void EditorLayer::load_file_history() {
     }
     fileOperationSerial_ = maximumSerial;
     if (skipped != 0) {
-        push_console("File history journal skipped " + std::to_string(skipped) + " stale/conflicting operation(s)");
+        push_console("File history journal skipped " + std::to_string(skipped) +
+                     " stale/conflicting operation(s)");
         save_file_history();
     }
 }
@@ -1358,7 +971,7 @@ void EditorLayer::load_file_history() {
 void EditorLayer::save_file_history() {
     FileHistoryDocument document;
     document.entries.reserve(std::min<std::size_t>(fileUndo_.size(), 64));
-    const auto append = [&](const FileOperation& operation) {
+    const auto append = [&](const FileOperation &operation) {
         FileHistoryEntry entry;
         if (operation.kind == FileOperation::Kind::Rename) {
             entry.kind = "rename";
@@ -1374,12 +987,14 @@ void EditorLayer::save_file_history() {
         document.entries.push_back(std::move(entry));
     };
     const auto begin = fileUndo_.size() > 64 ? fileUndo_.size() - 64 : 0;
-    for (std::size_t index = begin; index < fileUndo_.size(); ++index) append(fileUndo_[index]);
+    for (std::size_t index = begin; index < fileUndo_.size(); ++index)
+        append(fileUndo_[index]);
     std::string json, error;
     expect_editor_file_change(".shinkou/file-history.json");
     if (!document.to_json(json, error) ||
         !fileSystem_.write_text_atomic(".shinkou/file-history.json", json, &error)) {
-        push_console("File history journal write failed: " + (error.empty() ? "unknown error" : error));
+        push_console("File history journal write failed: " +
+                     (error.empty() ? "unknown error" : error));
     }
 }
 
@@ -1398,28 +1013,35 @@ void EditorLayer::sync_file_recovery_ui_state() {
     const bool bounded = recycleEntries.size() >= kMaxRecycleEntries;
     std::unordered_set<std::string> recycleRoots;
     std::unordered_map<std::string, std::uintmax_t> bytesByRoot;
-    for (const auto& entry : recycleEntries) {
+    for (const auto &entry : recycleEntries) {
         const auto relative = entry.relativePath.lexically_relative(recycleRoot);
-        if (relative.empty() || relative == std::filesystem::path(".")) continue;
+        if (relative.empty() || relative == std::filesystem::path("."))
+            continue;
         const auto first = relative.begin();
-        if (first == relative.end()) continue;
+        if (first == relative.end())
+            continue;
         const auto root = (recycleRoot / *first).generic_string();
         recycleRoots.insert(root);
-        if (!entry.directory) bytesByRoot[root] += entry.size;
+        if (!entry.directory)
+            bytesByRoot[root] += entry.size;
     }
 
     std::unordered_set<std::string> protectedRoots;
-    const auto protect = [&](const std::vector<FileOperation>& operations) {
-        for (const auto& operation : operations) {
-            if (operation.kind != FileOperation::Kind::RecycleDelete || operation.recyclePath.empty()) continue;
-            protectedRoots.insert(std::filesystem::u8path(operation.recyclePath).parent_path().generic_string());
+    const auto protect = [&](const std::vector<FileOperation> &operations) {
+        for (const auto &operation : operations) {
+            if (operation.kind != FileOperation::Kind::RecycleDelete ||
+                operation.recyclePath.empty())
+                continue;
+            protectedRoots.insert(
+                std::filesystem::u8path(operation.recyclePath).parent_path().generic_string());
         }
     };
     protect(fileUndo_);
     protect(fileRedo_);
 
-    const auto append_operation = [&](const FileOperation& operation, bool undoAvailable) {
-        if (state.entries.size() >= 64) return;
+    const auto append_operation = [&](const FileOperation &operation, bool undoAvailable) {
+        if (state.entries.size() >= 64)
+            return;
         EditorFileRecoveryEntryModel entry;
         entry.kind = undoAvailable ? "Undo " : "Redo ";
         entry.kind += operation.kind == FileOperation::Kind::Rename ? "Rename" : "Recycle Delete";
@@ -1427,24 +1049,31 @@ void EditorLayer::sync_file_recovery_ui_state() {
         entry.destinationPath = operation.destinationPath;
         entry.recyclePath = operation.recyclePath;
         if (operation.kind == FileOperation::Kind::Rename) {
-            entry.recoverable = undoAvailable
-                ? !fileSystem_.exists(operation.sourcePath) && fileSystem_.exists(operation.destinationPath)
-                : fileSystem_.exists(operation.destinationPath) && !fileSystem_.exists(operation.sourcePath);
+            entry.recoverable = undoAvailable ? !fileSystem_.exists(operation.sourcePath) &&
+                                                    fileSystem_.exists(operation.destinationPath)
+                                              : fileSystem_.exists(operation.destinationPath) &&
+                                                    !fileSystem_.exists(operation.sourcePath);
         } else {
-            const auto root = std::filesystem::u8path(operation.recyclePath).parent_path().generic_string();
+            const auto root =
+                std::filesystem::u8path(operation.recyclePath).parent_path().generic_string();
             entry.bytes = bytesByRoot[root];
-            entry.recoverable = undoAvailable
-                ? !fileSystem_.exists(operation.sourcePath) && fileSystem_.exists(operation.recyclePath)
-                : fileSystem_.exists(operation.sourcePath) && !fileSystem_.exists(operation.recyclePath);
+            entry.recoverable = undoAvailable ? !fileSystem_.exists(operation.sourcePath) &&
+                                                    fileSystem_.exists(operation.recyclePath)
+                                              : fileSystem_.exists(operation.sourcePath) &&
+                                                    !fileSystem_.exists(operation.recyclePath);
         }
         state.entries.push_back(std::move(entry));
     };
-    for (auto it = fileUndo_.rbegin(); it != fileUndo_.rend(); ++it) append_operation(*it, true);
-    for (auto it = fileRedo_.rbegin(); it != fileRedo_.rend(); ++it) append_operation(*it, false);
+    for (auto it = fileUndo_.rbegin(); it != fileUndo_.rend(); ++it)
+        append_operation(*it, true);
+    for (auto it = fileRedo_.rbegin(); it != fileRedo_.rend(); ++it)
+        append_operation(*it, false);
 
-    for (const auto& [root, bytes] : bytesByRoot) state.totalBytes += bytes;
-    for (const auto& root : recycleRoots) {
-        if (protectedRoots.find(root) != protectedRoots.end()) continue;
+    for (const auto &[root, bytes] : bytesByRoot)
+        state.totalBytes += bytes;
+    for (const auto &root : recycleRoots) {
+        if (protectedRoots.find(root) != protectedRoots.end())
+            continue;
         ++state.orphanCount;
         if (state.entries.size() < 64) {
             EditorFileRecoveryEntryModel orphan;
@@ -1456,15 +1085,20 @@ void EditorLayer::sync_file_recovery_ui_state() {
         }
     }
     state.status = state.undoCount == 0 && state.redoCount == 0 && state.orphanCount == 0 &&
-                   state.externalChangeCount == 0
-        ? "Recovery area is clean"
-        : std::to_string(state.undoCount) + " undoable file operation(s)";
-    if (state.redoCount != 0) state.status += "; " + std::to_string(state.redoCount) + " redoable";
-    if (state.orphanCount != 0) state.status += "; " + std::to_string(state.orphanCount) + " orphan item(s)";
+                           state.externalChangeCount == 0
+                       ? "Recovery area is clean"
+                       : std::to_string(state.undoCount) + " undoable file operation(s)";
+    if (state.redoCount != 0)
+        state.status += "; " + std::to_string(state.redoCount) + " redoable";
+    if (state.orphanCount != 0)
+        state.status += "; " + std::to_string(state.orphanCount) + " orphan item(s)";
     if (state.externalChangeCount != 0)
-        state.status += "; " + std::to_string(state.externalChangeCount) + " external change(s) require review";
-    if (state.totalBytes > 512ull * 1024ull * 1024ull) state.status += "; exceeds 512 MiB budget";
-    if (bounded) state.status += " (scan limit reached)";
+        state.status +=
+            "; " + std::to_string(state.externalChangeCount) + " external change(s) require review";
+    if (state.totalBytes > 512ull * 1024ull * 1024ull)
+        state.status += "; exceeds 512 MiB budget";
+    if (bounded)
+        state.status += " (scan limit reached)";
     uiModel_.set_file_recovery_state(std::move(state));
     fileRecoveryUiDirty_ = false;
 }
@@ -1474,17 +1108,21 @@ bool EditorLayer::prune_file_recovery_orphans() {
     const auto recycleRoot = std::filesystem::u8path(".shinkou/recycle");
     const auto entries = fileSystem_.list(recycleRoot, true, kMaxRecycleEntries);
     std::unordered_set<std::string> roots;
-    for (const auto& entry : entries) {
+    for (const auto &entry : entries) {
         const auto relative = entry.relativePath.lexically_relative(recycleRoot);
-        if (relative.empty() || relative == std::filesystem::path(".")) continue;
+        if (relative.empty() || relative == std::filesystem::path("."))
+            continue;
         const auto first = relative.begin();
-        if (first != relative.end()) roots.insert((recycleRoot / *first).generic_string());
+        if (first != relative.end())
+            roots.insert((recycleRoot / *first).generic_string());
     }
     std::unordered_set<std::string> protectedRoots;
-    const auto protect = [&](const std::vector<FileOperation>& operations) {
-        for (const auto& operation : operations) {
-            if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty())
-                protectedRoots.insert(std::filesystem::u8path(operation.recyclePath).parent_path().generic_string());
+    const auto protect = [&](const std::vector<FileOperation> &operations) {
+        for (const auto &operation : operations) {
+            if (operation.kind == FileOperation::Kind::RecycleDelete &&
+                !operation.recyclePath.empty())
+                protectedRoots.insert(
+                    std::filesystem::u8path(operation.recyclePath).parent_path().generic_string());
         }
     };
     protect(fileUndo_);
@@ -1492,8 +1130,9 @@ bool EditorLayer::prune_file_recovery_orphans() {
 
     std::size_t removed = 0;
     std::size_t failed = 0;
-    for (const auto& root : roots) {
-        if (protectedRoots.find(root) != protectedRoots.end()) continue;
+    for (const auto &root : roots) {
+        if (protectedRoots.find(root) != protectedRoots.end())
+            continue;
         std::string error;
         if (fileSystem_.remove(root, &error)) {
             ++removed;
@@ -1507,11 +1146,12 @@ bool EditorLayer::prune_file_recovery_orphans() {
         lastStatus_ = "No orphan recovery items to prune";
     } else {
         lastStatus_ = "Pruned " + std::to_string(removed) + " orphan recovery item(s)";
-        if (failed != 0) lastStatus_ += "; " + std::to_string(failed) + " failed";
+        if (failed != 0)
+            lastStatus_ += "; " + std::to_string(failed) + " failed";
     }
     push_console(lastStatus_);
     sync_file_recovery_ui_state();
-    editorUi_.invalidate_layout();
+
     return failed == 0;
 }
 
@@ -1533,7 +1173,7 @@ std::filesystem::path EditorLayer::make_recycle_path(std::string_view source) {
     return std::filesystem::u8path(".shinkou/recycle/" + serial + "/" + filename);
 }
 
-bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, std::string& error) {
+bool EditorLayer::apply_file_operation(FileOperation &operation, bool forward, std::string &error) {
     replayingFileOperation_ = true;
     bool applied = false;
     if (operation.kind == FileOperation::Kind::Rename) {
@@ -1542,17 +1182,17 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
         expect_editor_file_change(from, true);
         expect_editor_file_change(to, true);
         if (fileSystem_.rename(from, to, &error)) {
-            remap_asset_settings(from,to);
+            remap_asset_settings(from, to);
             const auto fromPath = normalized_project_path(from);
             const auto toPath = normalized_project_path(to);
             remap_live_asset_references(fromPath, toPath);
             migrate_asset_documents(fromPath, toPath, false);
-            if (path_is_or_below(selectedAsset_, fromPath))
-                set_selected_asset(remap_project_path(selectedAsset_, fromPath, toPath));
-            if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), fromPath)) {
-                assetDirectory_ = std::filesystem::u8path(remap_project_path(
-                    assetDirectory_.generic_string(), fromPath, toPath));
-                editorUi_.set_asset_directory(assetDirectory_);
+            if (path_is_or_below(assetBrowser_.selection, fromPath))
+                set_selected_asset(remap_project_path(assetBrowser_.selection, fromPath, toPath));
+            if (!assetBrowser_.directory.empty() &&
+                path_is_or_below(assetBrowser_.directory.generic_string(), fromPath)) {
+                assetBrowser_.directory = std::filesystem::u8path(
+                    remap_project_path(assetBrowser_.directory.generic_string(), fromPath, toPath));
             }
             applied = true;
         }
@@ -1562,10 +1202,11 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
         if (fileSystem_.rename(operation.sourcePath, operation.recyclePath, &error)) {
             invalidate_live_asset_references(operation.sourcePath);
             migrate_asset_documents(operation.sourcePath, {}, true);
-            if (path_is_or_below(selectedAsset_, operation.sourcePath)) set_selected_asset({});
-            if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), operation.sourcePath)) {
-                assetDirectory_.clear();
-                editorUi_.set_asset_directory(assetDirectory_);
+            if (path_is_or_below(assetBrowser_.selection, operation.sourcePath))
+                set_selected_asset({});
+            if (!assetBrowser_.directory.empty() &&
+                path_is_or_below(assetBrowser_.directory.generic_string(), operation.sourcePath)) {
+                assetBrowser_.directory.clear();
             }
             applied = true;
         }
@@ -1575,22 +1216,23 @@ bool EditorLayer::apply_file_operation(FileOperation& operation, bool forward, s
         if (fileSystem_.rename(operation.recyclePath, operation.sourcePath, &error)) {
             invalidate_live_asset_references(operation.sourcePath);
             migrate_asset_documents(operation.sourcePath, {}, true);
-            if (!operation.selectedAssetBefore.empty()) set_selected_asset(operation.selectedAssetBefore);
+            if (!operation.selectedAssetBefore.empty())
+                set_selected_asset(operation.selectedAssetBefore);
             if (!operation.assetDirectoryBefore.empty()) {
-                assetDirectory_ = operation.assetDirectoryBefore;
-                editorUi_.set_asset_directory(assetDirectory_);
+                assetBrowser_.directory = operation.assetDirectoryBefore;
             }
             applied = true;
         }
     }
     replayingFileOperation_ = false;
-    if (!applied) return false;
+    if (!applied)
+        return false;
     reset_asset_manifest("AssetSystem manifest refresh requested");
     ++fileScanGeneration_;
     assetsDirty_ = true;
     sceneDirty_ = true;
-    uiModel_.invalidate();
-    editorUi_.invalidate_layout();
+    uiModel_.invalidate_inspector();
+
     return true;
 }
 
@@ -1598,8 +1240,9 @@ void EditorLayer::document_changed(bool preserveRedo) {
     if (!preserveRedo) {
         redo_.clear();
         propertyRedo_.clear();
-        for (const auto& operation : fileRedo_) {
-            if (operation.kind == FileOperation::Kind::RecycleDelete && !operation.recyclePath.empty()) {
+        for (const auto &operation : fileRedo_) {
+            if (operation.kind == FileOperation::Kind::RecycleDelete &&
+                !operation.recyclePath.empty()) {
                 expect_editor_file_change(operation.recyclePath, true);
                 fileSystem_.remove(operation.recyclePath);
             }
@@ -1608,55 +1251,86 @@ void EditorLayer::document_changed(bool preserveRedo) {
         redoHistory_.clear();
     }
     sceneDirty_ = true;
-    selectedAsset_.clear(); editorUi_.select_asset({});
-    uiModel_.select_object(layout_.selectedObject); uiModel_.invalidate();
-    editorUi_.invalidate_layout();
+    assetBrowser_.selection.clear();
+    uiModel_.select_object(layout_.selectedObject);
+    uiModel_.invalidate_inspector();
 }
 
 bool EditorLayer::consume_simulation_step() noexcept {
-    if (stepPending_) { stepPending_ = false; return true; }
+    if (stepPending_) {
+        stepPending_ = false;
+        return true;
+    }
     return uiModel_.playing() && !uiModel_.paused();
 }
 
 bool EditorLayer::edit_field(std::string_view id, std::string_view value) {
-    if (!activeWorld_) return false;
-    auto* object = activeWorld_->find_object(layout_.selectedObject);
-    if (!object) return false;
+    if (!activeWorld_)
+        return false;
+    auto *object = activeWorld_->find_object(layout_.selectedObject);
+    if (!object)
+        return false;
     PropertyValue parsed;
     std::function<bool()> apply;
     if (id == "name") {
-        if (value.empty()) return false;
-        apply = [object, value] { object->set_name(std::string(value)); return true; };
+        if (value.empty())
+            return false;
+        apply = [object, value] {
+            object->set_name(std::string(value));
+            return true;
+        };
     } else if (id == "active") {
-        if (!parse_property_text(PropertyType::Bool, value, parsed)) return false;
-        apply = [&] { object->set_active(std::get<bool>(parsed)); return true; };
+        if (!parse_property_text(PropertyType::Bool, value, parsed))
+            return false;
+        apply = [&] {
+            object->set_active(std::get<bool>(parsed));
+            return true;
+        };
     } else {
         const bool enabled = id.substr(0, 8) == "enabled:";
         const auto colon = id.find(':');
-        if (colon == std::string_view::npos) return false;
+        if (colon == std::string_view::npos)
+            return false;
         ComponentId cid{};
-        try { cid = std::stoull(std::string(enabled ? id.substr(8) : id.substr(0, colon))); } catch (...) { return false; }
-        auto* component = activeWorld_->find_component(cid);
-        if (!component || component->try_game_object() != object) return false;
+        try {
+            cid = std::stoull(std::string(enabled ? id.substr(8) : id.substr(0, colon)));
+        } catch (...) {
+            return false;
+        }
+        auto *component = activeWorld_->find_component(cid);
+        if (!component || component->try_game_object() != object)
+            return false;
         if (enabled) {
-            if (!parse_property_text(PropertyType::Bool, value, parsed)) return false;
-            apply = [&, component] { component->set_enabled(std::get<bool>(parsed)); return true; };
+            if (!parse_property_text(PropertyType::Bool, value, parsed))
+                return false;
+            apply = [&, component] {
+                component->set_enabled(std::get<bool>(parsed));
+                return true;
+            };
         } else {
             const auto name = id.substr(colon + 1);
-            auto* audioSource = name == "clipPath"
-                ? dynamic_cast<components::AudioSourceComponent*>(component) : nullptr;
-            for (auto& p : component->properties()) {
-                if (p.name != name || !p.editable()) continue;
-                if (!parse_property_text(p.type, value, parsed)) return false;
+            auto *audioSource = name == "clipPath"
+                                    ? dynamic_cast<components::AudioSourceComponent *>(component)
+                                    : nullptr;
+            for (auto &p : component->properties()) {
+                if (p.name != name || !p.editable())
+                    continue;
+                if (!parse_property_text(p.type, value, parsed))
+                    return false;
                 if (audioSource) {
-                    const auto normalizedPath = std::filesystem::u8path(std::string(value)).lexically_normal().generic_u8string();
+                    const auto normalizedPath = std::filesystem::u8path(std::string(value))
+                                                    .lexically_normal()
+                                                    .generic_u8string();
                     apply = [setter = p.set, parsed, audioSource, this, normalizedPath] {
-                        if (!setter(parsed)) return false;
+                        if (!setter(parsed))
+                            return false;
                         audioSource->assetId = 0;
                         if (audioInspectorChoices_) {
-                            const auto found = std::find_if(audioInspectorChoices_->begin(), audioInspectorChoices_->end(),
-                                [&](const auto& choice) { return choice.value == normalizedPath; });
-                            if (found != audioInspectorChoices_->end()) audioSource->assetId = found->assetId;
+                            const auto found = std::find_if(
+                                audioInspectorChoices_->begin(), audioInspectorChoices_->end(),
+                                [&](const auto &choice) { return choice.value == normalizedPath; });
+                            if (found != audioInspectorChoices_->end())
+                                audioSource->assetId = found->assetId;
                         }
                         return true;
                     };
@@ -1667,19 +1341,25 @@ bool EditorLayer::edit_field(std::string_view id, std::string_view value) {
             }
         }
     }
-    if (!apply || !checkpoint(*activeWorld_)) return false;
+    if (!apply || !checkpoint(*activeWorld_))
+        return false;
     if (!apply()) {
         undo_.pop_back();
-        if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
+        if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene)
+            undoHistory_.pop_back();
         lastStatus_ = "Invalid property value or range";
         return false;
     }
-    document_changed(); lastStatus_ = "Property updated"; return true;
+    document_changed();
+    lastStatus_ = "Property updated";
+    return true;
 }
 
-bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::string_view target, World& world) {
+bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::string_view target,
+                                                  World &world) {
     constexpr std::string_view prefix{"audio-source:"};
-    if (target.rfind(prefix, 0) != 0) return false;
+    if (target.rfind(prefix, 0) != 0)
+        return false;
     const std::string payload(target.substr(prefix.size()));
     const auto separator = payload.find(':');
     const auto idText = payload.substr(0, separator);
@@ -1687,7 +1367,8 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
     try {
         std::size_t consumed = 0;
         objectId = static_cast<ObjectId>(std::stoull(idText, &consumed));
-        if (consumed != idText.size()) throw std::invalid_argument("object id");
+        if (consumed != idText.size())
+            throw std::invalid_argument("object id");
     } catch (...) {
         lastStatus_ = "Audio source target is invalid";
         return true;
@@ -1714,7 +1395,8 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
         }
         double requested = 0.0;
         try {
-            const auto prefix = relative ? std::string_view{"relative:"} : std::string_view{"absolute:"};
+            const auto prefix =
+                relative ? std::string_view{"relative:"} : std::string_view{"absolute:"};
             const auto value = seekPayload.substr(prefix.size());
             std::size_t consumed = 0;
             requested = std::stod(value, &consumed);
@@ -1730,10 +1412,11 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
             break;
         }
         const auto duration = audioSceneSystem_->has_duration(objectId)
-            ? audioSceneSystem_->duration_seconds(objectId)
-            : 7.0 * 24.0 * 60.0 * 60.0;
+                                  ? audioSceneSystem_->duration_seconds(objectId)
+                                  : 7.0 * 24.0 * 60.0 * 60.0;
         const auto next = std::clamp(
-            relative ? audioSceneSystem_->cursor_seconds(objectId, *audioSystem_) + requested : requested,
+            relative ? audioSceneSystem_->cursor_seconds(objectId, *audioSystem_) + requested
+                     : requested,
             0.0, duration);
         changed = audioSceneSystem_->seek(objectId, next, *audioSystem_);
         std::ostringstream status;
@@ -1743,8 +1426,8 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
     }
     case EditorCommand::MediaPlay:
         changed = audioSceneSystem_->transport_state(objectId, *audioSystem_) == "Paused"
-            ? audioSceneSystem_->resume(objectId, *audioSystem_)
-            : audioSceneSystem_->play(world, objectId, *audioSystem_, assetSystem_);
+                      ? audioSceneSystem_->resume(objectId, *audioSystem_)
+                      : audioSceneSystem_->play(world, objectId, *audioSystem_, assetSystem_);
         lastStatus_ = changed ? "Audio source playing" : "Audio source could not play";
         break;
     case EditorCommand::MediaPause:
@@ -1766,81 +1449,167 @@ bool EditorLayer::dispatch_audio_source_transport(EditorCommand command, std::st
     return true;
 }
 
-void EditorLayer::dispatch_command(EditorCommand command, std::string_view target, World& world) {
+void EditorLayer::dispatch_command(EditorCommand command, std::string_view target, World &world) {
     finish_inspector_edit();
 #if defined(SHINKOU_PLATFORM_WINDOWS)
     std::string selectedPath;
-    if (nativeWindow_ && target.empty() && (command == EditorCommand::OpenScene || command == EditorCommand::SaveSceneAs)) {
+    if (command == EditorCommand::SaveScene && !sceneNamed_ && nativeWindow_ && target.empty())
+        command = EditorCommand::SaveSceneAs;
+    if (nativeWindow_ && target.empty() &&
+        (command == EditorCommand::OpenScene || command == EditorCommand::SaveSceneAs)) {
         wchar_t path[32768]{};
-        const auto initial = (fileSystem_.root()/scenePath_).wstring();
-        std::copy_n(initial.c_str(),std::min(initial.size(),std::size(path)-1),path);
-        OPENFILENAMEW dialog{}; dialog.lStructSize=sizeof(dialog); dialog.hwndOwner=static_cast<HWND>(nativeWindow_);
-        dialog.lpstrFilter=L"Shinkou scene\0*.scene\0All files\0*.*\0"; dialog.lpstrFile=path; dialog.nMaxFile=static_cast<DWORD>(std::size(path));
-        dialog.lpstrDefExt=L"scene"; dialog.Flags=OFN_NOCHANGEDIR|OFN_PATHMUSTEXIST|(command==EditorCommand::OpenScene ? OFN_FILEMUSTEXIST : OFN_OVERWRITEPROMPT);
-        const bool chosen=command==EditorCommand::OpenScene ? GetOpenFileNameW(&dialog)!=0 : GetSaveFileNameW(&dialog)!=0;
-        if (!chosen) return;
-        selectedPath=std::filesystem::path(path).lexically_relative(fileSystem_.root()).generic_string(); target=selectedPath;
+        const auto initial = (fileSystem_.root() / scenePath_).wstring();
+        std::copy_n(initial.c_str(), std::min(initial.size(), std::size(path) - 1), path);
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = static_cast<HWND>(nativeWindow_);
+        dialog.lpstrFilter = L"Shinkou scene\0*.scene\0All files\0*.*\0";
+        dialog.lpstrFile = path;
+        dialog.nMaxFile = static_cast<DWORD>(std::size(path));
+        dialog.lpstrDefExt = L"scene";
+        dialog.Flags =
+            OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST |
+            (command == EditorCommand::OpenScene ? OFN_FILEMUSTEXIST : OFN_OVERWRITEPROMPT);
+        const bool chosen = command == EditorCommand::OpenScene ? GetOpenFileNameW(&dialog) != 0
+                                                                : GetSaveFileNameW(&dialog) != 0;
+        if (!chosen)
+            return;
+        selectedPath =
+            std::filesystem::path(path).lexically_relative(fileSystem_.root()).generic_string();
+        target = selectedPath;
     }
-    if (command==EditorCommand::Quit && sceneDirty_ && nativeWindow_) {
-        const auto answer=MessageBoxW(static_cast<HWND>(nativeWindow_),L"Save scene changes before closing?",L"Shinkou Editor",MB_YESNOCANCEL|MB_ICONQUESTION);
-        if(answer==IDCANCEL) return;
-        if(answer==IDYES) { dispatch_command(EditorCommand::SaveScene,{},world); if(sceneDirty_) return; }
+    if ((command == EditorCommand::Quit || command == EditorCommand::NewScene ||
+         command == EditorCommand::OpenScene) &&
+        sceneDirty_ && nativeWindow_) {
+        const auto answer =
+            MessageBoxW(static_cast<HWND>(nativeWindow_), L"Save scene changes before continuing?",
+                        L"Shinkou Editor", MB_YESNOCANCEL | MB_ICONQUESTION);
+        if (answer == IDCANCEL)
+            return;
+        if (answer == IDYES) {
+            dispatch_command(EditorCommand::SaveScene, {}, world);
+            if (sceneDirty_)
+                return;
+        }
     }
 #endif
     uiModel_.execute(command);
     switch (command) {
-    case EditorCommand::SaveLayout: save_layout(); break;
-    case EditorCommand::ReloadLayout: load_layout(); break;
-    case EditorCommand::ResetLayout: reset_layout(); break;
+    case EditorCommand::SaveLayout:
+        save_layout();
+        break;
+    case EditorCommand::ReloadLayout:
+        load_layout();
+        break;
+    case EditorCommand::ResetLayout:
+        reset_layout();
+        break;
     case EditorCommand::TogglePage: {
         const auto page = target == "project" ? std::string_view{"assets"} : target;
-        bool visible = page == "scene" ? layout_.showViewport : page == "game" ? layout_.showGame :
-            page == "hierarchy" ? layout_.showHierarchy : page == "inspector" ? layout_.showInspector :
-            page == "assets" ? layout_.showAssets : page == "console" ? layout_.showConsole :
-            page == "profiler" ? layout_.showProfiler : page == "render-graph" ? layout_.showRenderGraph :
-            page == "settings" ? layout_.showSettings : page == "build" ? layout_.showBuild :
-            page == "media" ? layout_.showMedia : page == "recovery" ? layout_.showRecovery : false;
-        const auto panelId = page == "scene" ? std::string_view{"viewport"} :
-            page == "project" ? std::string_view{"assets"} : page;
-        if (!visible && (page == "build" || page == "recovery") && !dockWorkspace_.activate_tab(panelId)) {
-            const auto panel = page == "build"
-                ? DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}
-                : DockPanel{"recovery", "File Recovery", false, true, {220.0f, 160.0f}};
+        bool visible = page == "scene"          ? layout_.showViewport
+                       : page == "game"         ? layout_.showGame
+                       : page == "hierarchy"    ? layout_.showHierarchy
+                       : page == "inspector"    ? layout_.showInspector
+                       : page == "assets"       ? layout_.showAssets
+                       : page == "console"      ? layout_.showConsole
+                       : page == "profiler"     ? layout_.showProfiler
+                       : page == "render-graph" ? layout_.showRenderGraph
+                       : page == "settings"     ? layout_.showSettings
+                       : page == "build"        ? layout_.showBuild
+                       : page == "media"        ? layout_.showMedia
+                       : page == "recovery"     ? layout_.showRecovery
+                                                : false;
+        const auto panelId = page == "scene"     ? std::string_view{"viewport"}
+                             : page == "project" ? std::string_view{"assets"}
+                                                 : page;
+        if (!visible && (page == "build" || page == "recovery") &&
+            !dockWorkspace_.activate_tab(panelId)) {
+            const auto panel =
+                page == "build"
+                    ? DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}
+                    : DockPanel{"recovery", "File Recovery", false, true, {220.0f, 160.0f}};
             if (!dockWorkspace_.add_tab("console", panel, false))
                 dockWorkspace_.add_tab("viewport", panel, false);
         }
-        if (page == "scene") set_panel_visible("viewport", !visible);
-        else set_panel_visible(page == "project" ? "assets" : page, !visible);
-        if (!visible) dockWorkspace_.activate_tab(panelId);
+        if (page == "scene")
+            set_panel_visible("viewport", !visible);
+        else
+            set_panel_visible(page == "project" ? "assets" : page, !visible);
+        if (!visible)
+            dockWorkspace_.activate_tab(panelId);
         break;
     }
-    case EditorCommand::Create3DObject:
-    case EditorCommand::Create2DObject:
-    case EditorCommand::CreateUiObject:
-        lastStatus_ = "This object factory is not registered"; break;
-    case EditorCommand::CreateEmpty: {
-        if (!checkpoint(world)) break;
-        const char* name = "GameObject";
-        auto& object = world.create_object(name);
+    case EditorCommand::DuplicateObject:
+        instantiate_object(world, false);
+        break;
+    case EditorCommand::CopyObject:
+        copy_object(world);
+        break;
+    case EditorCommand::PasteObject:
+        instantiate_object(world, true);
+        break;
+    case EditorCommand::CreateCamera:
+        create_scene_camera(world);
+        break;
+    case EditorCommand::Create3DObject: {
+        const std::string shape{target.empty() ? "Cube" : target};
+        if (!editor_primitive_mesh(shape)) {
+            lastStatus_ = "Unknown primitive shape";
+            break;
+        }
+        if (!checkpoint(world))
+            break;
+        auto &object = world.create_object(shape);
+        object.add_component<components::PrimitiveMeshComponent>()->set_shape(shape);
+        // Place at the current view focus so creation is visible after moving
+        // the editor camera, rather than silently creating behind the eye.
+        ensure_viewport_camera(world);
+        const auto &pose = viewportController_.pose();
+        object.get_component<components::TransformComponent>()->set_position(
+            pose.position +
+            math::Rotate(pose.rotation, {0, 0, 1}) * viewportController_.focus_distance());
         layout_.selectedObject = object.id();
         uiModel_.select_object(object.id());
-        uiModel_.invalidate();
+        uiModel_.invalidate_inspector();
+        world.refresh_transforms();
+        document_changed();
+        lastStatus_ = "Created " + shape;
+        push_console(lastStatus_);
+        break;
+    }
+    case EditorCommand::Create2DObject:
+    case EditorCommand::CreateUiObject:
+        lastStatus_ = "This object factory is not registered";
+        break;
+    case EditorCommand::CreateEmpty: {
+        if (!checkpoint(world))
+            break;
+        const char *name = "GameObject";
+        auto &object = world.create_object(name);
+        layout_.selectedObject = object.id();
+        uiModel_.select_object(object.id());
+        uiModel_.invalidate_inspector();
         document_changed();
         push_console(std::string("Created ") + name);
         break;
     }
     case EditorCommand::CreateChild: {
-        if (!checkpoint(world)) break;
-        auto* parent = world.find_object(layout_.selectedObject);
-        auto& object = parent ? parent->create_child("GameObject") : world.create_object("GameObject");
+        if (!checkpoint(world))
+            break;
+        auto *parent = world.find_object(layout_.selectedObject);
+        auto &object =
+            parent ? parent->create_child("GameObject") : world.create_object("GameObject");
         layout_.selectedObject = object.id();
         uiModel_.select_object(object.id());
-        uiModel_.invalidate();
+        uiModel_.invalidate_inspector();
         document_changed();
         push_console("Created child GameObject");
         break;
     }
-    case EditorCommand::ProjectSettings: set_panel_visible("settings", true); dockWorkspace_.activate_tab("settings"); break;
+    case EditorCommand::ProjectSettings:
+        set_panel_visible("settings", true);
+        dockWorkspace_.activate_tab("settings");
+        break;
     case EditorCommand::RefreshAssets:
         reset_asset_manifest("AssetSystem manifest refresh requested");
         assetsDirty_ = true;
@@ -1858,7 +1627,8 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::OpenAsset: {
         const auto path = std::filesystem::path(target).lexically_normal();
         bool directory = false;
-        if (target.empty() || path.is_absolute() || !fileSystem_.exists(path, &directory) || directory) {
+        if (target.empty() || path.is_absolute() || !fileSystem_.exists(path, &directory) ||
+            directory) {
             lastStatus_ = "Resource is outside the project or unavailable";
             break;
         }
@@ -1870,14 +1640,18 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     }
     case EditorCommand::BuildProject:
         if (!dockWorkspace_.activate_tab("build")) {
-            if (!dockWorkspace_.add_tab("console", DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}, false))
-                dockWorkspace_.add_tab("viewport", DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}, false);
+            if (!dockWorkspace_.add_tab(
+                    "console", DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}, false))
+                dockWorkspace_.add_tab(
+                    "viewport", DockPanel{"build", "Build", false, true, {220.0f, 180.0f}}, false);
         }
         set_panel_visible("build", true);
         dockWorkspace_.activate_tab("build");
         start_build();
         break;
-    case EditorCommand::CancelBuild: cancel_build(); break;
+    case EditorCommand::CancelBuild:
+        cancel_build();
+        break;
     case EditorCommand::RefreshBuildTools:
         buildSystem_.refresh_toolchains();
         refresh_ide_tools();
@@ -1927,7 +1701,8 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         open_diagnostic_in_ide(target);
         break;
     case EditorCommand::MediaPlay:
-        if (dispatch_audio_source_transport(command, target, world)) break;
+        if (dispatch_audio_source_transport(command, target, world))
+            break;
         if (mediaPanel_.description().kind == ui::MediaKind::Video) {
             if (!videoPreviewSnapshot_ || !videoPreviewSnapshot_->valid()) {
                 lastStatus_ = "Video preview unavailable";
@@ -1942,7 +1717,8 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         start_audio_preview();
         break;
     case EditorCommand::MediaPause:
-        if (dispatch_audio_source_transport(command, target, world)) break;
+        if (dispatch_audio_source_transport(command, target, world))
+            break;
         if (mediaPanel_.description().kind == ui::MediaKind::Video) {
             mediaPanel_.apply(ui::MediaCommand::pause());
             lastStatus_ = "Video preview paused";
@@ -1958,10 +1734,12 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         }
         break;
     case EditorCommand::MediaStop:
-        if (dispatch_audio_source_transport(command, target, world)) break;
+        if (dispatch_audio_source_transport(command, target, world))
+            break;
         if (mediaPanel_.description().kind == ui::MediaKind::Video) {
             mediaPanel_.apply(ui::MediaCommand::stop());
-            if (videoPreviewSnapshot_ && videoPreviewSnapshot_->valid()) request_video_frame(0.0);
+            if (videoPreviewSnapshot_ && videoPreviewSnapshot_->valid())
+                request_video_frame(0.0);
             lastStatus_ = "Video preview stopped";
             sync_media_preview_state();
             break;
@@ -1976,23 +1754,27 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         if (audioSystem_ && audioPreviewVoice_ != 0)
             audioSystem_->set_loop(audioPreviewVoice_, mediaPanel_.playback().loop);
         const bool video = mediaPanel_.description().kind == ui::MediaKind::Video;
-        lastStatus_ = video
-            ? (mediaPanel_.playback().loop ? "Video preview loop enabled" : "Video preview loop disabled")
-            : (mediaPanel_.playback().loop ? "Audio preview loop enabled" : "Audio preview loop disabled");
+        lastStatus_ = video ? (mediaPanel_.playback().loop ? "Video preview loop enabled"
+                                                           : "Video preview loop disabled")
+                            : (mediaPanel_.playback().loop ? "Audio preview loop enabled"
+                                                           : "Audio preview loop disabled");
         sync_media_preview_state();
         break;
     }
     case EditorCommand::MediaSeek: {
-        if (dispatch_audio_source_transport(command, target, world)) break;
+        if (dispatch_audio_source_transport(command, target, world))
+            break;
         try {
             const auto normalized = std::stod(std::string(target));
             if (!std::isfinite(normalized) || normalized < 0.0 || normalized > 1.0 ||
-                mediaPanel_.playback().duration <= 0.0) throw std::invalid_argument("seek");
+                mediaPanel_.playback().duration <= 0.0)
+                throw std::invalid_argument("seek");
             const auto seconds = normalized * mediaPanel_.playback().duration;
             mediaPanel_.apply(ui::MediaCommand::seek(seconds));
             mediaPanel_.playback().currentTime = seconds;
             if (mediaPanel_.description().kind == ui::MediaKind::Audio) {
-                if (audioSystem_ && audioPreviewVoice_ != 0) audioSystem_->seek(audioPreviewVoice_, seconds);
+                if (audioSystem_ && audioPreviewVoice_ != 0)
+                    audioSystem_->seek(audioPreviewVoice_, seconds);
             } else if (mediaPanel_.description().kind == ui::MediaKind::Video) {
                 if (!videoPreviewSnapshot_ || !videoPreviewSnapshot_->valid())
                     throw std::invalid_argument("video frame unavailable");
@@ -2007,58 +1789,94 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::MediaSetVolume: {
         try {
             const auto value = std::stod(std::string(target));
-            if (!std::isfinite(value) || value < 0.0 || value > 1.0) throw std::invalid_argument("volume");
+            if (!std::isfinite(value) || value < 0.0 || value > 1.0)
+                throw std::invalid_argument("volume");
             mediaPanel_.playback().volume = value;
             assetSettings_.volume = static_cast<float>(value);
-            if (audioSystem_ && audioPreviewVoice_ != 0) audioSystem_->set_volume(audioPreviewVoice_, static_cast<float>(value));
+            if (audioSystem_ && audioPreviewVoice_ != 0)
+                audioSystem_->set_volume(audioPreviewVoice_, static_cast<float>(value));
             sync_media_preview_state();
         } catch (...) {
             lastStatus_ = "Audio preview volume must be between 0 and 1";
         }
         break;
     }
-    case EditorCommand::SetDarkTheme: set_theme("dark"); break;
-    case EditorCommand::SetLightTheme: set_theme("light"); break;
-    case EditorCommand::SetHighContrastTheme: set_theme("high-contrast"); break;
-    case EditorCommand::SetChineseLanguage: set_language("zh-CN"); break;
-    case EditorCommand::SetEnglishLanguage: set_language("en-US"); break;
-    case EditorCommand::Play: lastStatus_ = uiModel_.playing() ? "Simulation running" : "Simulation stopped"; break;
-    case EditorCommand::Pause: lastStatus_ = uiModel_.paused() ? "Simulation paused" : "Simulation running"; break;
-    case EditorCommand::Step: stepPending_ = true; lastStatus_ = "Advance one simulation frame"; break;
+    case EditorCommand::SetDarkTheme:
+        set_theme("dark");
+        break;
+    case EditorCommand::SetLightTheme:
+        set_theme("light");
+        break;
+    case EditorCommand::SetHighContrastTheme:
+        set_theme("high-contrast");
+        break;
+    case EditorCommand::SetChineseLanguage:
+        set_language("zh-CN");
+        break;
+    case EditorCommand::SetEnglishLanguage:
+        set_language("en-US");
+        break;
+    case EditorCommand::Play:
+        lastStatus_ = uiModel_.playing() ? "Simulation running" : "Simulation stopped";
+        break;
+    case EditorCommand::Pause:
+        lastStatus_ = uiModel_.paused() ? "Simulation paused" : "Simulation running";
+        break;
+    case EditorCommand::Step:
+        stepPending_ = true;
+        lastStatus_ = "Advance one simulation frame";
+        break;
     case EditorCommand::Undo:
     case EditorCommand::Redo: {
         const bool undo = command == EditorCommand::Undo;
-        auto& sourceHistory = undo ? undoHistory_ : redoHistory_;
-        auto& destinationHistory = undo ? redoHistory_ : undoHistory_;
-        if (sourceHistory.empty()) { lastStatus_ = "No edit history"; break; }
+        auto &sourceHistory = undo ? undoHistory_ : redoHistory_;
+        auto &destinationHistory = undo ? redoHistory_ : undoHistory_;
+        if (sourceHistory.empty()) {
+            lastStatus_ = "No edit history";
+            break;
+        }
         const auto kind = sourceHistory.back();
-        if(kind==EditHistoryKind::Property) {
-            if(replay_property_edit(undo)) {
-                sourceHistory.pop_back();destinationHistory.push_back(kind);
-                lastStatus_=undo?"Edit undone":"Edit redone";
+        if (kind == EditHistoryKind::Property) {
+            if (replay_property_edit(undo)) {
+                sourceHistory.pop_back();
+                destinationHistory.push_back(kind);
+                lastStatus_ = undo ? "Edit undone" : "Edit redone";
             }
         } else if (kind == EditHistoryKind::Scene) {
-            auto& source = undo ? undo_ : redo_;
-            auto& destination = undo ? redo_ : undo_;
-            if (source.empty()) { lastStatus_ = "Scene edit history is unavailable"; break; }
-            EditorDocument current; std::string error;
+            auto &source = undo ? undo_ : redo_;
+            auto &destination = undo ? redo_ : undo_;
+            if (source.empty()) {
+                lastStatus_ = "Scene edit history is unavailable";
+                break;
+            }
+            EditorDocument current;
+            std::string error;
             if (!EditorDocument::capture(world, layout_.selectedObject, current, error) ||
-                !source.back().restore(world, layout_.selectedObject, error)) {
+                !source.back().document.restore(world, layout_.selectedObject, error)) {
                 lastStatus_ = error;
                 break;
             }
-            destination.push_back(std::move(current));
+            const auto restoredPath = source.back().path;
+            const bool restoredDirty = source.back().dirty, restoredNamed = source.back().named;
+            destination.push_back({std::move(current), scenePath_, sceneDirty_, sceneNamed_});
             rebind_property_history(world);
             source.pop_back();
             sourceHistory.pop_back();
             destinationHistory.push_back(EditHistoryKind::Scene);
             document_changed(true);
+            scenePath_ = restoredPath;
+            sceneDirty_ = restoredDirty;
+            sceneNamed_ = restoredNamed;
             lastStatus_ = undo ? "Edit undone" : "Edit redone";
         } else {
-            auto& source = undo ? fileUndo_ : fileRedo_;
-            auto& destination = undo ? fileRedo_ : fileUndo_;
-            if (source.empty()) { lastStatus_ = "File edit history is unavailable"; break; }
-            auto operation = std::move(source.back());
+            auto &source = undo ? fileUndo_ : fileRedo_;
+            auto &destination = undo ? fileRedo_ : fileUndo_;
+            if (source.empty()) {
+                lastStatus_ = "File edit history is unavailable";
+                break;
+            }
+            // Keep the history entry intact if a filesystem operation fails.
+            auto operation = source.back();
             std::string error;
             if (!apply_file_operation(operation, !undo, error)) {
                 lastStatus_ = (undo ? "File undo failed: " : "File redo failed: ") + error;
@@ -2076,24 +1894,40 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
         break;
     }
     case EditorCommand::NewScene: {
-        if (!checkpoint(world)) break;
-        EditorDocument empty; std::string error;
-        if (empty.restore(world, layout_.selectedObject, error)) { rebind_property_history(world);document_changed(); lastStatus_ = "New scene (Undo to restore)"; }
-        else lastStatus_ = error;
+        if (!checkpoint(world))
+            break;
+        EditorDocument empty;
+        std::string error;
+        if (empty.restore(world, layout_.selectedObject, error)) {
+            rebind_property_history(world);
+            document_changed();
+            scenePath_ = "assets/Scenes/Untitled.scene";
+            sceneNamed_ = false;
+            lastStatus_ = "New scene (Undo to restore)";
+        } else
+            lastStatus_ = error;
         break;
     }
     case EditorCommand::OpenScene: {
         const std::string path = target.empty() ? scenePath_ : std::string(target);
-        std::string json, error; EditorDocument next;
-        if (!fileSystem_.read_text(path, json, &error) || !EditorDocument::from_json(json, next, error)) { lastStatus_ = "Open failed: " + error; break; }
-        if (!checkpoint(world)) break;
+        std::string json, error;
+        EditorDocument next;
+        if (!fileSystem_.read_text(path, json, &error) ||
+            !EditorDocument::from_json(json, next, error)) {
+            lastStatus_ = "Open failed: " + error;
+            break;
+        }
+        if (!checkpoint(world))
+            break;
         if (!next.restore(world, layout_.selectedObject, error)) {
             undo_.pop_back();
-            if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
+            if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene)
+                undoHistory_.pop_back();
             lastStatus_ = "Open failed: " + error;
             break;
         }
         scenePath_ = path;
+        sceneNamed_ = true;
         rebind_property_history(world);
         document_changed();
         sceneDirty_ = false;
@@ -2108,57 +1942,98 @@ void EditorLayer::dispatch_command(EditorCommand command, std::string_view targe
     case EditorCommand::SaveScene:
     case EditorCommand::SaveSceneAs: {
         const std::string path = target.empty() ? scenePath_ : std::string(target);
-        EditorDocument document; std::string json, error;
+        EditorDocument document;
+        std::string json, error;
         expect_editor_file_change(path);
-        if (!EditorDocument::capture(world, layout_.selectedObject, document, error) || !document.to_json(json, error) ||
-            !fileSystem_.write_text_atomic(path, json, &error)) { lastStatus_ = "Save failed: " + error; break; }
-        scenePath_ = path; sceneDirty_ = false; assetsDirty_ = true; lastStatus_ = "Saved " + path; break;
+        if (!EditorDocument::capture(world, layout_.selectedObject, document, error) ||
+            !document.to_json(json, error) || !fileSystem_.write_text_atomic(path, json, &error)) {
+            lastStatus_ = "Save failed: " + error;
+            break;
+        }
+        scenePath_ = path;
+        sceneNamed_ = true;
+        sceneDirty_ = false;
+        assetsDirty_ = true;
+        lastStatus_ = "Saved " + path;
+        break;
     }
     case EditorCommand::FrameSelection: {
-        auto* object = world.find_object(layout_.selectedObject);
-        if (!object) { lastStatus_ = "Select an object first"; break; }
-        const auto* transform = object->get_component<components::TransformComponent>();
+        auto *object = world.find_object(layout_.selectedObject);
+        if (!object) {
+            lastStatus_ = "Select an object first";
+            break;
+        }
+        const auto *transform = object->get_component<components::TransformComponent>();
         auto pose = transform ? transform->local : math::Transform{};
-        for (auto* parent = object->parent(); parent; parent = parent->parent())
-            if (const auto* t = parent->get_component<components::TransformComponent>()) pose = math::Combine(t->local, pose);
+        for (auto *parent = object->parent(); parent; parent = parent->parent())
+            if (const auto *t = parent->get_component<components::TransformComponent>())
+                pose = math::Combine(t->local, pose);
         const auto center = pose.position;
-        orbitDistance_ = 5.0f;
-        bool framed = false;
-        world.ecs().each<render::CameraComponent, render::TransformComponent>([&](Entity, auto& camera, auto& view) {
-            if (framed || !camera.active || !view.visible) return;
-            framed = true;
-            view.local.position = {center.x, center.y, center.z - 5.0f}; view.local.rotation = math::Quat::Identity();
-        });
-        lastStatus_ = framed ? "Framed " + std::string(object->name()) : "No active scene camera"; break;
+        const float radius = std::max({std::abs(pose.scale.x), std::abs(pose.scale.y),
+                                       std::abs(pose.scale.z), .5f}) *
+                             .866f;
+        viewportController_.frame_selection(center, radius,
+                                            std::max(1.f, ui_viewport_rect().width) /
+                                                std::max(1.f, ui_viewport_rect().height));
+        lastStatus_ = "Framed " + std::string(object->name());
+        break;
     }
     case EditorCommand::AddComponent: {
-        auto* object = world.find_object(layout_.selectedObject);
-        if (!object) { lastStatus_ = "Select an object first"; break; }
-        if (target.empty()) { set_panel_visible("inspector", true); lastStatus_ = "Choose a component in Inspector"; break; }
-        if (!checkpoint(world)) break;
+        auto *object = world.find_object(layout_.selectedObject);
+        if (!object) {
+            lastStatus_ = "Select an object first";
+            break;
+        }
+        if (target.empty()) {
+            set_panel_visible("inspector", true);
+            lastStatus_ = "Choose a component in Inspector";
+            break;
+        }
+        if (!checkpoint(world))
+            break;
         if (!object->add_component(target)) {
             undo_.pop_back();
-            if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
+            if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene)
+                undoHistory_.pop_back();
             lastStatus_ = "Component is unknown or already attached";
             break;
         }
-        document_changed(); lastStatus_ = "Added " + std::string(target); break;
+        document_changed();
+        lastStatus_ = "Added " + std::string(target);
+        break;
     }
     case EditorCommand::DeleteObject: {
-        auto* object = world.find_object(layout_.selectedObject);
-        if (object && checkpoint(world)) { object->destroy(); layout_.selectedObject = 0; document_changed(); lastStatus_ = "Deleted object (Undo to restore)"; }
+        auto *object = world.find_object(layout_.selectedObject);
+        if (object && checkpoint(world)) {
+            object->destroy();
+            layout_.selectedObject = 0;
+            document_changed();
+            lastStatus_ = "Deleted object (Undo to restore)";
+        }
         break;
     }
-    case EditorCommand::ClearConsole: consoleEntries_.clear(); lastStatus_ = "Console cleared"; break;
-    case EditorCommand::ToggleCompact: layout_.compactControls = !layout_.compactControls; editorUi_.invalidate_layout(); break;
-    case EditorCommand::ToggleDocking: layout_.allowDocking = !layout_.allowDocking; editorUi_.invalidate_layout(); break;
+    case EditorCommand::ClearConsole:
+        consoleEntries_.clear();
+        lastStatus_ = "Console cleared";
+        break;
+    case EditorCommand::ToggleCompact:
+        layout_.compactControls = !layout_.compactControls;
+        break;
+    case EditorCommand::ToggleDocking:
+        layout_.allowDocking = !layout_.allowDocking;
+        break;
     case EditorCommand::SetUiScale: {
         PropertyValue v;
-        if (parse_property_text(PropertyType::Number, target, v)) { layout_.uiScale = std::clamp(static_cast<float>(std::get<double>(v)), 0.5f, 3.0f); editorUi_.invalidate_layout(); }
+        if (parse_property_text(PropertyType::Number, target, v)) {
+            layout_.uiScale = std::clamp(static_cast<float>(std::get<double>(v)), 0.5f, 3.0f);
+        }
         break;
     }
-    case EditorCommand::Quit: quitRequested_ = true; break;
-    default: break;
+    case EditorCommand::Quit:
+        quitRequested_ = true;
+        break;
+    default:
+        break;
     }
 }
 
@@ -2173,15 +2048,19 @@ void EditorLayer::poll_editor_files() {
 
 void EditorLayer::expect_editor_file_change(std::string_view path, bool recursive) {
     const auto normalized = normalized_project_path(path);
-    if (normalized.empty() || normalized == ".") return;
+    if (normalized.empty() || normalized == ".")
+        return;
     const auto append = [&](std::string value, bool subtree) {
-        if (value.empty() || value == ".") return;
-        const auto found = std::find_if(expectedFileChanges_.begin(), expectedFileChanges_.end(),
-            [&](const auto& expected) {
+        if (value.empty() || value == ".")
+            return;
+        const auto found = std::find_if(
+            expectedFileChanges_.begin(), expectedFileChanges_.end(), [&](const auto &expected) {
                 return expected.path == value && expected.recursive == subtree;
             });
-        if (found != expectedFileChanges_.end()) return;
-        if (expectedFileChanges_.size() >= 128) expectedFileChanges_.erase(expectedFileChanges_.begin());
+        if (found != expectedFileChanges_.end())
+            return;
+        if (expectedFileChanges_.size() >= 128)
+            expectedFileChanges_.erase(expectedFileChanges_.begin());
         expectedFileChanges_.push_back({std::move(value), subtree});
     };
     append(normalized, recursive);
@@ -2196,7 +2075,7 @@ void EditorLayer::expect_editor_file_change(std::string_view path, bool recursiv
     }
 }
 
-void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& changes) {
+void EditorLayer::collect_external_file_changes(const std::vector<FileChange> &changes) {
     const auto expected = std::move(expectedFileChanges_);
     expectedFileChanges_.clear();
     bool discovered = false;
@@ -2204,27 +2083,33 @@ void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& c
     std::uint64_t batchId = 0;
     const auto change_name = [](FileChangeType type) {
         switch (type) {
-        case FileChangeType::Added: return std::string{"Added"};
-        case FileChangeType::Removed: return std::string{"Removed"};
-        default: return std::string{"Modified"};
+        case FileChangeType::Added:
+            return std::string{"Added"};
+        case FileChangeType::Removed:
+            return std::string{"Removed"};
+        default:
+            return std::string{"Modified"};
         }
     };
-    for (const auto& change : changes) {
+    for (const auto &change : changes) {
         const auto path = normalized_project_path(change.relativePath.generic_string());
-        if (path.empty() || path == "." || path_is_or_below(path, ".shinkou")) continue;
-        const auto owned = std::find_if(expected.begin(), expected.end(), [&](const auto& marker) {
+        if (path.empty() || path == "." || path_is_or_below(path, ".shinkou"))
+            continue;
+        const auto owned = std::find_if(expected.begin(), expected.end(), [&](const auto &marker) {
             return marker.recursive ? path_is_or_below(path, marker.path) : path == marker.path;
         });
-        if (owned != expected.end()) continue;
+        if (owned != expected.end())
+            continue;
 
         discovered = true;
         if (batchId == 0) {
             batchId = ++externalFileBatchId_;
-            if (batchId == 0) batchId = ++externalFileBatchId_;
+            if (batchId == 0)
+                batchId = ++externalFileBatchId_;
         }
         const auto kind = change_name(change.type);
         const auto existing = std::find_if(externalFileChanges_.begin(), externalFileChanges_.end(),
-            [&](const auto& entry) { return entry.path == path; });
+                                           [&](const auto &entry) { return entry.path == path; });
         if (existing != externalFileChanges_.end()) {
             existing->kind = kind;
             existing->batchId = batchId;
@@ -2235,31 +2120,35 @@ void EditorLayer::collect_external_file_changes(const std::vector<FileChange>& c
             existing->previousDirectory = change.previousDirectory;
             existing->currentDirectory = change.currentDirectory;
         } else if (externalFileChanges_.size() < 64) {
-            externalFileChanges_.push_back({path, kind, batchId,
-                                             change.previousSize, change.currentSize,
-                                             change.previousWriteStamp, change.currentWriteStamp,
-                                             change.previousDirectory, change.currentDirectory});
+            externalFileChanges_.push_back({path, kind, batchId, change.previousSize,
+                                            change.currentSize, change.previousWriteStamp,
+                                            change.currentWriteStamp, change.previousDirectory,
+                                            change.currentDirectory});
         }
         ++batchChanges;
     }
-    if (!discovered) return;
+    if (!discovered)
+        return;
     externalFileBatchStatus_ = "Batch #" + std::to_string(batchId) + ": " +
-        std::to_string(batchChanges) + " external path(s) require review";
+                               std::to_string(batchChanges) + " external path(s) require review";
     fileRecoveryUiDirty_ = true;
     assetsDirty_ = true;
-    lastStatus_ = "External project changes detected: " +
-        std::to_string(externalFileChanges_.size()) + " path(s) require review" +
-        (externalFileChanges_.empty() ? std::string{} : " (" + externalFileChanges_.front().path + ")");
+    lastStatus_ =
+        "External project changes detected: " + std::to_string(externalFileChanges_.size()) +
+        " path(s) require review" +
+        (externalFileChanges_.empty() ? std::string{}
+                                      : " (" + externalFileChanges_.front().path + ")");
     reset_asset_manifest(lastStatus_);
     push_console(lastStatus_);
 }
 
 void EditorLayer::clear_file_conflict_report() {
-    if (externalFileChanges_.empty()) return;
+    if (externalFileChanges_.empty())
+        return;
     externalFileChanges_.clear();
-    externalFileBatchStatus_ = externalFileBatchId_ == 0
-        ? "No external change batch"
-        : "Batch #" + std::to_string(externalFileBatchId_) + " dismissed";
+    externalFileBatchStatus_ =
+        externalFileBatchId_ == 0 ? "No external change batch"
+                                  : "Batch #" + std::to_string(externalFileBatchId_) + " dismissed";
     fileRecoveryUiDirty_ = true;
     lastStatus_ = "External file change report cleared";
     push_console(lastStatus_);
@@ -2287,16 +2176,18 @@ void EditorLayer::review_file_conflict(std::string_view path) {
 }
 
 void EditorLayer::request_file_scan() {
-    if (fileScanFuture_.valid()) return;
+    if (fileScanFuture_.valid())
+        return;
     const auto generation = fileScanGeneration_;
-    const auto directory = assetDirectory_;
+    const auto directory = assetBrowser_.directory;
     auto scanner = fileSystem_;
-    fileScanFuture_ = std::async(std::launch::async,
-        [generation, directory, scanner = std::move(scanner)]() mutable {
+    fileScanFuture_ = std::async(
+        std::launch::async, [generation, directory, scanner = std::move(scanner)]() mutable {
             AsyncFileScan result;
             result.generation = generation;
             result.scope = directory.lexically_normal() == std::filesystem::path(".")
-                ? std::string{} : directory.lexically_normal().generic_string();
+                               ? std::string{}
+                               : directory.lexically_normal().generic_string();
             // A project root without an assets folder stays cheap to open.
             // Once the user enters a directory, that directory is scanned
             // recursively so Tree view can represent its real hierarchy.
@@ -2313,7 +2204,8 @@ void EditorLayer::request_file_scan() {
 
 void EditorLayer::set_asset_directory(std::filesystem::path directory) {
     directory = directory.lexically_normal();
-    if (directory == ".") directory.clear();
+    if (directory == ".")
+        directory.clear();
     bool isDirectory = false;
     if (!directory.empty() && !fileSystem_.exists(directory, &isDirectory)) {
         lastStatus_ = "Folder does not exist: " + directory.generic_string();
@@ -2323,13 +2215,15 @@ void EditorLayer::set_asset_directory(std::filesystem::path directory) {
         lastStatus_ = "Not a folder: " + directory.generic_string();
         return;
     }
-    if (assetDirectory_ == directory) return;
-    assetDirectory_ = std::move(directory);
-    editorUi_.set_asset_directory(assetDirectory_);
+    if (assetBrowser_.directory == directory)
+        return;
+    assetBrowser_.directory = std::move(directory);
+
     ++fileScanGeneration_;
     assetsDirty_ = true;
-    lastStatus_ = assetDirectory_.empty() ? "Opened project root" :
-        "Opened " + assetDirectory_.generic_string();
+    lastStatus_ = assetBrowser_.directory.empty()
+                      ? "Opened project root"
+                      : "Opened " + assetBrowser_.directory.generic_string();
 }
 
 void EditorLayer::reset_asset_manifest(std::string status) {
@@ -2340,77 +2234,90 @@ void EditorLayer::reset_asset_manifest(std::string status) {
     assetManifestStatus_ = std::move(status);
 }
 
-std::size_t EditorLayer::remap_live_asset_references(std::string_view from,
-                                                     std::string_view to) {
-    if (!activeWorld_) return 0;
+std::size_t EditorLayer::remap_live_asset_references(std::string_view from, std::string_view to) {
+    if (!activeWorld_)
+        return 0;
     const auto normalizedFrom = normalized_project_path(from);
     const auto normalizedTo = normalized_project_path(to);
-    if (normalizedFrom.empty() || normalizedTo.empty() || normalizedFrom == normalizedTo) return 0;
+    if (normalizedFrom.empty() || normalizedTo.empty() || normalizedFrom == normalizedTo)
+        return 0;
 
     std::size_t changed = 0;
-    activeWorld_->each_object([&](GameObject& object) {
-        if (auto* reference = object.get_component<AssetReferenceComponent>()) {
+    activeWorld_->each_object([&](GameObject &object) {
+        if (auto *reference = object.get_component<AssetReferenceComponent>()) {
             if (path_is_or_below(reference->path(), normalizedFrom)) {
-                const auto next = remap_project_path(reference->path(), normalizedFrom, normalizedTo);
-                if (reference->set_path(next)) ++changed;
+                const auto next =
+                    remap_project_path(reference->path(), normalizedFrom, normalizedTo);
+                if (reference->set_path(next))
+                    ++changed;
             }
         }
-        if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
+        if (auto *audioSource = object.get_component<components::AudioSourceComponent>()) {
             if (path_is_or_below(audioSource->clipPath, normalizedFrom)) {
-                audioSource->clipPath = remap_project_path(audioSource->clipPath, normalizedFrom, normalizedTo);
+                audioSource->clipPath =
+                    remap_project_path(audioSource->clipPath, normalizedFrom, normalizedTo);
                 audioSource->assetId = 0;
                 ++changed;
             }
         }
     });
-    if (changed == 0) return 0;
+    if (changed == 0)
+        return 0;
 
     pendingAssetReferenceRefreshes_.push_back({normalizedTo});
     // A filesystem transaction cannot be represented by EditorDocument's
     // world-only snapshots. Discard snapshots that still contain the old
     // path instead of allowing Undo to restore broken references.
-    if (!replayingFileOperation_) reset_edit_history_for_file_operation();
+    if (!replayingFileOperation_)
+        reset_edit_history_for_file_operation();
     sceneDirty_ = true;
-    uiModel_.invalidate();
-    editorUi_.invalidate_layout();
+    uiModel_.invalidate_inspector();
+
     return changed;
 }
 
 std::size_t EditorLayer::invalidate_live_asset_references(std::string_view path) {
-    if (!activeWorld_) return 0;
+    if (!activeWorld_)
+        return 0;
     const auto normalizedPath = normalized_project_path(path);
-    if (normalizedPath.empty()) return 0;
+    if (normalizedPath.empty())
+        return 0;
 
     std::size_t changed = 0;
-    activeWorld_->each_object([&](GameObject& object) {
-        if (auto* reference = object.get_component<AssetReferenceComponent>()) {
+    activeWorld_->each_object([&](GameObject &object) {
+        if (auto *reference = object.get_component<AssetReferenceComponent>()) {
             if (path_is_or_below(reference->path(), normalizedPath) && reference->asset_id() != 0) {
                 reference->set_asset_id(0);
                 ++changed;
             }
         }
-        if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
-            if (path_is_or_below(audioSource->clipPath, normalizedPath) && audioSource->assetId != 0) {
+        if (auto *audioSource = object.get_component<components::AudioSourceComponent>()) {
+            if (path_is_or_below(audioSource->clipPath, normalizedPath) &&
+                audioSource->assetId != 0) {
                 audioSource->assetId = 0;
                 ++changed;
             }
         }
     });
-    if (changed == 0) return 0;
+    if (changed == 0)
+        return 0;
 
-    if (!replayingFileOperation_) reset_edit_history_for_file_operation();
+    if (!replayingFileOperation_)
+        reset_edit_history_for_file_operation();
     sceneDirty_ = true;
-    uiModel_.invalidate();
-    editorUi_.invalidate_layout();
+    uiModel_.invalidate_inspector();
+
     return changed;
 }
 
-EditorLayer::AssetDocumentMigrationReport EditorLayer::migrate_asset_documents(
-    std::string_view from, std::string_view to, bool invalidateIdentity) {
+EditorLayer::AssetDocumentMigrationReport
+EditorLayer::migrate_asset_documents(std::string_view from, std::string_view to,
+                                     bool invalidateIdentity) {
     AssetDocumentMigrationReport report;
     const auto normalizedFrom = normalized_project_path(from);
     const auto normalizedTo = normalized_project_path(to);
-    if (normalizedFrom.empty() || (!invalidateIdentity && normalizedTo.empty())) return report;
+    if (normalizedFrom.empty() || (!invalidateIdentity && normalizedTo.empty()))
+        return report;
 
     // This is deliberately bounded. Asset operations run on the editor thread,
     // so a malformed or unexpectedly large project must not turn a rename into
@@ -2424,42 +2331,50 @@ EditorLayer::AssetDocumentMigrationReport EditorLayer::migrate_asset_documents(
     }
 
     const auto remember_error = [&](std::string message) {
-        if (report.firstError.empty()) report.firstError = std::move(message);
+        if (report.firstError.empty())
+            report.firstError = std::move(message);
     };
-    const auto is_document = [](const std::filesystem::path& path) {
+    const auto is_document = [](const std::filesystem::path &path) {
         std::string extension = path.extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
         return extension == ".scene" || extension == ".prefab";
     };
-    const auto rewrite_property = [&](DocumentComponent& component,
-                                      std::string_view pathProperty) {
-        DocumentProperty* pathPropertyValue = nullptr;
-        DocumentProperty* idPropertyValue = nullptr;
-        for (auto& property : component.properties) {
-            if (property.name == pathProperty) pathPropertyValue = &property;
-            else if (property.name == "assetId") idPropertyValue = &property;
+    const auto rewrite_property = [&](DocumentComponent &component, std::string_view pathProperty) {
+        DocumentProperty *pathPropertyValue = nullptr;
+        DocumentProperty *idPropertyValue = nullptr;
+        for (auto &property : component.properties) {
+            if (property.name == pathProperty)
+                pathPropertyValue = &property;
+            else if (property.name == "assetId")
+                idPropertyValue = &property;
         }
-        if (!pathPropertyValue || !path_is_or_below(pathPropertyValue->value, normalizedFrom)) return false;
+        if (!pathPropertyValue || !path_is_or_below(pathPropertyValue->value, normalizedFrom))
+            return false;
         if (!invalidateIdentity)
-            pathPropertyValue->value = remap_project_path(pathPropertyValue->value, normalizedFrom, normalizedTo);
-        if (idPropertyValue) idPropertyValue->value = "0";
+            pathPropertyValue->value =
+                remap_project_path(pathPropertyValue->value, normalizedFrom, normalizedTo);
+        if (idPropertyValue)
+            idPropertyValue->value = "0";
         return true;
     };
 
-    for (const auto& entry : entries) {
-        if (entry.directory || !is_document(entry.relativePath)) continue;
+    for (const auto &entry : entries) {
+        if (entry.directory || !is_document(entry.relativePath))
+            continue;
         const auto documentPath = normalized_project_path(entry.relativePath.generic_string());
         // The active scene has already been migrated in memory. Rewriting its
         // on-disk copy here would make an unsaved editor edit unexpectedly
         // durable and would bypass the normal Save Scene transaction.
-        if (!activeScene.empty() && documentPath == activeScene) continue;
+        if (!activeScene.empty() && documentPath == activeScene)
+            continue;
         ++report.filesScanned;
 
         std::string json, error;
         bool truncated = false;
-        if (!fileSystem_.read_text_limited(entry.relativePath, 16u * 1024u * 1024u,
-                                           json, &truncated, &error) || truncated) {
+        if (!fileSystem_.read_text_limited(entry.relativePath, 16u * 1024u * 1024u, json,
+                                           &truncated, &error) ||
+            truncated) {
             ++report.filesSkipped;
             remember_error(documentPath + ": " + (error.empty() ? "document is too large" : error));
             continue;
@@ -2467,24 +2382,29 @@ EditorLayer::AssetDocumentMigrationReport EditorLayer::migrate_asset_documents(
         EditorDocument document;
         if (!EditorDocument::from_json(json, document, error)) {
             ++report.filesSkipped;
-            remember_error(documentPath + ": " + (error.empty() ? "unsupported document format" : error));
+            remember_error(documentPath + ": " +
+                           (error.empty() ? "unsupported document format" : error));
             continue;
         }
 
         std::size_t changed = 0;
-        for (auto& object : document.objects) {
-            for (auto& component : object.components) {
-                if (component.type == "AssetReference" && rewrite_property(component, "path")) ++changed;
-                else if (component.type == "AudioSource" && rewrite_property(component, "clipPath")) ++changed;
+        for (auto &object : document.objects) {
+            for (auto &component : object.components) {
+                if (component.type == "AssetReference" && rewrite_property(component, "path"))
+                    ++changed;
+                else if (component.type == "AudioSource" && rewrite_property(component, "clipPath"))
+                    ++changed;
             }
         }
-        if (changed == 0) continue;
+        if (changed == 0)
+            continue;
 
         expect_editor_file_change(entry.relativePath.generic_string());
         if (!document.to_json(json, error) ||
             !fileSystem_.write_text_atomic(entry.relativePath, json, &error)) {
             ++report.filesSkipped;
-            remember_error(documentPath + ": " + (error.empty() ? "could not write migrated document" : error));
+            remember_error(documentPath + ": " +
+                           (error.empty() ? "could not write migrated document" : error));
             continue;
         }
         ++report.filesChanged;
@@ -2494,31 +2414,34 @@ EditorLayer::AssetDocumentMigrationReport EditorLayer::migrate_asset_documents(
 }
 
 std::size_t EditorLayer::rebind_asset_references_from_manifest() {
-    if (!activeWorld_ || !assetManifest_) return 0;
+    if (!activeWorld_ || !assetManifest_)
+        return 0;
 
-    const auto find_entry = [&](std::string_view path) -> const assets::AssetManifestEntry* {
+    const auto find_entry = [&](std::string_view path) -> const assets::AssetManifestEntry * {
         const auto normalized = normalized_project_path(path);
-        if (normalized.empty() || normalized == ".") return nullptr;
-        for (const auto& entry : *assetManifest_) {
+        if (normalized.empty() || normalized == ".")
+            return nullptr;
+        for (const auto &entry : *assetManifest_) {
             const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
-            if (!relative.empty() && normalized_project_path(relative.generic_string()) == normalized)
+            if (!relative.empty() &&
+                normalized_project_path(relative.generic_string()) == normalized)
                 return &entry;
         }
         return nullptr;
     };
 
     std::size_t changed = 0;
-    activeWorld_->each_object([&](GameObject& object) {
-        if (auto* reference = object.get_component<AssetReferenceComponent>()) {
-            const auto* entry = find_entry(reference->path());
+    activeWorld_->each_object([&](GameObject &object) {
+        if (auto *reference = object.get_component<AssetReferenceComponent>()) {
+            const auto *entry = find_entry(reference->path());
             const auto nextId = entry ? entry->id : 0;
             if (reference->asset_id() != nextId) {
                 reference->set_asset_id(nextId);
                 ++changed;
             }
         }
-        if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
-            const auto* entry = find_entry(audioSource->clipPath);
+        if (auto *audioSource = object.get_component<components::AudioSourceComponent>()) {
+            const auto *entry = find_entry(audioSource->clipPath);
             const auto nextId = entry && entry->key.type == "audio" ? entry->id : 0;
             if (audioSource->assetId != nextId) {
                 audioSource->assetId = nextId;
@@ -2528,20 +2451,21 @@ std::size_t EditorLayer::rebind_asset_references_from_manifest() {
     });
     if (changed != 0) {
         sceneDirty_ = true;
-        uiModel_.invalidate();
-        editorUi_.invalidate_layout();
+        uiModel_.invalidate_inspector();
     }
     return changed;
 }
 
 void EditorLayer::apply_pending_asset_reference_refreshes() {
-    if (!activeWorld_ || !assetManifest_ || pendingAssetReferenceRefreshes_.empty()) return;
+    if (!activeWorld_ || !assetManifest_ || pendingAssetReferenceRefreshes_.empty())
+        return;
 
-    const auto find_entry = [&](std::string_view path) -> const assets::AssetManifestEntry* {
+    const auto find_entry = [&](std::string_view path) -> const assets::AssetManifestEntry * {
         const auto normalized = normalized_project_path(path);
-        for (const auto& entry : *assetManifest_) {
+        for (const auto &entry : *assetManifest_) {
             const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
-            if (!relative.empty() && normalized_project_path(relative.generic_string()) == normalized)
+            if (!relative.empty() &&
+                normalized_project_path(relative.generic_string()) == normalized)
                 return &entry;
         }
         return nullptr;
@@ -2549,27 +2473,31 @@ void EditorLayer::apply_pending_asset_reference_refreshes() {
 
     std::size_t rebound = 0;
     std::size_t unresolved = 0;
-    for (const auto& refresh : pendingAssetReferenceRefreshes_) {
-        activeWorld_->each_object([&](GameObject& object) {
-            if (auto* reference = object.get_component<AssetReferenceComponent>()) {
+    for (const auto &refresh : pendingAssetReferenceRefreshes_) {
+        activeWorld_->each_object([&](GameObject &object) {
+            if (auto *reference = object.get_component<AssetReferenceComponent>()) {
                 if (path_is_or_below(reference->path(), refresh.destinationPrefix)) {
-                    const auto* entry = find_entry(reference->path());
+                    const auto *entry = find_entry(reference->path());
                     const auto nextId = entry ? entry->id : 0;
                     if (reference->asset_id() != nextId) {
                         reference->set_asset_id(nextId);
-                        if (nextId != 0) ++rebound;
-                        else ++unresolved;
+                        if (nextId != 0)
+                            ++rebound;
+                        else
+                            ++unresolved;
                     }
                 }
             }
-            if (auto* audioSource = object.get_component<components::AudioSourceComponent>()) {
+            if (auto *audioSource = object.get_component<components::AudioSourceComponent>()) {
                 if (path_is_or_below(audioSource->clipPath, refresh.destinationPrefix)) {
-                    const auto* entry = find_entry(audioSource->clipPath);
+                    const auto *entry = find_entry(audioSource->clipPath);
                     const auto nextId = entry && entry->key.type == "audio" ? entry->id : 0;
                     if (audioSource->assetId != nextId) {
                         audioSource->assetId = nextId;
-                        if (nextId != 0) ++rebound;
-                        else ++unresolved;
+                        if (nextId != 0)
+                            ++rebound;
+                        else
+                            ++unresolved;
                     }
                 }
             }
@@ -2579,16 +2507,17 @@ void EditorLayer::apply_pending_asset_reference_refreshes() {
     if (rebound != 0 || unresolved != 0) {
         std::ostringstream status;
         status << "Asset references refreshed: " << rebound << " rebound";
-        if (unresolved != 0) status << ", " << unresolved << " unresolved";
+        if (unresolved != 0)
+            status << ", " << unresolved << " unresolved";
         lastStatus_ = status.str();
         push_console(lastStatus_);
-        uiModel_.invalidate();
-        editorUi_.invalidate_layout();
+        uiModel_.invalidate_inspector();
     }
 }
 
 void EditorLayer::request_asset_manifest_scan() {
-    if (!assetManifestDirty_ && !assetManifestFuture_.valid()) return;
+    if (!assetManifestDirty_ && !assetManifestFuture_.valid())
+        return;
     if (!assetSystem_) {
         assetManifestStatus_ = "AssetSystem manifest not connected";
         return;
@@ -2601,9 +2530,10 @@ void EditorLayer::request_asset_manifest_scan() {
         assetManifestStatus_ = "AssetSystem manifest unavailable";
         return;
     }
-    if (assetManifestFuture_.valid()) return;
+    if (assetManifestFuture_.valid())
+        return;
     const auto generation = assetManifestGeneration_;
-    auto* system = assetSystem_;
+    auto *system = assetSystem_;
     const auto manifestPath = fileSystem_.root() / ".shinkou" / "manifest.json";
     assetManifestStatus_ = "Scanning AssetSystem manifest...";
     try {
@@ -2619,17 +2549,18 @@ void EditorLayer::request_asset_manifest_scan() {
                         if (system->seed_manifest_cache(readback.entries, &seedError)) {
                             result.readbackValidated = true;
                         } else {
-                            result.readbackError = seedError.empty() ?
-                                "manifest cache seed was rejected" : seedError;
+                            result.readbackError =
+                                seedError.empty() ? "manifest cache seed was rejected" : seedError;
                         }
                     } else {
-                        result.readbackError = readback.error.empty() ?
-                            "manifest readback failed" : readback.error;
+                        result.readbackError =
+                            readback.error.empty() ? "manifest readback failed" : readback.error;
                     }
                 }
                 auto entries = system->scan_sources();
-                result.entries = std::make_shared<const std::vector<assets::AssetManifestEntry>>(std::move(entries));
-            } catch (const std::exception& error) {
+                result.entries = std::make_shared<const std::vector<assets::AssetManifestEntry>>(
+                    std::move(entries));
+            } catch (const std::exception &error) {
                 result.error = error.what();
             } catch (...) {
                 result.error = "unknown AssetSystem manifest worker failure";
@@ -2637,7 +2568,7 @@ void EditorLayer::request_asset_manifest_scan() {
             return result;
         });
         assetManifestDirty_ = false;
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
         assetManifestStatus_ = "AssetSystem manifest unavailable: " + std::string(error.what());
     } catch (...) {
         assetManifestStatus_ = "AssetSystem manifest unavailable";
@@ -2646,10 +2577,12 @@ void EditorLayer::request_asset_manifest_scan() {
 
 void EditorLayer::poll_asset_manifest_scan() {
     if (!assetManifestFuture_.valid() ||
-        assetManifestFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        assetManifestFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     AsyncAssetManifest result;
-    try { result = assetManifestFuture_.get(); }
-    catch (const std::exception& error) {
+    try {
+        result = assetManifestFuture_.get();
+    } catch (const std::exception &error) {
         assetManifestDirty_ = false;
         assetManifest_.reset();
         audioInspectorChoices_.reset();
@@ -2677,8 +2610,9 @@ void EditorLayer::poll_asset_manifest_scan() {
         assetManifestDirty_ = false;
         assetManifest_.reset();
         audioInspectorChoices_.reset();
-        assetManifestStatus_ = result.error.empty() ?
-            "AssetSystem manifest failed" : "AssetSystem manifest failed: " + result.error;
+        assetManifestStatus_ = result.error.empty()
+                                   ? "AssetSystem manifest failed"
+                                   : "AssetSystem manifest failed: " + result.error;
         lastStatus_ = assetManifestStatus_;
         push_console(lastStatus_);
         return;
@@ -2686,18 +2620,24 @@ void EditorLayer::poll_asset_manifest_scan() {
     assetManifest_ = std::move(result.entries);
     std::vector<EditorInspectorChoice> audioChoices;
     audioChoices.reserve(std::min<std::size_t>(assetManifest_->size(), 256));
-    for (const auto& entry : *assetManifest_) {
-        if (entry.key.type != "audio" || audioChoices.size() >= 256) continue;
+    for (const auto &entry : *assetManifest_) {
+        if (entry.key.type != "audio" || audioChoices.size() >= 256)
+            continue;
         const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
-        if (relative.empty()) continue;
+        if (relative.empty())
+            continue;
         const auto value = relative.generic_u8string();
         audioChoices.push_back({value, value + "  [" + std::to_string(entry.id) + "]", entry.id});
     }
-    audioInspectorChoices_ = std::make_shared<const std::vector<EditorInspectorChoice>>(std::move(audioChoices));
+    audioInspectorChoices_ =
+        std::make_shared<const std::vector<EditorInspectorChoice>>(std::move(audioChoices));
     assetManifestDirty_ = false;
-    assetManifestStatus_ = "AssetSystem manifest ready: " + std::to_string(assetManifest_->size()) + " resources";
-    if (result.readbackValidated) assetManifestStatus_ += " (validated cache)";
-    if (!result.readbackError.empty()) assetManifestStatus_ += " (readback fallback: " + result.readbackError + ")";
+    assetManifestStatus_ =
+        "AssetSystem manifest ready: " + std::to_string(assetManifest_->size()) + " resources";
+    if (result.readbackValidated)
+        assetManifestStatus_ += " (validated cache)";
+    if (!result.readbackError.empty())
+        assetManifestStatus_ += " (readback fallback: " + result.readbackError + ")";
     lastStatus_ = assetManifestStatus_;
     push_console(lastStatus_);
     apply_pending_asset_reference_refreshes();
@@ -2709,15 +2649,15 @@ void EditorLayer::poll_asset_manifest_scan() {
 }
 
 void EditorLayer::set_selected_asset(std::string path) {
-    if (selectedAsset_ == path && editorUi_.selected_asset() == path) {
+    if (assetBrowser_.selection == path) {
         request_asset_preview();
         return;
     }
-    selectedAsset_ = std::move(path);
-    editorUi_.select_asset(selectedAsset_);
-    reset_asset_system_preview(selectedAsset_.empty() ? "AssetSystem not connected" :
-        "Waiting for AssetSystem resource index...");
-    if (mediaPanel_.description().resource.uri != selectedAsset_) {
+    assetBrowser_.selection = std::move(path);
+    reset_asset_system_preview(assetBrowser_.selection.empty()
+                                   ? "AssetSystem not connected"
+                                   : "Waiting for AssetSystem resource index...");
+    if (mediaPanel_.description().resource.uri != assetBrowser_.selection) {
         clear_media_preview();
     }
     ++assetPreviewGeneration_;
@@ -2726,23 +2666,27 @@ void EditorLayer::set_selected_asset(std::string path) {
     imagePreviewStamp_ = 0;
     ++audioPreviewGeneration_;
     audioPreviewStamp_ = 0;
-    if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
+    if (audioPreviewCancel_)
+        audioPreviewCancel_->store(true, std::memory_order_relaxed);
     audioPreviewCancel_.reset();
     audioPreviewSnapshot_.reset();
     audioPreviewSourcePath_.clear();
     audioPreviewStatus_ = "Audio preview not loaded";
     ++videoPreviewGeneration_;
     videoPreviewStamp_ = 0;
-    if (videoPreviewCancel_) videoPreviewCancel_->store(true, std::memory_order_relaxed);
+    if (videoPreviewCancel_)
+        videoPreviewCancel_->store(true, std::memory_order_relaxed);
     videoPreviewCancel_.reset();
-    if (videoFrameCancel_) videoFrameCancel_->store(true, std::memory_order_relaxed);
+    if (videoFrameCancel_)
+        videoFrameCancel_->store(true, std::memory_order_relaxed);
     videoFrameCancel_.reset();
     pendingVideoSeekSeconds_ = -1.0;
     videoPreviewSnapshot_.reset();
     videoPreviewStatus_ = "Video preview not loaded";
     ++modelPreviewGeneration_;
     modelPreviewStamp_ = 0;
-    if (modelPreviewCancel_) modelPreviewCancel_->store(true, std::memory_order_relaxed);
+    if (modelPreviewCancel_)
+        modelPreviewCancel_->store(true, std::memory_order_relaxed);
     modelPreviewCancel_.reset();
     modelPreviewSnapshot_.reset();
     modelPreviewScene_.clear();
@@ -2753,11 +2697,12 @@ void EditorLayer::set_selected_asset(std::string path) {
     modelMaterialSelection_ = -1;
     modelTextureSelection_ = -1;
     assetPreviewState_ = {};
-    assetPreviewState_.path = selectedAsset_;
-    assetPreviewState_.loading = !selectedAsset_.empty();
-    assetPreviewState_.status = selectedAsset_.empty() ? std::string{} : "Waiting for asset index...";
+    assetPreviewState_.path = assetBrowser_.selection;
+    assetPreviewState_.loading = !assetBrowser_.selection.empty();
+    assetPreviewState_.status =
+        assetBrowser_.selection.empty() ? std::string{} : "Waiting for asset index...";
     uiModel_.set_asset_preview(assetPreviewState_);
-    if (selectedAsset_.empty()) {
+    if (assetBrowser_.selection.empty()) {
         clear_media_preview();
     }
     request_asset_preview();
@@ -2766,21 +2711,21 @@ void EditorLayer::set_selected_asset(std::string path) {
 void EditorLayer::request_asset_preview() {
     load_asset_settings();
     request_asset_system_preview();
-    if (selectedAsset_.empty()) {
+    if (assetBrowser_.selection.empty()) {
         if (!assetPreviewState_.path.empty()) {
             assetPreviewState_ = {};
             uiModel_.set_asset_preview(assetPreviewState_);
         }
         return;
     }
-    const auto* indexed = assetIndex_ ? assetIndex_->find(selectedAsset_) : nullptr;
+    const auto *indexed = assetIndex_ ? assetIndex_->find(assetBrowser_.selection) : nullptr;
     if (!indexed) {
         if (projectFiles_.empty() || !assetIndex_) {
-            assetPreviewState_.path = selectedAsset_;
+            assetPreviewState_.path = assetBrowser_.selection;
             assetPreviewState_.loading = true;
             assetPreviewState_.status = "Waiting for asset index...";
         } else {
-            assetPreviewState_.path = selectedAsset_;
+            assetPreviewState_.path = assetBrowser_.selection;
             assetPreviewState_.loading = false;
             assetPreviewState_.status = "Resource is no longer available";
             assetPreviewState_.imageWidth = 0;
@@ -2797,7 +2742,7 @@ void EditorLayer::request_asset_preview() {
             assetPreviewState_.modelMaterialLabel.clear();
             assetPreviewState_.modelTextureLabel.clear();
             assetPreviewState_.modelTextureRole.clear();
-            if (mediaPanel_.description().resource.uri == selectedAsset_) {
+            if (mediaPanel_.description().resource.uri == assetBrowser_.selection) {
                 clear_media_preview();
             }
         }
@@ -2805,60 +2750,65 @@ void EditorLayer::request_asset_preview() {
         sync_media_preview_state();
         return;
     }
-    const auto& descriptor = indexed->descriptor;
-    const bool textLike = descriptor.kind == AssetPreviewKind::Text || descriptor.kind == AssetPreviewKind::Document ||
+    const auto &descriptor = indexed->descriptor;
+    const bool textLike =
+        descriptor.kind == AssetPreviewKind::Text ||
+        descriptor.kind == AssetPreviewKind::Document ||
         descriptor.kind == AssetPreviewKind::Shader || descriptor.kind == AssetPreviewKind::Scene ||
-        descriptor.kind == AssetPreviewKind::Material || (descriptor.kind == AssetPreviewKind::Archive && descriptor.extension == ".zip");
+        descriptor.kind == AssetPreviewKind::Material ||
+        (descriptor.kind == AssetPreviewKind::Archive && descriptor.extension == ".zip");
     if (!textLike) {
-        const auto mediaKind = descriptor.kind == AssetPreviewKind::Audio ? ui::MediaKind::Audio :
-            descriptor.kind == AssetPreviewKind::Video ? ui::MediaKind::Video : ui::MediaKind::Image;
+        const auto mediaKind = descriptor.kind == AssetPreviewKind::Audio   ? ui::MediaKind::Audio
+                               : descriptor.kind == AssetPreviewKind::Video ? ui::MediaKind::Video
+                                                                            : ui::MediaKind::Image;
         const bool mediaResource = descriptor.kind == AssetPreviewKind::Audio ||
-            descriptor.kind == AssetPreviewKind::Image || descriptor.kind == AssetPreviewKind::Video;
+                                   descriptor.kind == AssetPreviewKind::Image ||
+                                   descriptor.kind == AssetPreviewKind::Video;
         const auto currentUri = mediaPanel_.description().resource.uri;
         const auto currentKind = mediaPanel_.description().kind;
-        if (mediaResource && (currentUri != selectedAsset_ || currentKind != mediaKind)) {
+        if (mediaResource && (currentUri != assetBrowser_.selection || currentKind != mediaKind)) {
             clear_media_preview();
             auto description = mediaPanel_.description();
             description.title = std::string(descriptor.previewTitle);
             description.kind = mediaKind;
-            description.resource = {selectedAsset_, descriptor.mimeType, descriptor.displayName};
+            description.resource = {assetBrowser_.selection, descriptor.mimeType,
+                                    descriptor.displayName};
             description.showVolume = descriptor.kind == AssetPreviewKind::Audio;
             mediaPanel_.set_description(std::move(description));
             mediaPanel_.playback() = {};
             mediaPanel_.playback().loop = assetSettings_.loop;
             mediaPanel_.playback().volume = assetSettings_.volume;
-            if (descriptor.kind == AssetPreviewKind::Audio || descriptor.kind == AssetPreviewKind::Video) {
-                if (!imguiEnabled_) {
-                    set_panel_visible("media", true);
-                    dockWorkspace_.activate_tab("media");
-                }
+            if (descriptor.kind == AssetPreviewKind::Audio ||
+                descriptor.kind == AssetPreviewKind::Video) {
             }
         } else if (!mediaResource && !currentUri.empty()) {
             clear_media_preview();
         }
         const bool imageReady = descriptor.kind == AssetPreviewKind::Image &&
-            assetPreviewState_.path == selectedAsset_ &&
-            imagePreviewStamp_ == indexed->writeStamp && assetPreviewState_.imageSnapshot &&
-            !assetPreviewState_.loading;
+                                assetPreviewState_.path == assetBrowser_.selection &&
+                                imagePreviewStamp_ == indexed->writeStamp &&
+                                assetPreviewState_.imageSnapshot && !assetPreviewState_.loading;
         const bool modelReady = descriptor.kind == AssetPreviewKind::Model &&
-            assetPreviewState_.path == selectedAsset_ &&
-            modelPreviewStamp_ == indexed->writeStamp && modelPreviewSnapshot_ &&
-            modelPreviewSnapshot_->valid() && assetPreviewState_.modelPreview &&
-            !assetPreviewState_.loading;
+                                assetPreviewState_.path == assetBrowser_.selection &&
+                                modelPreviewStamp_ == indexed->writeStamp &&
+                                modelPreviewSnapshot_ && modelPreviewSnapshot_->valid() &&
+                                assetPreviewState_.modelPreview && !assetPreviewState_.loading;
         // Re-indexing and reselecting an unchanged model must preserve its
         // decoded preview, selected material and texture. Clearing this state
         // before a cache hit left the inspector stuck at metadata-only status.
         if (!imageReady && !modelReady) {
             assetPreviewStamp_ = indexed->writeStamp;
-            assetPreviewState_.path = selectedAsset_;
+            assetPreviewState_.path = assetBrowser_.selection;
             assetPreviewState_.kind = std::string(AssetPreviewCatalog::kind_name(descriptor.kind));
             assetPreviewState_.title = descriptor.previewTitle;
-            assetPreviewState_.status = descriptor.kind==AssetPreviewKind::Audio ? audioPreviewStatus_ :
-                descriptor.kind==AssetPreviewKind::Video ? videoPreviewStatus_ : descriptor.statusMessage;
+            assetPreviewState_.status =
+                descriptor.kind == AssetPreviewKind::Audio   ? audioPreviewStatus_
+                : descriptor.kind == AssetPreviewKind::Video ? videoPreviewStatus_
+                                                             : descriptor.statusMessage;
             assetPreviewState_.loading = descriptor.kind == AssetPreviewKind::Image ||
-                descriptor.kind == AssetPreviewKind::Model;
+                                         descriptor.kind == AssetPreviewKind::Model;
             assetPreviewState_.truncated = false;
-            assetPreviewState_.textLines.clear();
+
             assetPreviewState_.textPreview.reset();
             assetPreviewState_.imageWidth = 0;
             assetPreviewState_.imageHeight = 0;
@@ -2875,10 +2825,14 @@ void EditorLayer::request_asset_preview() {
             assetPreviewState_.modelTextureLabel.clear();
             assetPreviewState_.modelTextureRole.clear();
             uiModel_.set_asset_preview(assetPreviewState_);
-            if (descriptor.kind == AssetPreviewKind::Image) request_image_preview(*indexed);
-            if (descriptor.kind == AssetPreviewKind::Audio) request_audio_preview(*indexed);
-            if (descriptor.kind == AssetPreviewKind::Video) request_video_preview(*indexed);
-            if (descriptor.kind == AssetPreviewKind::Model) request_model_preview(*indexed);
+            if (descriptor.kind == AssetPreviewKind::Image)
+                request_image_preview(*indexed);
+            if (descriptor.kind == AssetPreviewKind::Audio)
+                request_audio_preview(*indexed);
+            if (descriptor.kind == AssetPreviewKind::Video)
+                request_video_preview(*indexed);
+            if (descriptor.kind == AssetPreviewKind::Model)
+                request_model_preview(*indexed);
         }
         sync_media_preview_state();
         return;
@@ -2887,17 +2841,19 @@ void EditorLayer::request_asset_preview() {
         clear_media_preview();
     }
     sync_media_preview_state();
-    if (assetPreviewState_.path == selectedAsset_ && assetPreviewStamp_ == indexed->writeStamp &&
-        !assetPreviewState_.loading) return;
-    if (assetPreviewFuture_.valid()) return;
+    if (assetPreviewState_.path == assetBrowser_.selection &&
+        assetPreviewStamp_ == indexed->writeStamp && !assetPreviewState_.loading)
+        return;
+    if (assetPreviewFuture_.valid())
+        return;
 
-    assetPreviewState_.path = selectedAsset_;
+    assetPreviewState_.path = assetBrowser_.selection;
     assetPreviewState_.kind = std::string(AssetPreviewCatalog::kind_name(descriptor.kind));
     assetPreviewState_.title = descriptor.previewTitle;
     assetPreviewState_.status = "Loading text preview...";
     assetPreviewState_.loading = true;
     assetPreviewState_.truncated = false;
-    assetPreviewState_.textLines.clear();
+
     assetPreviewState_.textPreview.reset();
     assetPreviewState_.imageWidth = 0;
     assetPreviewState_.imageHeight = 0;
@@ -2916,12 +2872,12 @@ void EditorLayer::request_asset_preview() {
     uiModel_.set_asset_preview(assetPreviewState_);
     const auto generation = assetPreviewGeneration_;
     const auto sourceStamp = indexed->writeStamp;
-    const auto path = selectedAsset_;
+    const auto path = assetBrowser_.selection;
     auto scanner = fileSystem_;
-    assetPreviewFuture_ = std::async(std::launch::async,
-        [generation, sourceStamp, path, scanner = std::move(scanner)]() mutable {
-            return load_editor_text_preview(scanner, path, generation, sourceStamp);
-        });
+    assetPreviewFuture_ = std::async(std::launch::async, [generation, sourceStamp, path,
+                                                          scanner = std::move(scanner)]() mutable {
+        return load_editor_text_preview(scanner, path, generation, sourceStamp);
+    });
 }
 
 void EditorLayer::reset_asset_system_preview(std::string status) {
@@ -2951,50 +2907,56 @@ void EditorLayer::publish_asset_system_preview_state() {
 }
 
 void EditorLayer::request_asset_system_preview() {
-    if (selectedAsset_.empty()) {
-        if (!assetSystemPreviewPath_.empty() || assetSystemPreviewStatus_ != "AssetSystem not connected")
+    if (assetBrowser_.selection.empty()) {
+        if (!assetSystemPreviewPath_.empty() ||
+            assetSystemPreviewStatus_ != "AssetSystem not connected")
             reset_asset_system_preview("AssetSystem not connected");
         return;
     }
     if (!assetSystem_) {
-        if (assetSystemPreviewStatus_ != "AssetSystem not connected" || assetSystemPreviewPath_ != selectedAsset_)
+        if (assetSystemPreviewStatus_ != "AssetSystem not connected" ||
+            assetSystemPreviewPath_ != assetBrowser_.selection)
             reset_asset_system_preview("AssetSystem not connected");
-        assetSystemPreviewPath_ = selectedAsset_;
+        assetSystemPreviewPath_ = assetBrowser_.selection;
         publish_asset_system_preview_state();
         return;
     }
     if (assetSystemRootNeedsRestart_) {
-        if (assetSystemPreviewStatus_ != "AssetSystem root changed; restart editor to reconnect resources..." ||
-            assetSystemPreviewPath_ != selectedAsset_)
-            reset_asset_system_preview("AssetSystem root changed; restart editor to reconnect resources...");
-        assetSystemPreviewPath_ = selectedAsset_;
+        if (assetSystemPreviewStatus_ !=
+                "AssetSystem root changed; restart editor to reconnect resources..." ||
+            assetSystemPreviewPath_ != assetBrowser_.selection)
+            reset_asset_system_preview(
+                "AssetSystem root changed; restart editor to reconnect resources...");
+        assetSystemPreviewPath_ = assetBrowser_.selection;
         publish_asset_system_preview_state();
         return;
     }
     if (!assetSystem_->initialized()) {
-        if (assetSystemPreviewStatus_ != "AssetSystem unavailable" || assetSystemPreviewPath_ != selectedAsset_)
+        if (assetSystemPreviewStatus_ != "AssetSystem unavailable" ||
+            assetSystemPreviewPath_ != assetBrowser_.selection)
             reset_asset_system_preview("AssetSystem unavailable");
-        assetSystemPreviewPath_ = selectedAsset_;
+        assetSystemPreviewPath_ = assetBrowser_.selection;
         publish_asset_system_preview_state();
         return;
     }
-    const auto* indexed = assetIndex_ ? assetIndex_->find(selectedAsset_) : nullptr;
+    const auto *indexed = assetIndex_ ? assetIndex_->find(assetBrowser_.selection) : nullptr;
     if (!indexed) {
         const auto status = projectFiles_.empty() || !assetIndex_
-            ? "Waiting for AssetSystem resource index..."
-            : "Resource is not indexed by AssetSystem";
-        if (assetSystemPreviewStatus_ != status || assetSystemPreviewPath_ != selectedAsset_)
+                                ? "Waiting for AssetSystem resource index..."
+                                : "Resource is not indexed by AssetSystem";
+        if (assetSystemPreviewStatus_ != status ||
+            assetSystemPreviewPath_ != assetBrowser_.selection)
             reset_asset_system_preview(status);
-        assetSystemPreviewPath_ = selectedAsset_;
+        assetSystemPreviewPath_ = assetBrowser_.selection;
         publish_asset_system_preview_state();
         return;
     }
     const auto sourceStamp = indexed->writeStamp;
-    if (assetSystemPreviewPath_ == selectedAsset_ && assetSystemPreviewStamp_ == sourceStamp &&
-        assetSystemPreviewFuture_.valid()) {
+    if (assetSystemPreviewPath_ == assetBrowser_.selection &&
+        assetSystemPreviewStamp_ == sourceStamp && assetSystemPreviewFuture_.valid()) {
         return;
     }
-    assetSystemPreviewPath_ = selectedAsset_;
+    assetSystemPreviewPath_ = assetBrowser_.selection;
     assetSystemPreviewStamp_ = sourceStamp;
     assetSystemPreviewStatus_ = "Loading resource through AssetSystem...";
     assetSystemPreviewFormat_.clear();
@@ -3007,21 +2969,26 @@ void EditorLayer::request_asset_system_preview() {
     // An empty type asks AssetSystem to canonicalize from the extension. The
     // typed source artifact carries bounded source descriptors, while the
     // image/audio/video/model providers still own decoded preview snapshots.
-    assetSystemPreviewFuture_ = assetSystem_->request({selectedAsset_, {}}, {false, false, 5});
+    assetSystemPreviewFuture_ =
+        assetSystem_->request({assetBrowser_.selection, {}}, {false, false, 5});
 }
 
 void EditorLayer::poll_asset_system_preview() {
     if (!assetSystemPreviewFuture_.valid() || assetSystemPreviewLoading_ == false ||
-        assetSystemPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        assetSystemPreviewFuture_.wait_for(std::chrono::milliseconds(0)) !=
+            std::future_status::ready)
+        return;
     const auto result = assetSystemPreviewFuture_.get();
-    if (assetSystemRootNeedsRestart_) return;
+    if (assetSystemRootNeedsRestart_)
+        return;
     assetSystemPreviewLoading_ = false;
     if (result) {
         assetSystemPreviewReady_ = true;
         assetSystemPreviewStatus_ = "AssetSystem ready";
         assetSystemPreviewFormat_ = result.data->format;
         assetSystemPreviewMetadataFormat_ = result.data->metadataFormat;
-        assetSystemPreviewMetadataBytes_ = result.data->metadata ? result.data->metadata->size() : 0;
+        assetSystemPreviewMetadataBytes_ =
+            result.data->metadata ? result.data->metadata->size() : 0;
         assetSystemPreviewSourceHash_ = result.data->sourceHash;
     } else {
         assetSystemPreviewReady_ = false;
@@ -3029,16 +2996,19 @@ void EditorLayer::poll_asset_system_preview() {
         assetSystemPreviewMetadataFormat_.clear();
         assetSystemPreviewMetadataBytes_ = 0;
         assetSystemPreviewSourceHash_ = 0;
-        assetSystemPreviewStatus_ = result.error.empty() ?
-            "AssetSystem failed to load resource" : "AssetSystem failed: " + result.error;
+        assetSystemPreviewStatus_ = result.error.empty() ? "AssetSystem failed to load resource"
+                                                         : "AssetSystem failed: " + result.error;
     }
     publish_asset_system_preview_state();
 }
 
-void EditorLayer::request_image_preview(const EditorAssetIndexEntry& indexed) {
-    if (selectedAsset_.empty() || indexed.descriptor.kind != AssetPreviewKind::Image) return;
-    if (assetPreviewState_.path == selectedAsset_ && imagePreviewStamp_ == indexed.writeStamp &&
-        assetPreviewState_.imageSnapshot && !assetPreviewState_.loading) return;
+void EditorLayer::request_image_preview(const EditorAssetIndexEntry &indexed) {
+    if (assetBrowser_.selection.empty() || indexed.descriptor.kind != AssetPreviewKind::Image)
+        return;
+    if (assetPreviewState_.path == assetBrowser_.selection &&
+        imagePreviewStamp_ == indexed.writeStamp && assetPreviewState_.imageSnapshot &&
+        !assetPreviewState_.loading)
+        return;
     if (imagePreviewFuture_.valid()) {
         if (imagePreviewFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
             poll_image_preview();
@@ -3048,60 +3018,68 @@ void EditorLayer::request_image_preview(const EditorAssetIndexEntry& indexed) {
             uiModel_.set_asset_preview(assetPreviewState_);
             return;
         }
-        if (assetPreviewState_.path == selectedAsset_ && imagePreviewStamp_ == indexed.writeStamp &&
-            assetPreviewState_.imageSnapshot && !assetPreviewState_.loading) return;
+        if (assetPreviewState_.path == assetBrowser_.selection &&
+            imagePreviewStamp_ == indexed.writeStamp && assetPreviewState_.imageSnapshot &&
+            !assetPreviewState_.loading)
+            return;
     }
-    assetPreviewState_.path = selectedAsset_;
+    assetPreviewState_.path = assetBrowser_.selection;
     assetPreviewState_.kind = "Image";
     assetPreviewState_.title = indexed.descriptor.previewTitle;
     assetPreviewState_.status = "Loading image preview...";
     assetPreviewState_.loading = true;
     assetPreviewState_.truncated = false;
-    assetPreviewState_.textLines.clear();
+
     assetPreviewState_.imageWidth = 0;
     assetPreviewState_.imageHeight = 0;
     assetPreviewState_.imageSnapshot.reset();
     uiModel_.set_asset_preview(assetPreviewState_);
     const auto generation = imagePreviewGeneration_;
     const auto sourceStamp = indexed.writeStamp;
-    const auto path = selectedAsset_;
+    const auto path = assetBrowser_.selection;
     auto normalizedExtension = std::filesystem::path(path).extension().string();
-    std::transform(normalizedExtension.begin(), normalizedExtension.end(), normalizedExtension.begin(),
+    std::transform(normalizedExtension.begin(), normalizedExtension.end(),
+                   normalizedExtension.begin(),
                    [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-    const bool useAssetSystemTexture = assetSystem_ && assetSystem_->initialized() &&
-        !assetSystemRootNeedsRestart_ &&
-        (normalizedExtension == ".png" || normalizedExtension == ".jpg" || normalizedExtension == ".jpeg" ||
-         normalizedExtension == ".tga" || normalizedExtension == ".dds" || normalizedExtension == ".ktx" ||
+    const bool useAssetSystemTexture =
+        assetSystem_ && assetSystem_->initialized() && !assetSystemRootNeedsRestart_ &&
+        (normalizedExtension == ".png" || normalizedExtension == ".jpg" ||
+         normalizedExtension == ".jpeg" || normalizedExtension == ".tga" ||
+         normalizedExtension == ".dds" || normalizedExtension == ".ktx" ||
          normalizedExtension == ".ktx2");
     if (useAssetSystemTexture) {
         auto sourceFuture = assetSystem_->request({path, "texture"}, {false, false, 6});
-        imagePreviewFuture_ = std::async(std::launch::async,
-            [generation, sourceStamp, path, sourceFuture]() mutable {
+        imagePreviewFuture_ =
+            std::async(std::launch::async, [generation, sourceStamp, path, sourceFuture]() mutable {
                 const auto loaded = sourceFuture.get();
                 if (!loaded || !loaded.data || !loaded.data->bytes) {
                     EditorImagePreviewResult result;
                     result.generation = generation;
                     result.sourceStamp = sourceStamp;
                     result.path = path;
-                    result.error = loaded.error.empty() ?
-                        "AssetSystem did not publish image source bytes" : loaded.error;
+                    result.error = loaded.error.empty()
+                                       ? "AssetSystem did not publish image source bytes"
+                                       : loaded.error;
                     return result;
                 }
-                return load_editor_image_preview_bytes(path, *loaded.data->bytes,
-                    generation, sourceStamp);
+                return load_editor_image_preview_bytes(path, *loaded.data->bytes, generation,
+                                                       sourceStamp);
             });
     } else {
         auto scanner = fileSystem_;
-        imagePreviewFuture_ = std::async(std::launch::async,
-            [generation, sourceStamp, path, scanner = std::move(scanner)]() mutable {
-                return load_editor_image_preview(scanner, path, generation, sourceStamp);
-            });
+        imagePreviewFuture_ =
+            std::async(std::launch::async,
+                       [generation, sourceStamp, path, scanner = std::move(scanner)]() mutable {
+                           return load_editor_image_preview(scanner, path, generation, sourceStamp);
+                       });
     }
 }
 
 void EditorLayer::stop_audio_preview() {
-    if (audioPreviewVoice_ != 0 && audioSystem_) audioSystem_->stop(audioPreviewVoice_);
-    if (audioPreviewTrack_ && audioSystem_) audioSystem_->destroy_track(audioPreviewTrack_);
+    if (audioPreviewVoice_ != 0 && audioSystem_)
+        audioSystem_->stop(audioPreviewVoice_);
+    if (audioPreviewTrack_ && audioSystem_)
+        audioSystem_->destroy_track(audioPreviewTrack_);
     audioPreviewTrack_ = 0;
     // Path-only preview loads are editor-owned temporary clips. Manifest
     // backed clips stay cached for the current editor session and are
@@ -3114,7 +3092,7 @@ void EditorLayer::stop_audio_preview() {
     audioPreviewAsset_ = 0;
     audioPreviewAssetId_ = 0;
     audioPreviewPath_.clear();
-    auto& playback = mediaPanel_.playback();
+    auto &playback = mediaPanel_.playback();
     playback.state = ui::MediaPlaybackState::Stopped;
     playback.currentTime = 0.0;
 }
@@ -3122,9 +3100,10 @@ void EditorLayer::stop_audio_preview() {
 void EditorLayer::clear_audio_asset_bindings() {
     stop_audio_preview();
     if (audioSystem_) {
-        for (const auto& [assetId, audioAsset] : audioAssetBindings_) {
+        for (const auto &[assetId, audioAsset] : audioAssetBindings_) {
             (void)assetId;
-            if (audioAsset != 0 && audioSystem_->is_loaded(audioAsset)) audioSystem_->unload(audioAsset);
+            if (audioAsset != 0 && audioSystem_->is_loaded(audioAsset))
+                audioSystem_->unload(audioAsset);
         }
     }
     audioAssetBindings_.clear();
@@ -3145,14 +3124,15 @@ void EditorLayer::clear_media_preview() {
 }
 
 void EditorLayer::start_audio_preview() {
-    if (mediaPanel_.description().kind != ui::MediaKind::Audio || selectedAsset_.empty()) return;
+    if (mediaPanel_.description().kind != ui::MediaKind::Audio || assetBrowser_.selection.empty())
+        return;
     if (!audioSystem_ || !audioSystem_->initialized()) {
         mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
         lastStatus_ = "Audio preview unavailable: AudioSystem is not connected";
         sync_media_preview_state();
         return;
     }
-    const auto path = fileSystem_.resolve_existing(selectedAsset_);
+    const auto path = fileSystem_.resolve_existing(assetBrowser_.selection);
     if (path.empty()) {
         mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
         lastStatus_ = "Audio preview failed: resource is outside the project or unavailable";
@@ -3167,15 +3147,16 @@ void EditorLayer::start_audio_preview() {
             sync_media_preview_state();
             return;
         }
-        if (state == audio::AudioVoiceState::Playing) return;
+        if (state == audio::AudioVoiceState::Playing)
+            return;
         stop_audio_preview();
     }
     assets::AssetId manifestAssetId = 0;
     if (assetManifest_) {
-        for (const auto& entry : *assetManifest_) {
+        for (const auto &entry : *assetManifest_) {
             const auto relative = fileSystem_.project_relative_existing(entry.sourcePath);
-            if (entry.id != 0 && entry.key.type == "audio" &&
-                !relative.empty() && relative.generic_u8string() == selectedAsset_) {
+            if (entry.id != 0 && entry.key.type == "audio" && !relative.empty() &&
+                relative.generic_u8string() == assetBrowser_.selection) {
                 manifestAssetId = entry.id;
                 break;
             }
@@ -3190,7 +3171,8 @@ void EditorLayer::start_audio_preview() {
             // The audition voice owns its streaming flag. Keep the cached
             // descriptor neutral so streaming can also be switched off live.
             audioAsset = audioSystem_->load(path, false);
-            if (audioAsset != 0) audioAssetBindings_[manifestAssetId] = audioAsset;
+            if (audioAsset != 0)
+                audioAssetBindings_[manifestAssetId] = audioAsset;
         }
     } else {
         audioAsset = audioSystem_->load(path, false);
@@ -3201,8 +3183,10 @@ void EditorLayer::start_audio_preview() {
         sync_media_preview_state();
         return;
     }
-    audioPreviewTrack_ = audioSystem_->create_track({"Editor asset audition",static_cast<audio::AudioBus>(assetSettings_.bus),1,false});
-    if (audioPreviewTrack_) audioSystem_->set_track_effects(audioPreviewTrack_,assetSettings_.audio_effects());
+    audioPreviewTrack_ = audioSystem_->create_track(
+        {"Editor asset audition", static_cast<audio::AudioBus>(assetSettings_.bus), 1, false});
+    if (audioPreviewTrack_)
+        audioSystem_->set_track_effects(audioPreviewTrack_, assetSettings_.audio_effects());
     auto params = assetSettings_.audio_params(audioPreviewTrack_);
     params.loop = mediaPanel_.playback().loop;
     params.volume = static_cast<float>(mediaPanel_.playback().volume);
@@ -3210,7 +3194,8 @@ void EditorLayer::start_audio_preview() {
     if (audioPreviewVoice_ == 0) {
         audioSystem_->destroy_track(audioPreviewTrack_);
         audioPreviewTrack_ = 0;
-        if (manifestAssetId == 0 && audioSystem_->is_loaded(audioAsset)) audioSystem_->unload(audioAsset);
+        if (manifestAssetId == 0 && audioSystem_->is_loaded(audioAsset))
+            audioSystem_->unload(audioAsset);
         mediaPanel_.playback().state = ui::MediaPlaybackState::Stopped;
         lastStatus_ = "Audio preview failed: " + audioSystem_->last_error();
         sync_media_preview_state();
@@ -3218,9 +3203,9 @@ void EditorLayer::start_audio_preview() {
     }
     audioPreviewAsset_ = audioAsset;
     audioPreviewAssetId_ = manifestAssetId;
-    audioPreviewPath_ = selectedAsset_;
+    audioPreviewPath_ = assetBrowser_.selection;
     mediaPanel_.playback().state = ui::MediaPlaybackState::Playing;
-    lastStatus_ = "Playing " + selectedAsset_;
+    lastStatus_ = "Playing " + assetBrowser_.selection;
     if (!audioPreviewTrack_ && (assetSettings_.lowPass || assetSettings_.reverb))
         lastStatus_ += " (audition effects unavailable: no audio track)";
     sync_media_preview_state();
@@ -3228,8 +3213,8 @@ void EditorLayer::start_audio_preview() {
 
 void EditorLayer::sync_media_preview_state() {
     EditorMediaUiState state;
-    const auto& description = mediaPanel_.description();
-    const auto& playback = mediaPanel_.playback();
+    const auto &description = mediaPanel_.description();
+    const auto &playback = mediaPanel_.playback();
     if ((description.kind == ui::MediaKind::Audio || description.kind == ui::MediaKind::Video) &&
         !description.resource.uri.empty()) {
         state.path = description.resource.uri;
@@ -3237,10 +3222,13 @@ void EditorLayer::sync_media_preview_state() {
         state.volume = std::clamp(playback.volume, 0.0, 1.0);
         state.loop = playback.loop;
         state.duration = std::max(0.0, playback.duration);
-        state.currentTime = std::clamp(playback.currentTime, 0.0, state.duration > 0.0 ? state.duration : playback.currentTime);
+        state.currentTime =
+            std::clamp(playback.currentTime, 0.0,
+                       state.duration > 0.0 ? state.duration : playback.currentTime);
         if (description.kind == ui::MediaKind::Audio) {
             state.previewLoading = audioPreviewFuture_.valid() &&
-                audioPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
+                                   audioPreviewFuture_.wait_for(std::chrono::milliseconds(0)) !=
+                                       std::future_status::ready;
             state.previewStatus = audioPreviewStatus_;
             state.audioPreview = audioPreviewSnapshot_;
             if (audioPreviewSnapshot_ && audioPreviewSnapshot_->valid()) {
@@ -3251,13 +3239,16 @@ void EditorLayer::sync_media_preview_state() {
             // entry. Avoid a canonical filesystem query on every editor frame;
             // scan publication handles removal and invalidation separately.
             state.available = audioSystem_ && audioSystem_->initialized();
-            state.status = state.available ? "AudioSystem connected" :
-                audioSystem_ ? "AudioSystem unavailable or resource missing" : "AudioSystem is not connected";
+            state.status = state.available ? "AudioSystem connected"
+                           : audioSystem_  ? "AudioSystem unavailable or resource missing"
+                                           : "AudioSystem is not connected";
         } else {
             state.previewLoading = (videoPreviewFuture_.valid() &&
-                videoPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) ||
-                (videoFrameFuture_.valid() &&
-                 videoFrameFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready);
+                                    videoPreviewFuture_.wait_for(std::chrono::milliseconds(0)) !=
+                                        std::future_status::ready) ||
+                                   (videoFrameFuture_.valid() &&
+                                    videoFrameFuture_.wait_for(std::chrono::milliseconds(0)) !=
+                                        std::future_status::ready);
             state.previewStatus = videoPreviewStatus_;
             state.videoPreview = videoPreviewSnapshot_;
             if (videoPreviewSnapshot_ && videoPreviewSnapshot_->valid()) {
@@ -3265,15 +3256,19 @@ void EditorLayer::sync_media_preview_state() {
                 state.currentTime = std::clamp(playback.currentTime, 0.0, state.duration);
             }
             state.available = videoPreviewSnapshot_ && videoPreviewSnapshot_->valid();
-            state.status = state.available ? "Video preview ready" :
-                state.previewLoading ? "Video preview loading" : "Video preview unavailable";
+            state.status = state.available        ? "Video preview ready"
+                           : state.previewLoading ? "Video preview loading"
+                                                  : "Video preview unavailable";
         }
         state.playbackState = ui::media_playback_state_name(playback.state);
         if (description.kind == ui::MediaKind::Audio && audioPreviewVoice_ != 0 && audioSystem_) {
             const auto cursor = audioSystem_->cursor_seconds(audioPreviewVoice_);
             if (audioSystem_->supports_cursor() && std::isfinite(cursor)) {
-                mediaPanel_.playback().currentTime = std::clamp(cursor, 0.0,
-                    audioPreviewSnapshot_ && audioPreviewSnapshot_->valid() ? audioPreviewSnapshot_->duration : cursor);
+                mediaPanel_.playback().currentTime =
+                    std::clamp(cursor, 0.0,
+                               audioPreviewSnapshot_ && audioPreviewSnapshot_->valid()
+                                   ? audioPreviewSnapshot_->duration
+                                   : cursor);
                 state.currentTime = mediaPanel_.playback().currentTime;
             }
             const auto voiceState = audioSystem_->state(audioPreviewVoice_);
@@ -3289,7 +3284,8 @@ void EditorLayer::sync_media_preview_state() {
                     audioSystem_->unload(audioPreviewAsset_);
                 }
                 audioPreviewVoice_ = 0;
-                if (audioPreviewTrack_) audioSystem_->destroy_track(audioPreviewTrack_);
+                if (audioPreviewTrack_)
+                    audioSystem_->destroy_track(audioPreviewTrack_);
                 audioPreviewTrack_ = 0;
                 audioPreviewAsset_ = 0;
                 audioPreviewAssetId_ = 0;
@@ -3299,9 +3295,10 @@ void EditorLayer::sync_media_preview_state() {
             }
         }
     }
-    if (!state.path.empty() && state.path==selectedAsset_ && assetPreviewState_.path==selectedAsset_) {
-        assetPreviewState_.status=state.previewStatus;
-        assetPreviewState_.loading=state.previewLoading;
+    if (!state.path.empty() && state.path == assetBrowser_.selection &&
+        assetPreviewState_.path == assetBrowser_.selection) {
+        assetPreviewState_.status = state.previewStatus;
+        assetPreviewState_.loading = state.previewLoading;
         uiModel_.set_asset_preview(assetPreviewState_);
     }
     uiModel_.set_media_state(std::move(state));
@@ -3309,27 +3306,25 @@ void EditorLayer::sync_media_preview_state() {
 
 void EditorLayer::poll_asset_preview() {
     if (!assetPreviewFuture_.valid() ||
-        assetPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        assetPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     auto result = assetPreviewFuture_.get();
-    if (result.generation != assetPreviewGeneration_ || result.path != selectedAsset_) {
+    if (result.generation != assetPreviewGeneration_ || result.path != assetBrowser_.selection) {
         request_asset_preview();
         return;
     }
     assetPreviewState_.path = result.path;
     assetPreviewState_.loading = false;
-    assetPreviewState_.textLines.clear();
+
     assetPreviewStamp_ = result.sourceStamp;
     if (!result.error.empty()) {
         assetPreviewState_.status = "Preview failed: " + result.error;
         assetPreviewState_.truncated = false;
     } else if (result.snapshot) {
         assetPreviewState_.textPreview = result.snapshot;
-        // The legacy retained inspector has a small static text area. Native
-        // source/document viewers share all lines through the immutable snapshot.
-        assetPreviewState_.textLines.assign(result.snapshot->lines.begin(),
-            result.snapshot->lines.begin()+std::min<std::size_t>(24,result.snapshot->lines.size()));
         assetPreviewState_.truncated = result.snapshot->truncated;
-        assetPreviewState_.status = result.snapshot->format + " preview" + (result.snapshot->truncated ? " (truncated)" : "");
+        assetPreviewState_.status = result.snapshot->format + " preview" +
+                                    (result.snapshot->truncated ? " (truncated)" : "");
     }
     uiModel_.set_asset_preview(assetPreviewState_);
     request_asset_preview();
@@ -3337,20 +3332,22 @@ void EditorLayer::poll_asset_preview() {
 
 void EditorLayer::poll_image_preview() {
     if (!imagePreviewFuture_.valid() ||
-        imagePreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        imagePreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     EditorImagePreviewResult result;
-    try { result = imagePreviewFuture_.get(); }
-    catch (const std::exception& error) {
-        result.path = selectedAsset_;
+    try {
+        result = imagePreviewFuture_.get();
+    } catch (const std::exception &error) {
+        result.path = assetBrowser_.selection;
         result.generation = imagePreviewGeneration_;
         result.error = error.what();
     } catch (...) {
-        result.path = selectedAsset_;
+        result.path = assetBrowser_.selection;
         result.generation = imagePreviewGeneration_;
         result.error = "unknown image preview worker failure";
     }
-    const auto* indexed = assetIndex_ ? assetIndex_->find(selectedAsset_) : nullptr;
-    if (result.generation != imagePreviewGeneration_ || result.path != selectedAsset_ ||
+    const auto *indexed = assetIndex_ ? assetIndex_->find(assetBrowser_.selection) : nullptr;
+    if (result.generation != imagePreviewGeneration_ || result.path != assetBrowser_.selection ||
         !indexed || indexed->descriptor.kind != AssetPreviewKind::Image) {
         request_asset_preview();
         return;
@@ -3360,7 +3357,7 @@ void EditorLayer::poll_image_preview() {
     assetPreviewState_.title = indexed->descriptor.previewTitle;
     assetPreviewState_.loading = false;
     assetPreviewState_.truncated = false;
-    assetPreviewState_.textLines.clear();
+
     imagePreviewStamp_ = result.sourceStamp;
     assetPreviewState_.imageWidth = result.sourceWidth;
     assetPreviewState_.imageHeight = result.sourceHeight;
@@ -3375,16 +3372,20 @@ void EditorLayer::poll_image_preview() {
     uiModel_.set_asset_preview(assetPreviewState_);
 }
 
-void EditorLayer::request_audio_preview(const EditorAssetIndexEntry& indexed) {
-    if (selectedAsset_.empty()) return;
-    request_audio_preview_for_path(selectedAsset_, indexed);
+void EditorLayer::request_audio_preview(const EditorAssetIndexEntry &indexed) {
+    if (assetBrowser_.selection.empty())
+        return;
+    request_audio_preview_for_path(assetBrowser_.selection, indexed);
 }
 
-void EditorLayer::request_audio_preview_for_path(std::string path, const EditorAssetIndexEntry& indexed) {
-    if (path.empty() || indexed.descriptor.kind != AssetPreviewKind::Audio) return;
+void EditorLayer::request_audio_preview_for_path(std::string path,
+                                                 const EditorAssetIndexEntry &indexed) {
+    if (path.empty() || indexed.descriptor.kind != AssetPreviewKind::Audio)
+        return;
     if (audioPreviewSourcePath_ != path) {
         ++audioPreviewGeneration_;
-        if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
+        if (audioPreviewCancel_)
+            audioPreviewCancel_->store(true, std::memory_order_relaxed);
         audioPreviewSourcePath_ = path;
     }
     if (audioPreviewSnapshot_ && audioPreviewSourcePath_ == path &&
@@ -3395,9 +3396,11 @@ void EditorLayer::request_audio_preview_for_path(std::string path, const EditorA
     if (audioPreviewFuture_.valid()) {
         if (audioPreviewFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
             poll_audio_preview();
-        if (audioPreviewFuture_.valid()) return;
+        if (audioPreviewFuture_.valid())
+            return;
         if (audioPreviewSnapshot_ && audioPreviewSourcePath_ == path &&
-            audioPreviewStamp_ == indexed.writeStamp) return;
+            audioPreviewStamp_ == indexed.writeStamp)
+            return;
     }
     audioPreviewSnapshot_.reset();
     audioPreviewStamp_ = 0;
@@ -3410,18 +3413,20 @@ void EditorLayer::request_audio_preview_for_path(std::string path, const EditorA
     audioPreviewCancel_ = std::make_shared<std::atomic_bool>(false);
     const auto cancel = audioPreviewCancel_;
     auto scanner = fileSystem_;
-    audioPreviewFuture_ = std::async(std::launch::async,
-        [generation, sourceStamp, path, cancel, scanner = std::move(scanner)]() mutable {
-            return load_editor_audio_preview(scanner, path, generation, sourceStamp, 256, cancel.get());
-        });
+    audioPreviewFuture_ = std::async(std::launch::async, [generation, sourceStamp, path, cancel,
+                                                          scanner = std::move(scanner)]() mutable {
+        return load_editor_audio_preview(scanner, path, generation, sourceStamp, 256, cancel.get());
+    });
 }
 
 void EditorLayer::poll_audio_preview() {
     if (!audioPreviewFuture_.valid() ||
-        audioPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        audioPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     EditorAudioPreviewResult result;
-    try { result = audioPreviewFuture_.get(); }
-    catch (const std::exception& error) {
+    try {
+        result = audioPreviewFuture_.get();
+    } catch (const std::exception &error) {
         result.path = audioPreviewSourcePath_;
         result.generation = audioPreviewGeneration_;
         result.error = error.what();
@@ -3431,9 +3436,9 @@ void EditorLayer::poll_audio_preview() {
         result.error = "unknown audio preview worker failure";
     }
     const auto requestedPath = audioPreviewSourcePath_;
-    const auto* indexed = assetIndex_ ? assetIndex_->find(requestedPath) : nullptr;
-    if (result.generation != audioPreviewGeneration_ || result.path != requestedPath ||
-        !indexed || indexed->descriptor.kind != AssetPreviewKind::Audio) {
+    const auto *indexed = assetIndex_ ? assetIndex_->find(requestedPath) : nullptr;
+    if (result.generation != audioPreviewGeneration_ || result.path != requestedPath || !indexed ||
+        indexed->descriptor.kind != AssetPreviewKind::Audio) {
         if (indexed && indexed->descriptor.kind == AssetPreviewKind::Audio)
             request_audio_preview_for_path(requestedPath, *indexed);
         else
@@ -3444,20 +3449,22 @@ void EditorLayer::poll_audio_preview() {
     audioPreviewSnapshot_ = std::move(result.snapshot);
     if (audioPreviewSnapshot_ && audioPreviewSnapshot_->valid()) {
         mediaPanel_.playback().duration = audioPreviewSnapshot_->duration;
-        mediaPanel_.playback().currentTime = std::clamp(mediaPanel_.playback().currentTime,
-            0.0, audioPreviewSnapshot_->duration);
+        mediaPanel_.playback().currentTime =
+            std::clamp(mediaPanel_.playback().currentTime, 0.0, audioPreviewSnapshot_->duration);
         audioPreviewStatus_ = "Waveform ready";
     } else {
         mediaPanel_.playback().duration = 0.0;
         mediaPanel_.playback().currentTime = 0.0;
-        audioPreviewStatus_ = result.error.empty() ?
-            "Preview unavailable: decoder returned no waveform" : "Preview unavailable: " + result.error;
+        audioPreviewStatus_ = result.error.empty()
+                                  ? "Preview unavailable: decoder returned no waveform"
+                                  : "Preview unavailable: " + result.error;
     }
     sync_media_preview_state();
 }
 
-void EditorLayer::request_video_preview(const EditorAssetIndexEntry& indexed) {
-    if (selectedAsset_.empty() || indexed.descriptor.kind != AssetPreviewKind::Video) return;
+void EditorLayer::request_video_preview(const EditorAssetIndexEntry &indexed) {
+    if (assetBrowser_.selection.empty() || indexed.descriptor.kind != AssetPreviewKind::Video)
+        return;
     if (videoPreviewSnapshot_ && videoPreviewStamp_ == indexed.writeStamp) {
         videoPreviewStatus_ = "Video preview ready";
         return;
@@ -3465,8 +3472,10 @@ void EditorLayer::request_video_preview(const EditorAssetIndexEntry& indexed) {
     if (videoPreviewFuture_.valid()) {
         if (videoPreviewFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
             poll_video_preview();
-        if (videoPreviewFuture_.valid()) return;
-        if (videoPreviewSnapshot_ && videoPreviewStamp_ == indexed.writeStamp) return;
+        if (videoPreviewFuture_.valid())
+            return;
+        if (videoPreviewSnapshot_ && videoPreviewStamp_ == indexed.writeStamp)
+            return;
     }
     videoPreviewSnapshot_.reset();
     videoPreviewStamp_ = 0;
@@ -3476,32 +3485,34 @@ void EditorLayer::request_video_preview(const EditorAssetIndexEntry& indexed) {
     sync_media_preview_state();
     const auto generation = videoPreviewGeneration_;
     const auto sourceStamp = indexed.writeStamp;
-    const auto path = selectedAsset_;
+    const auto path = assetBrowser_.selection;
     videoPreviewCancel_ = std::make_shared<std::atomic_bool>(false);
     const auto cancel = videoPreviewCancel_;
     auto scanner = fileSystem_;
-    videoPreviewFuture_ = std::async(std::launch::async,
-        [generation, sourceStamp, path, cancel, scanner = std::move(scanner)]() mutable {
-            return load_editor_video_preview(scanner, path, generation, sourceStamp, 512, cancel.get());
-        });
+    videoPreviewFuture_ = std::async(std::launch::async, [generation, sourceStamp, path, cancel,
+                                                          scanner = std::move(scanner)]() mutable {
+        return load_editor_video_preview(scanner, path, generation, sourceStamp, 512, cancel.get());
+    });
 }
 
 void EditorLayer::poll_video_preview() {
     if (!videoPreviewFuture_.valid() ||
-        videoPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        videoPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     EditorVideoPreviewResult result;
-    try { result = videoPreviewFuture_.get(); }
-    catch (const std::exception& error) {
-        result.path = selectedAsset_;
+    try {
+        result = videoPreviewFuture_.get();
+    } catch (const std::exception &error) {
+        result.path = assetBrowser_.selection;
         result.generation = videoPreviewGeneration_;
         result.error = error.what();
     } catch (...) {
-        result.path = selectedAsset_;
+        result.path = assetBrowser_.selection;
         result.generation = videoPreviewGeneration_;
         result.error = "unknown video preview worker failure";
     }
-    const auto* indexed = assetIndex_ ? assetIndex_->find(selectedAsset_) : nullptr;
-    if (result.generation != videoPreviewGeneration_ || result.path != selectedAsset_ ||
+    const auto *indexed = assetIndex_ ? assetIndex_->find(assetBrowser_.selection) : nullptr;
+    if (result.generation != videoPreviewGeneration_ || result.path != assetBrowser_.selection ||
         !indexed || indexed->descriptor.kind != AssetPreviewKind::Video) {
         request_asset_preview();
         return;
@@ -3510,89 +3521,100 @@ void EditorLayer::poll_video_preview() {
     videoPreviewSnapshot_ = std::move(result.snapshot);
     if (videoPreviewSnapshot_ && videoPreviewSnapshot_->valid()) {
         mediaPanel_.playback().duration = videoPreviewSnapshot_->duration;
-        mediaPanel_.playback().currentTime = std::clamp(mediaPanel_.playback().currentTime,
-            0.0, videoPreviewSnapshot_->duration);
+        mediaPanel_.playback().currentTime =
+            std::clamp(mediaPanel_.playback().currentTime, 0.0, videoPreviewSnapshot_->duration);
         videoPreviewStatus_ = "Video preview ready";
     } else {
         mediaPanel_.playback().duration = 0.0;
         mediaPanel_.playback().currentTime = 0.0;
-        videoPreviewStatus_ = result.error.empty() ?
-            "Preview unavailable: decoder returned no first frame" : "Preview unavailable: " + result.error;
+        videoPreviewStatus_ = result.error.empty()
+                                  ? "Preview unavailable: decoder returned no first frame"
+                                  : "Preview unavailable: " + result.error;
     }
     sync_media_preview_state();
 }
 
 void EditorLayer::request_video_frame(double seconds) {
-    if (selectedAsset_.empty() || !videoPreviewSnapshot_ || !videoPreviewSnapshot_->valid() ||
-        videoPreviewStamp_ == 0) return;
-    const auto clamped = std::clamp(std::isfinite(seconds) ? seconds : 0.0,
-                                    0.0, videoPreviewSnapshot_->duration);
+    if (assetBrowser_.selection.empty() || !videoPreviewSnapshot_ ||
+        !videoPreviewSnapshot_->valid() || videoPreviewStamp_ == 0)
+        return;
+    const auto clamped =
+        std::clamp(std::isfinite(seconds) ? seconds : 0.0, 0.0, videoPreviewSnapshot_->duration);
     if (videoFrameFuture_.valid()) {
         if (videoFrameFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
             poll_video_frame();
         if (videoFrameFuture_.valid()) {
             pendingVideoSeekSeconds_ = clamped;
-            if (videoFrameCancel_) videoFrameCancel_->store(true, std::memory_order_relaxed);
+            if (videoFrameCancel_)
+                videoFrameCancel_->store(true, std::memory_order_relaxed);
             videoPreviewStatus_ = "Seeking video frame...";
             sync_media_preview_state();
             return;
         }
     }
     pendingVideoSeekSeconds_ = -1.0;
-    if (videoFrameCancel_) videoFrameCancel_->store(true, std::memory_order_relaxed);
+    if (videoFrameCancel_)
+        videoFrameCancel_->store(true, std::memory_order_relaxed);
     videoFrameCancel_ = std::make_shared<std::atomic_bool>(false);
     const auto cancel = videoFrameCancel_;
     const auto generation = videoPreviewGeneration_;
     const auto sourceStamp = videoPreviewStamp_;
-    const auto path = selectedAsset_;
+    const auto path = assetBrowser_.selection;
     auto scanner = fileSystem_;
     videoPreviewStatus_ = "Seeking video frame...";
     sync_media_preview_state();
-    videoFrameFuture_ = std::async(std::launch::async,
-        [generation, sourceStamp, path, clamped, cancel, scanner = std::move(scanner)]() mutable {
-            return load_editor_video_frame(scanner, path, generation, sourceStamp, clamped, 512, cancel.get());
+    videoFrameFuture_ =
+        std::async(std::launch::async, [generation, sourceStamp, path, clamped, cancel,
+                                        scanner = std::move(scanner)]() mutable {
+            return load_editor_video_frame(scanner, path, generation, sourceStamp, clamped, 512,
+                                           cancel.get());
         });
 }
 
 void EditorLayer::poll_video_frame() {
     if (!videoFrameFuture_.valid() ||
-        videoFrameFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        videoFrameFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     EditorVideoPreviewResult result;
-    try { result = videoFrameFuture_.get(); }
-    catch (const std::exception& error) {
-        result.path = selectedAsset_;
+    try {
+        result = videoFrameFuture_.get();
+    } catch (const std::exception &error) {
+        result.path = assetBrowser_.selection;
         result.generation = videoPreviewGeneration_;
         result.sourceStamp = videoPreviewStamp_;
         result.error = error.what();
     } catch (...) {
-        result.path = selectedAsset_;
+        result.path = assetBrowser_.selection;
         result.generation = videoPreviewGeneration_;
         result.sourceStamp = videoPreviewStamp_;
         result.error = "unknown video seek worker failure";
     }
     const auto nextSeek = pendingVideoSeekSeconds_;
     pendingVideoSeekSeconds_ = -1.0;
-    if (result.generation != videoPreviewGeneration_ || result.path != selectedAsset_ ||
+    if (result.generation != videoPreviewGeneration_ || result.path != assetBrowser_.selection ||
         result.sourceStamp != videoPreviewStamp_) {
-        if (nextSeek >= 0.0) request_video_frame(nextSeek);
+        if (nextSeek >= 0.0)
+            request_video_frame(nextSeek);
         return;
     }
     if (result.snapshot && result.snapshot->valid()) {
         videoPreviewSnapshot_ = std::move(result.snapshot);
         videoPreviewStatus_ = "Video frame ready";
-        if(mediaPanel_.playback().state!=ui::MediaPlaybackState::Playing)
-            mediaPanel_.playback().currentTime = std::clamp(videoPreviewSnapshot_->frameTime,
-                0.0, videoPreviewSnapshot_->duration);
+        if (mediaPanel_.playback().state != ui::MediaPlaybackState::Playing)
+            mediaPanel_.playback().currentTime =
+                std::clamp(videoPreviewSnapshot_->frameTime, 0.0, videoPreviewSnapshot_->duration);
     } else {
-        videoPreviewStatus_ = result.error.empty() ?
-            "Video seek unavailable" : "Video seek unavailable: " + result.error;
+        videoPreviewStatus_ = result.error.empty() ? "Video seek unavailable"
+                                                   : "Video seek unavailable: " + result.error;
     }
     sync_media_preview_state();
-    if (nextSeek >= 0.0) request_video_frame(nextSeek);
+    if (nextSeek >= 0.0)
+        request_video_frame(nextSeek);
 }
 
-void EditorLayer::request_model_preview(const EditorAssetIndexEntry& indexed) {
-    if (selectedAsset_.empty() || indexed.descriptor.kind != AssetPreviewKind::Model) return;
+void EditorLayer::request_model_preview(const EditorAssetIndexEntry &indexed) {
+    if (assetBrowser_.selection.empty() || indexed.descriptor.kind != AssetPreviewKind::Model)
+        return;
     if (modelPreviewSnapshot_ && modelPreviewStamp_ == indexed.writeStamp) {
         modelPreviewStatus_ = "Model preview ready";
         return;
@@ -3600,8 +3622,10 @@ void EditorLayer::request_model_preview(const EditorAssetIndexEntry& indexed) {
     if (modelPreviewFuture_.valid()) {
         if (modelPreviewFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
             poll_model_preview();
-        if (modelPreviewFuture_.valid()) return;
-        if (modelPreviewSnapshot_ && modelPreviewStamp_ == indexed.writeStamp) return;
+        if (modelPreviewFuture_.valid())
+            return;
+        if (modelPreviewSnapshot_ && modelPreviewStamp_ == indexed.writeStamp)
+            return;
     }
     modelPreviewSnapshot_.reset();
     modelPreviewScene_.clear();
@@ -3612,62 +3636,69 @@ void EditorLayer::request_model_preview(const EditorAssetIndexEntry& indexed) {
     uiModel_.set_asset_preview(assetPreviewState_);
     const auto generation = modelPreviewGeneration_;
     const auto sourceStamp = indexed.writeStamp;
-    const auto path = selectedAsset_;
+    const auto path = assetBrowser_.selection;
     modelPreviewCancel_ = std::make_shared<std::atomic_bool>(false);
     const auto cancel = modelPreviewCancel_;
     const auto extension = std::filesystem::path(path).extension().string();
     auto normalizedExtension = extension;
-    std::transform(normalizedExtension.begin(), normalizedExtension.end(), normalizedExtension.begin(),
+    std::transform(normalizedExtension.begin(), normalizedExtension.end(),
+                   normalizedExtension.begin(),
                    [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-    const bool useAssetSystemModel = (normalizedExtension == ".obj" ||
-        normalizedExtension == ".gltf" || normalizedExtension == ".glb") && assetSystem_ &&
-        assetSystem_->initialized() && !assetSystemRootNeedsRestart_;
+    const bool useAssetSystemModel =
+        (normalizedExtension == ".obj" || normalizedExtension == ".gltf" ||
+         normalizedExtension == ".glb") &&
+        assetSystem_ && assetSystem_->initialized() && !assetSystemRootNeedsRestart_;
     if (useAssetSystemModel) {
         auto sourceFuture = assetSystem_->request({path, "model"}, {false, false, 6});
         auto scanner = fileSystem_;
-        modelPreviewFuture_ = std::async(std::launch::async,
-            [generation, sourceStamp, path, cancel, sourceFuture, scanner = std::move(scanner), normalizedExtension]() mutable {
+        modelPreviewFuture_ = std::async(
+            std::launch::async, [generation, sourceStamp, path, cancel, sourceFuture,
+                                 scanner = std::move(scanner), normalizedExtension]() mutable {
                 const auto loaded = sourceFuture.get();
                 if (!loaded || !loaded.data || !loaded.data->bytes) {
                     EditorModelPreviewResult result;
                     result.generation = generation;
                     result.sourceStamp = sourceStamp;
                     result.path = path;
-                    result.error = loaded.error.empty() ?
-                        "AssetSystem did not publish model source bytes" : loaded.error;
+                    result.error = loaded.error.empty()
+                                       ? "AssetSystem did not publish model source bytes"
+                                       : loaded.error;
                     return result;
                 }
                 if (normalizedExtension == ".gltf" || normalizedExtension == ".glb")
                     return load_editor_gltf_preview_bytes(scanner, path, *loaded.data->bytes,
-                        generation, sourceStamp, cancel.get());
-                return load_editor_obj_preview_bytes(path, *loaded.data->bytes,
-                    generation, sourceStamp, cancel.get());
+                                                          generation, sourceStamp, cancel.get());
+                return load_editor_obj_preview_bytes(path, *loaded.data->bytes, generation,
+                                                     sourceStamp, cancel.get());
             });
     } else {
         auto scanner = fileSystem_;
-        modelPreviewFuture_ = std::async(std::launch::async,
-            [generation, sourceStamp, path, cancel, scanner = std::move(scanner)]() mutable {
-                return load_editor_model_preview(scanner, path, generation, sourceStamp, cancel.get());
-            });
+        modelPreviewFuture_ = std::async(std::launch::async, [generation, sourceStamp, path, cancel,
+                                                              scanner =
+                                                                  std::move(scanner)]() mutable {
+            return load_editor_model_preview(scanner, path, generation, sourceStamp, cancel.get());
+        });
     }
 }
 
 void EditorLayer::poll_model_preview() {
     if (!modelPreviewFuture_.valid() ||
-        modelPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        modelPreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     EditorModelPreviewResult result;
-    try { result = modelPreviewFuture_.get(); }
-    catch (const std::exception& error) {
-        result.path = selectedAsset_;
+    try {
+        result = modelPreviewFuture_.get();
+    } catch (const std::exception &error) {
+        result.path = assetBrowser_.selection;
         result.generation = modelPreviewGeneration_;
         result.error = error.what();
     } catch (...) {
-        result.path = selectedAsset_;
+        result.path = assetBrowser_.selection;
         result.generation = modelPreviewGeneration_;
         result.error = "unknown model preview worker failure";
     }
-    const auto* indexed = assetIndex_ ? assetIndex_->find(selectedAsset_) : nullptr;
-    if (result.generation != modelPreviewGeneration_ || result.path != selectedAsset_ ||
+    const auto *indexed = assetIndex_ ? assetIndex_->find(assetBrowser_.selection) : nullptr;
+    if (result.generation != modelPreviewGeneration_ || result.path != assetBrowser_.selection ||
         !indexed || indexed->descriptor.kind != AssetPreviewKind::Model) {
         request_asset_preview();
         return;
@@ -3680,7 +3711,7 @@ void EditorLayer::poll_model_preview() {
     assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
     ++modelTexturePreviewGeneration_;
     modelTexturePreviewStamp_ = 0;
-    modelTexturePreviewPath_ = selectedAsset_;
+    modelTexturePreviewPath_ = assetBrowser_.selection;
     assetPreviewState_.modelTextureWidth = 0;
     assetPreviewState_.modelTextureHeight = 0;
     assetPreviewState_.modelTextureSnapshot.reset();
@@ -3691,8 +3722,9 @@ void EditorLayer::poll_model_preview() {
         modelPreviewStatus_ = "Model preview ready";
         assetPreviewState_.status = modelPreviewStatus_;
     } else {
-        modelPreviewStatus_ = result.error.empty() ?
-            "Preview unavailable: parser returned no geometry" : "Preview unavailable: " + result.error;
+        modelPreviewStatus_ = result.error.empty()
+                                  ? "Preview unavailable: parser returned no geometry"
+                                  : "Preview unavailable: " + result.error;
         assetPreviewState_.status = modelPreviewStatus_;
         assetPreviewState_.modelPreviewScene.reset();
     }
@@ -3702,13 +3734,17 @@ void EditorLayer::poll_model_preview() {
 
 void EditorLayer::reset_model_scene_assets() {
     ++modelSceneGeneration_;
-    for (auto& [assetId, record] : modelSceneAssets_) {
+    for (auto &[assetId, record] : modelSceneAssets_) {
         (void)assetId;
         record.active = false;
-        if (record.cancel) record.cancel->store(true, std::memory_order_relaxed);
+        if (record.cancel)
+            record.cancel->store(true, std::memory_order_relaxed);
         if (record.future.valid()) {
             record.future.wait();
-            try { record.future.get(); } catch (...) { }
+            try {
+                record.future.get();
+            } catch (...) {
+            }
         }
     }
     modelSceneAssets_.clear();
@@ -3716,14 +3752,19 @@ void EditorLayer::reset_model_scene_assets() {
 }
 
 void EditorLayer::poll_model_scene_assets() {
-    for (auto& [assetId, record] : modelSceneAssets_) {
+    for (auto &[assetId, record] : modelSceneAssets_) {
         (void)assetId;
         if (!record.future.valid() ||
-            record.future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) continue;
+            record.future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+            continue;
         EditorModelPreviewResult result;
-        try { result = record.future.get(); }
-        catch (const std::exception& error) { result.error = error.what(); }
-        catch (...) { result.error = "unknown model scene worker failure"; }
+        try {
+            result = record.future.get();
+        } catch (const std::exception &error) {
+            result.error = error.what();
+        } catch (...) {
+            result.error = "unknown model scene worker failure";
+        }
         record.cancel.reset();
         if (result.generation != record.generation || result.path != record.path) {
             record.status = "Model scene asset load superseded";
@@ -3732,30 +3773,36 @@ void EditorLayer::poll_model_scene_assets() {
         }
         record.snapshot = std::move(result.snapshot);
         record.status = record.snapshot && record.snapshot->valid()
-            ? "Model scene asset ready" : (result.error.empty()
-                ? "Model scene asset is invalid" : "Model scene asset failed: " + result.error);
+                            ? "Model scene asset ready"
+                            : (result.error.empty() ? "Model scene asset is invalid"
+                                                    : "Model scene asset failed: " + result.error);
     }
 }
 
-void EditorLayer::sync_model_scene_assets(const World& world) {
-    for (auto& [assetId, record] : modelSceneAssets_) {
+void EditorLayer::sync_model_scene_assets(const World &world) {
+    for (auto &[assetId, record] : modelSceneAssets_) {
         (void)assetId;
         record.active = false;
     }
-    if (!assetSystem_ || !assetSystem_->initialized() || assetSystemRootNeedsRestart_ || !assetManifest_) {
+    if (!assetSystem_ || !assetSystem_->initialized() || assetSystemRootNeedsRestart_ ||
+        !assetManifest_) {
         return;
     }
 
-    const auto manifest_for = [this](assets::AssetId id) -> const assets::AssetManifestEntry* {
-        if (!assetManifest_ || id == 0) return nullptr;
-        for (const auto& entry : *assetManifest_)
-            if (entry.id == id && entry.key.type == "model") return &entry;
+    const auto manifest_for = [this](assets::AssetId id) -> const assets::AssetManifestEntry * {
+        if (!assetManifest_ || id == 0)
+            return nullptr;
+        for (const auto &entry : *assetManifest_)
+            if (entry.id == id && entry.key.type == "model")
+                return &entry;
         return nullptr;
     };
-    const auto source_stamp_for = [](const assets::AssetManifestEntry& entry) noexcept {
-        if (entry.sourceHash != 0) return entry.sourceHash;
-        return entry.sourceTimestamp ^ (static_cast<std::uint64_t>(entry.sourceSize) +
-            0x9e3779b97f4a7c15ull + (entry.sourceTimestamp << 6u) + (entry.sourceTimestamp >> 2u));
+    const auto source_stamp_for = [](const assets::AssetManifestEntry &entry) noexcept {
+        if (entry.sourceHash != 0)
+            return entry.sourceHash;
+        return entry.sourceTimestamp ^
+               (static_cast<std::uint64_t>(entry.sourceSize) + 0x9e3779b97f4a7c15ull +
+                (entry.sourceTimestamp << 6u) + (entry.sourceTimestamp >> 2u));
     };
     const auto normalize_extension = [](std::string value) {
         std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
@@ -3764,23 +3811,27 @@ void EditorLayer::sync_model_scene_assets(const World& world) {
         return value;
     };
 
-    world.each_game_object([&](const GameObject& object) {
-        const auto* reference = object.get_component<AssetReferenceComponent>();
-        if (!reference || reference->asset_id() == 0 || reference->path().empty()) return;
-        const auto* manifest = manifest_for(reference->asset_id());
-        if (!manifest) return;
+    world.each_game_object([&](const GameObject &object) {
+        const auto *reference = object.get_component<AssetReferenceComponent>();
+        if (!reference || reference->asset_id() == 0 || reference->path().empty())
+            return;
+        const auto *manifest = manifest_for(reference->asset_id());
+        if (!manifest)
+            return;
         const auto path = reference->path();
         const auto sourceStamp = source_stamp_for(*manifest);
         auto recordIt = modelSceneAssets_.find(reference->asset_id());
         if (recordIt == modelSceneAssets_.end()) {
-            recordIt = modelSceneAssets_.emplace(reference->asset_id(), AsyncModelSceneAsset{}).first;
+            recordIt =
+                modelSceneAssets_.emplace(reference->asset_id(), AsyncModelSceneAsset{}).first;
         }
-        auto& record = recordIt->second;
+        auto &record = recordIt->second;
         record.active = true;
         const bool sourceChanged = record.path != path || record.sourceStamp != sourceStamp;
         if (sourceChanged) {
             if (record.future.valid()) {
-                if (record.cancel) record.cancel->store(true, std::memory_order_relaxed);
+                if (record.cancel)
+                    record.cancel->store(true, std::memory_order_relaxed);
                 record.status = "Reloading model scene asset...";
                 return;
             }
@@ -3790,40 +3841,47 @@ void EditorLayer::sync_model_scene_assets(const World& world) {
             record.snapshot.reset();
             record.status = "Loading model scene asset...";
         }
-        if (record.snapshot && record.sourceStamp == sourceStamp) return;
-        if (record.future.valid()) return;
+        if (record.snapshot && record.sourceStamp == sourceStamp)
+            return;
+        if (record.future.valid())
+            return;
 
         const auto generation = record.generation;
         const auto cancel = std::make_shared<std::atomic_bool>(false);
         record.cancel = cancel;
-        const auto extension = normalize_extension(std::filesystem::path(path).extension().string());
+        const auto extension =
+            normalize_extension(std::filesystem::path(path).extension().string());
         auto sourceFuture = assetSystem_->request({path, "model"}, {false, false, 5});
         auto scanner = fileSystem_;
-        record.future = std::async(std::launch::async,
-            [generation, sourceStamp, path, cancel, sourceFuture,
-             scanner = std::move(scanner), extension]() mutable {
+        record.future =
+            std::async(std::launch::async, [generation, sourceStamp, path, cancel, sourceFuture,
+                                            scanner = std::move(scanner), extension]() mutable {
                 const auto loaded = sourceFuture.get();
                 if (!loaded || !loaded.data || !loaded.data->bytes) {
                     EditorModelPreviewResult result;
                     result.generation = generation;
                     result.sourceStamp = sourceStamp;
                     result.path = path;
-                    result.error = loaded.error.empty() ?
-                        "AssetSystem did not publish model source bytes" : loaded.error;
+                    result.error = loaded.error.empty()
+                                       ? "AssetSystem did not publish model source bytes"
+                                       : loaded.error;
                     return result;
                 }
                 if (extension == ".gltf" || extension == ".glb")
                     return load_editor_gltf_preview_bytes(scanner, path, *loaded.data->bytes,
-                        generation, sourceStamp, cancel.get());
-                return load_editor_obj_preview_bytes(path, *loaded.data->bytes,
-                    generation, sourceStamp, cancel.get());
+                                                          generation, sourceStamp, cancel.get());
+                return load_editor_obj_preview_bytes(path, *loaded.data->bytes, generation,
+                                                     sourceStamp, cancel.get());
             });
     });
 
     // A completed inactive request can now be reclaimed. Running requests are
     // retained until a later poll so their futures are always drained safely.
     for (auto it = modelSceneAssets_.begin(); it != modelSceneAssets_.end();) {
-        if (it->second.active || it->second.future.valid()) { ++it; continue; }
+        if (it->second.active || it->second.future.valid()) {
+            ++it;
+            continue;
+        }
         it = modelSceneAssets_.erase(it);
     }
 }
@@ -3841,17 +3899,17 @@ void EditorLayer::sync_model_preview_selection() {
         uiModel_.set_asset_preview(assetPreviewState_);
         return;
     }
-    const auto& snapshot = *modelPreviewSnapshot_;
-    const auto& materials = snapshot.materials;
-    const auto& textures = snapshot.textures;
+    const auto &snapshot = *modelPreviewSnapshot_;
+    const auto &materials = snapshot.materials;
+    const auto &textures = snapshot.textures;
     if (materials && !materials->empty()) {
         modelMaterialSelection_ = std::clamp<std::int32_t>(
             modelMaterialSelection_, 0, static_cast<std::int32_t>(materials->size() - 1u));
-        const auto& material = (*materials)[static_cast<std::size_t>(modelMaterialSelection_)];
+        const auto &material = (*materials)[static_cast<std::size_t>(modelMaterialSelection_)];
         assetPreviewState_.modelMaterialIndex = modelMaterialSelection_;
-        assetPreviewState_.modelMaterialLabel = "Material " +
-            std::to_string(static_cast<std::size_t>(modelMaterialSelection_) + 1u) + "/" +
-            std::to_string(materials->size()) + ": " +
+        assetPreviewState_.modelMaterialLabel =
+            "Material " + std::to_string(static_cast<std::size_t>(modelMaterialSelection_) + 1u) +
+            "/" + std::to_string(materials->size()) + ": " +
             (material.name.empty() ? std::string("Unnamed") : material.name);
     } else {
         modelMaterialSelection_ = -1;
@@ -3864,25 +3922,30 @@ void EditorLayer::sync_model_preview_selection() {
             static_cast<std::size_t>(modelTextureSelection_) >= textures->size()) {
             std::int32_t preferred = -1;
             if (materials && modelMaterialSelection_ >= 0) {
-                const auto& material = (*materials)[static_cast<std::size_t>(modelMaterialSelection_)];
-                preferred = material.baseColorTexture >= 0 ? material.baseColorTexture :
-                    material.normalTexture >= 0 ? material.normalTexture : material.metallicRoughnessTexture;
+                const auto &material =
+                    (*materials)[static_cast<std::size_t>(modelMaterialSelection_)];
+                preferred = material.baseColorTexture >= 0 ? material.baseColorTexture
+                            : material.normalTexture >= 0  ? material.normalTexture
+                                                           : material.metallicRoughnessTexture;
             }
-            modelTextureSelection_ = preferred >= 0 &&
-                static_cast<std::size_t>(preferred) < textures->size() ? preferred : 0;
+            modelTextureSelection_ =
+                preferred >= 0 && static_cast<std::size_t>(preferred) < textures->size() ? preferred
+                                                                                         : 0;
         }
-        const auto& texture = (*textures)[static_cast<std::size_t>(modelTextureSelection_)];
+        const auto &texture = (*textures)[static_cast<std::size_t>(modelTextureSelection_)];
         assetPreviewState_.modelTextureIndex = modelTextureSelection_;
-        assetPreviewState_.modelTextureLabel = "Texture " +
-            std::to_string(static_cast<std::size_t>(modelTextureSelection_) + 1u) + "/" +
-            std::to_string(textures->size()) + ": " +
+        assetPreviewState_.modelTextureLabel =
+            "Texture " + std::to_string(static_cast<std::size_t>(modelTextureSelection_) + 1u) +
+            "/" + std::to_string(textures->size()) + ": " +
             (texture.name.empty() ? std::string("Unnamed") : texture.name);
         assetPreviewState_.modelTextureImageIndex = texture.source;
         assetPreviewState_.modelTextureRole = "Texture";
         if (materials && modelMaterialSelection_ >= 0) {
-            const auto& material = (*materials)[static_cast<std::size_t>(modelMaterialSelection_)];
-            if (material.baseColorTexture == modelTextureSelection_) assetPreviewState_.modelTextureRole = "Base Color";
-            else if (material.normalTexture == modelTextureSelection_) assetPreviewState_.modelTextureRole = "Normal";
+            const auto &material = (*materials)[static_cast<std::size_t>(modelMaterialSelection_)];
+            if (material.baseColorTexture == modelTextureSelection_)
+                assetPreviewState_.modelTextureRole = "Base Color";
+            else if (material.normalTexture == modelTextureSelection_)
+                assetPreviewState_.modelTextureRole = "Normal";
             else if (material.metallicRoughnessTexture == modelTextureSelection_)
                 assetPreviewState_.modelTextureRole = "Metallic/Roughness";
         }
@@ -3899,11 +3962,14 @@ void EditorLayer::sync_model_preview_selection() {
 
 void EditorLayer::select_model_material(std::int32_t delta) {
     if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid() ||
-        !modelPreviewSnapshot_->materials || modelPreviewSnapshot_->materials->empty()) return;
+        !modelPreviewSnapshot_->materials || modelPreviewSnapshot_->materials->empty())
+        return;
     const auto count = static_cast<std::int32_t>(modelPreviewSnapshot_->materials->size());
-    if (modelMaterialSelection_ < 0) modelMaterialSelection_ = 0;
+    if (modelMaterialSelection_ < 0)
+        modelMaterialSelection_ = 0;
     modelMaterialSelection_ = (modelMaterialSelection_ + delta) % count;
-    if (modelMaterialSelection_ < 0) modelMaterialSelection_ += count;
+    if (modelMaterialSelection_ < 0)
+        modelMaterialSelection_ += count;
     modelTextureSelection_ = -1;
     ++modelTexturePreviewGeneration_;
     modelTexturePreviewStamp_ = 0;
@@ -3916,11 +3982,14 @@ void EditorLayer::select_model_material(std::int32_t delta) {
 
 void EditorLayer::select_model_texture(std::int32_t delta) {
     if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid() ||
-        !modelPreviewSnapshot_->textures || modelPreviewSnapshot_->textures->empty()) return;
+        !modelPreviewSnapshot_->textures || modelPreviewSnapshot_->textures->empty())
+        return;
     const auto count = static_cast<std::int32_t>(modelPreviewSnapshot_->textures->size());
-    if (modelTextureSelection_ < 0) modelTextureSelection_ = 0;
+    if (modelTextureSelection_ < 0)
+        modelTextureSelection_ = 0;
     modelTextureSelection_ = (modelTextureSelection_ + delta) % count;
-    if (modelTextureSelection_ < 0) modelTextureSelection_ += count;
+    if (modelTextureSelection_ < 0)
+        modelTextureSelection_ += count;
     ++modelTexturePreviewGeneration_;
     modelTexturePreviewStamp_ = 0;
     assetPreviewState_.modelTextureWidth = 0;
@@ -3931,18 +4000,19 @@ void EditorLayer::select_model_texture(std::int32_t delta) {
 }
 
 void EditorLayer::request_model_texture_preview() {
-    if (selectedAsset_.empty() || !modelPreviewSnapshot_ ||
-        !modelPreviewSnapshot_->valid()) return;
-    const auto* artifacts = modelPreviewSnapshot_->imageArtifacts.get();
+    if (assetBrowser_.selection.empty() || !modelPreviewSnapshot_ ||
+        !modelPreviewSnapshot_->valid())
+        return;
+    const auto *artifacts = modelPreviewSnapshot_->imageArtifacts.get();
     if (!artifacts || artifacts->empty()) {
         assetPreviewState_.modelTextureStatus = modelPreviewSnapshot_->imageCount == 0
-            ? "No glTF image artifacts"
-            : "No image payload available";
+                                                    ? "No glTF image artifacts"
+                                                    : "No image payload available";
         uiModel_.set_asset_preview(assetPreviewState_);
         return;
     }
-    const EditorModelTextureArtifact* selected = nullptr;
-    for (const auto& artifact : *artifacts) {
+    const EditorModelTextureArtifact *selected = nullptr;
+    for (const auto &artifact : *artifacts) {
         if (artifact.valid() && artifact.imageIndex == assetPreviewState_.modelTextureImageIndex) {
             selected = &artifact;
             break;
@@ -3950,26 +4020,31 @@ void EditorLayer::request_model_texture_preview() {
     }
     if (!selected) {
         assetPreviewState_.modelTextureStatus = assetPreviewState_.modelTextureImageIndex < 0
-            ? "Texture has no image source" : "Selected texture image payload unavailable";
+                                                    ? "Texture has no image source"
+                                                    : "Selected texture image payload unavailable";
         uiModel_.set_asset_preview(assetPreviewState_);
         return;
     }
-    if (modelTexturePreviewPath_ == selectedAsset_ &&
+    if (modelTexturePreviewPath_ == assetBrowser_.selection &&
         modelTexturePreviewStamp_ == modelPreviewStamp_ &&
         assetPreviewState_.modelTextureSnapshot &&
-        !assetPreviewState_.modelTextureSnapshot->bgraPremultiplied.empty()) return;
+        !assetPreviewState_.modelTextureSnapshot->bgraPremultiplied.empty())
+        return;
     if (modelTexturePreviewFuture_.valid()) {
-        if (modelTexturePreviewFuture_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
+        if (modelTexturePreviewFuture_.wait_for(std::chrono::milliseconds(0)) ==
+            std::future_status::ready)
             poll_model_texture_preview();
-        if (modelTexturePreviewPath_ == selectedAsset_ &&
+        if (modelTexturePreviewPath_ == assetBrowser_.selection &&
             modelTexturePreviewStamp_ == modelPreviewStamp_ &&
             assetPreviewState_.modelTextureSnapshot &&
-            !assetPreviewState_.modelTextureSnapshot->bgraPremultiplied.empty()) return;
-        if (modelTexturePreviewFuture_.valid()) return;
+            !assetPreviewState_.modelTextureSnapshot->bgraPremultiplied.empty())
+            return;
+        if (modelTexturePreviewFuture_.valid())
+            return;
     }
     const auto generation = modelTexturePreviewGeneration_;
     const auto sourceStamp = modelPreviewStamp_;
-    const auto path = selectedAsset_;
+    const auto path = assetBrowser_.selection;
     const auto bytes = selected->encodedBytes;
     modelTexturePreviewPath_ = path;
     modelTexturePreviewStamp_ = sourceStamp;
@@ -3978,8 +4053,8 @@ void EditorLayer::request_model_texture_preview() {
     assetPreviewState_.modelTextureSnapshot.reset();
     assetPreviewState_.modelTextureStatus = "Loading model texture preview...";
     uiModel_.set_asset_preview(assetPreviewState_);
-    modelTexturePreviewFuture_ = std::async(std::launch::async,
-        [generation, sourceStamp, path, bytes]() {
+    modelTexturePreviewFuture_ =
+        std::async(std::launch::async, [generation, sourceStamp, path, bytes]() {
             if (!bytes) {
                 EditorImagePreviewResult result;
                 result.generation = generation;
@@ -3994,24 +4069,28 @@ void EditorLayer::request_model_texture_preview() {
 
 void EditorLayer::poll_model_texture_preview() {
     if (!modelTexturePreviewFuture_.valid() ||
-        modelTexturePreviewFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        modelTexturePreviewFuture_.wait_for(std::chrono::milliseconds(0)) !=
+            std::future_status::ready)
+        return;
     EditorImagePreviewResult result;
-    try { result = modelTexturePreviewFuture_.get(); }
-    catch (const std::exception& error) {
-        result.path = selectedAsset_;
+    try {
+        result = modelTexturePreviewFuture_.get();
+    } catch (const std::exception &error) {
+        result.path = assetBrowser_.selection;
         result.generation = modelTexturePreviewGeneration_;
         result.sourceStamp = modelPreviewStamp_;
         result.error = error.what();
     } catch (...) {
-        result.path = selectedAsset_;
+        result.path = assetBrowser_.selection;
         result.generation = modelTexturePreviewGeneration_;
         result.sourceStamp = modelPreviewStamp_;
         result.error = "unknown model texture preview worker failure";
     }
     if (result.generation != modelTexturePreviewGeneration_ ||
-        result.path != selectedAsset_ || result.sourceStamp != modelPreviewStamp_ ||
+        result.path != assetBrowser_.selection || result.sourceStamp != modelPreviewStamp_ ||
         !modelPreviewSnapshot_) {
-        if (modelPreviewSnapshot_ && modelPreviewSnapshot_->valid()) request_model_texture_preview();
+        if (modelPreviewSnapshot_ && modelPreviewSnapshot_->valid())
+            request_model_texture_preview();
         return;
     }
     assetPreviewState_.modelTextureWidth = result.sourceWidth;
@@ -4028,23 +4107,29 @@ void EditorLayer::poll_model_texture_preview() {
 }
 
 void EditorLayer::navigate_model_preview(ViewportNavigation action, math::Vec2 delta) {
-    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid()) return;
-    if (action == ViewportNavigation::Orbit) modelPreviewScene_.orbit({delta.x, delta.y});
-    else if (action == ViewportNavigation::Zoom) modelPreviewScene_.zoom(delta.y);
-    else return;
+    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid())
+        return;
+    if (action == ViewportNavigation::Orbit)
+        modelPreviewScene_.orbit({delta.x, delta.y});
+    else if (action == ViewportNavigation::Zoom)
+        modelPreviewScene_.zoom(delta.y);
+    else
+        return;
     assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
     uiModel_.set_asset_preview(assetPreviewState_);
 }
 
 void EditorLayer::reset_model_preview() {
-    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid()) return;
+    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid())
+        return;
     modelPreviewScene_.reset_camera();
     assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
     uiModel_.set_asset_preview(assetPreviewState_);
 }
 
 void EditorLayer::toggle_model_animation() {
-    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid()) return;
+    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid())
+        return;
     modelPreviewScene_.toggle_animation();
     assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
     uiModel_.set_asset_preview(assetPreviewState_);
@@ -4052,10 +4137,13 @@ void EditorLayer::toggle_model_animation() {
 
 void EditorLayer::select_model_animation(std::int32_t delta) {
     if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid() ||
-        !modelPreviewSnapshot_->animations || modelPreviewSnapshot_->animations->empty() || delta == 0) return;
+        !modelPreviewSnapshot_->animations || modelPreviewSnapshot_->animations->empty() ||
+        delta == 0)
+        return;
     const auto count = static_cast<std::int32_t>(modelPreviewSnapshot_->animations->size());
     auto index = modelPreviewScene_.animation_index();
-    if (index < 0) index = delta > 0 ? -1 : 0;
+    if (index < 0)
+        index = delta > 0 ? -1 : 0;
     for (std::int32_t attempt = 0; attempt < count; ++attempt) {
         index = (index + (delta > 0 ? 1 : -1) + count) % count;
         if (modelPreviewScene_.select_animation(index)) {
@@ -4067,22 +4155,29 @@ void EditorLayer::select_model_animation(std::int32_t delta) {
 }
 
 void EditorLayer::seek_model_animation(float normalizedTime) {
-    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid() ||
-        !std::isfinite(normalizedTime)) return;
+    if (!modelPreviewSnapshot_ || !modelPreviewSnapshot_->valid() || !std::isfinite(normalizedTime))
+        return;
     const auto state = modelPreviewScene_.state();
-    if (!state || !state->animationPlayable || state->animationDuration <= 0.0f) return;
-    modelPreviewScene_.seek_animation(std::clamp(normalizedTime, 0.0f, 1.0f) * state->animationDuration);
+    if (!state || !state->animationPlayable || state->animationDuration <= 0.0f)
+        return;
+    modelPreviewScene_.seek_animation(std::clamp(normalizedTime, 0.0f, 1.0f) *
+                                      state->animationDuration);
     assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
     uiModel_.set_asset_preview(assetPreviewState_);
 }
 
-void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path, std::string value) {
+void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path,
+                                      std::string value) {
     std::string error;
     switch (action) {
     case EditorAssetAction::Open:
         set_selected_asset(path);
-        if (std::filesystem::path(path).extension() == ".scene" && activeWorld_) dispatch_command(EditorCommand::OpenScene, path, *activeWorld_);
-        else { lastStatus_ = "Selected " + path + " (no importer registered)"; push_console(lastStatus_); }
+        if (std::filesystem::path(path).extension() == ".scene" && activeWorld_)
+            dispatch_command(EditorCommand::OpenScene, path, *activeWorld_);
+        else {
+            lastStatus_ = "Selected " + path + " (no importer registered)";
+            push_console(lastStatus_);
+        }
         return;
     case EditorAssetAction::Navigate:
         set_selected_asset({});
@@ -4112,34 +4207,36 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         }
         const auto oldPath = normalized_project_path(path);
         const auto newPath = normalized_project_path(target.generic_string());
-        remap_asset_settings(oldPath,newPath);
+        remap_asset_settings(oldPath, newPath);
         FileOperation operation;
         operation.kind = FileOperation::Kind::Rename;
         operation.sourcePath = oldPath;
         operation.destinationPath = newPath;
         const auto remappedReferences = remap_live_asset_references(oldPath, newPath);
         const auto migratedDocuments = migrate_asset_documents(oldPath, newPath, false);
-        if (path_is_or_below(selectedAsset_, oldPath))
-            set_selected_asset(remap_project_path(selectedAsset_, oldPath, newPath));
-        if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), oldPath)) {
-            assetDirectory_ = std::filesystem::u8path(remap_project_path(
-                assetDirectory_.generic_string(), oldPath, newPath));
-            editorUi_.set_asset_directory(assetDirectory_);
+        if (path_is_or_below(assetBrowser_.selection, oldPath))
+            set_selected_asset(remap_project_path(assetBrowser_.selection, oldPath, newPath));
+        if (!assetBrowser_.directory.empty() &&
+            path_is_or_below(assetBrowser_.directory.generic_string(), oldPath)) {
+            assetBrowser_.directory = std::filesystem::u8path(
+                remap_project_path(assetBrowser_.directory.generic_string(), oldPath, newPath));
         }
         reset_asset_manifest("AssetSystem manifest refresh requested");
         ++fileScanGeneration_;
         assetsDirty_ = true;
         lastStatus_ = "Renamed resource to " + newName.generic_string();
         if (remappedReferences != 0)
-            lastStatus_ += " and migrated " + std::to_string(remappedReferences) + " live reference(s)";
+            lastStatus_ +=
+                " and migrated " + std::to_string(remappedReferences) + " live reference(s)";
         if (migratedDocuments.referencesChanged != 0)
             lastStatus_ += " plus " + std::to_string(migratedDocuments.referencesChanged) +
-                " unloaded reference(s) in " + std::to_string(migratedDocuments.filesChanged) + " document(s)";
+                           " unloaded reference(s) in " +
+                           std::to_string(migratedDocuments.filesChanged) + " document(s)";
         if (migratedDocuments.filesSkipped != 0) {
-            lastStatus_ += " (" + std::to_string(migratedDocuments.filesSkipped) +
-                " document(s) skipped)";
-            if (!migratedDocuments.firstError.empty()) push_console(
-                "Unloaded document migration audit: " + migratedDocuments.firstError);
+            lastStatus_ +=
+                " (" + std::to_string(migratedDocuments.filesSkipped) + " document(s) skipped)";
+            if (!migratedDocuments.firstError.empty())
+                push_console("Unloaded document migration audit: " + migratedDocuments.firstError);
         }
         record_file_operation(std::move(operation));
         lastStatus_ += " (Undo to restore)";
@@ -4164,20 +4261,20 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         lastStatus_ = "Created folder " + newName.generic_string();
         break;
     }
-    case EditorAssetAction::Delete:
-        {
+    case EditorAssetAction::Delete: {
         const auto normalizedPath = normalized_project_path(path);
         FileOperation operation;
         operation.kind = FileOperation::Kind::RecycleDelete;
         operation.sourcePath = normalizedPath;
         operation.recyclePath = make_recycle_path(normalizedPath).generic_string();
-        operation.selectedAssetBefore = selectedAsset_;
-        operation.assetDirectoryBefore = assetDirectory_;
+        operation.selectedAssetBefore = assetBrowser_.selection;
+        operation.assetDirectoryBefore = assetBrowser_.directory;
         bool sourceDirectory = false;
         fileSystem_.exists(normalizedPath, &sourceDirectory);
         expect_editor_file_change(normalizedPath, sourceDirectory);
         expect_editor_file_change(operation.recyclePath, sourceDirectory);
-        if (!fileSystem_.ensure_directory(std::filesystem::path(operation.recyclePath).parent_path(), &error) ||
+        if (!fileSystem_.ensure_directory(
+                std::filesystem::path(operation.recyclePath).parent_path(), &error) ||
             !fileSystem_.rename(normalizedPath, operation.recyclePath, &error)) {
             lastStatus_ = "Delete failed: " + error;
             push_console(lastStatus_);
@@ -4185,30 +4282,33 @@ void EditorLayer::handle_asset_action(EditorAssetAction action, std::string path
         }
         const auto invalidatedReferences = invalidate_live_asset_references(path);
         const auto migratedDocuments = migrate_asset_documents(normalizedPath, {}, true);
-        if (path_is_or_below(selectedAsset_, normalizedPath)) set_selected_asset({});
-        if (!assetDirectory_.empty() && path_is_or_below(assetDirectory_.generic_string(), normalizedPath)) {
-            assetDirectory_.clear();
-            editorUi_.set_asset_directory(assetDirectory_);
+        if (path_is_or_below(assetBrowser_.selection, normalizedPath))
+            set_selected_asset({});
+        if (!assetBrowser_.directory.empty() &&
+            path_is_or_below(assetBrowser_.directory.generic_string(), normalizedPath)) {
+            assetBrowser_.directory.clear();
         }
         reset_asset_manifest("AssetSystem manifest refresh requested");
         ++fileScanGeneration_;
         assetsDirty_ = true;
         lastStatus_ = "Deleted resource " + std::filesystem::path(path).filename().string();
         if (invalidatedReferences != 0)
-            lastStatus_ += " and invalidated " + std::to_string(invalidatedReferences) + " live reference(s)";
+            lastStatus_ +=
+                " and invalidated " + std::to_string(invalidatedReferences) + " live reference(s)";
         if (migratedDocuments.referencesChanged != 0)
             lastStatus_ += " plus " + std::to_string(migratedDocuments.referencesChanged) +
-                " unloaded reference(s) in " + std::to_string(migratedDocuments.filesChanged) + " document(s)";
+                           " unloaded reference(s) in " +
+                           std::to_string(migratedDocuments.filesChanged) + " document(s)";
         if (migratedDocuments.filesSkipped != 0) {
-            lastStatus_ += " (" + std::to_string(migratedDocuments.filesSkipped) +
-                " document(s) skipped)";
-            if (!migratedDocuments.firstError.empty()) push_console(
-                "Unloaded document migration audit: " + migratedDocuments.firstError);
+            lastStatus_ +=
+                " (" + std::to_string(migratedDocuments.filesSkipped) + " document(s) skipped)";
+            if (!migratedDocuments.firstError.empty())
+                push_console("Unloaded document migration audit: " + migratedDocuments.firstError);
         }
         record_file_operation(std::move(operation));
         lastStatus_ += " (recoverable; Undo to restore)";
         break;
-        }
+    }
     }
     push_console(lastStatus_);
 }
@@ -4233,13 +4333,15 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
         push_console(lastStatus_);
         return false;
     }
-    const auto* indexed = assetIndex_ ? assetIndex_->find(normalized.generic_string()) : nullptr;
-    const auto kind = indexed ? indexed->descriptor.kind : AssetPreviewCatalog::classify(normalized);
+    const auto *indexed = assetIndex_ ? assetIndex_->find(normalized.generic_string()) : nullptr;
+    const auto kind =
+        indexed ? indexed->descriptor.kind : AssetPreviewCatalog::classify(normalized);
     const bool supported = kind == AssetPreviewKind::Model || kind == AssetPreviewKind::Image ||
-        kind == AssetPreviewKind::Audio || kind == AssetPreviewKind::Video || kind == AssetPreviewKind::Material;
+                           kind == AssetPreviewKind::Audio || kind == AssetPreviewKind::Video ||
+                           kind == AssetPreviewKind::Material;
     if (!supported) {
         lastStatus_ = "Drop rejected: " + std::string(AssetPreviewCatalog::kind_name(kind)) +
-            " resources are not instantiable yet";
+                      " resources are not instantiable yet";
         push_console(lastStatus_);
         return false;
     }
@@ -4258,31 +4360,40 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
         const auto sourcePath = fileSystem_.resolve_existing(normalized);
         const auto expectedType = [&]() -> std::string_view {
             switch (kind) {
-            case AssetPreviewKind::Image: return "texture";
-            case AssetPreviewKind::Audio: return "audio";
-            case AssetPreviewKind::Video: return "video";
-            case AssetPreviewKind::Model: return "model";
-            case AssetPreviewKind::Material: return "material";
-            default: return {};
+            case AssetPreviewKind::Image:
+                return "texture";
+            case AssetPreviewKind::Audio:
+                return "audio";
+            case AssetPreviewKind::Video:
+                return "video";
+            case AssetPreviewKind::Model:
+                return "model";
+            case AssetPreviewKind::Material:
+                return "material";
+            default:
+                return {};
             }
         }();
         if (!sourcePath.empty()) {
-            for (const auto& entry : *assetManifest_) {
-                if (entry.id == 0 || entry.key.type != expectedType) continue;
+            for (const auto &entry : *assetManifest_) {
+                if (entry.id == 0 || entry.key.type != expectedType)
+                    continue;
                 const auto manifestPath = entry.sourcePath.lexically_normal();
                 if (manifestPath == sourcePath.lexically_normal()) {
                     assetId = entry.id;
                     break;
                 }
                 std::error_code equivalentError;
-                if (std::filesystem::equivalent(manifestPath, sourcePath, equivalentError) && !equivalentError) {
+                if (std::filesystem::equivalent(manifestPath, sourcePath, equivalentError) &&
+                    !equivalentError) {
                     assetId = entry.id;
                     break;
                 }
             }
         }
         if (assetId == 0) {
-            lastStatus_ = "Drop rejected: resource is not present in the current AssetSystem manifest";
+            lastStatus_ =
+                "Drop rejected: resource is not present in the current AssetSystem manifest";
             push_console(lastStatus_);
             return false;
         }
@@ -4295,16 +4406,20 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
         return false;
     }
     activeWorld_->register_component_type<AssetReferenceComponent>("AssetReference");
-    if (!checkpoint(*activeWorld_)) return false;
+    if (!checkpoint(*activeWorld_))
+        return false;
 
     auto name = normalized.stem().string();
-    if (name.empty()) name = normalized.filename().string();
-    auto& object = activeWorld_->create_object(name.empty() ? "Asset" : name);
-    auto* reference = object.add_component<AssetReferenceComponent>(normalized.generic_string(), assetId);
-    auto* transform = object.get_component<components::TransformComponent>();
+    if (name.empty())
+        name = normalized.filename().string();
+    auto &object = activeWorld_->create_object(name.empty() ? "Asset" : name);
+    auto *reference =
+        object.add_component<AssetReferenceComponent>(normalized.generic_string(), assetId);
+    auto *transform = object.get_component<components::TransformComponent>();
     if (!reference || !transform) {
         undo_.pop_back();
-        if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene) undoHistory_.pop_back();
+        if (!undoHistory_.empty() && undoHistory_.back() == EditHistoryKind::Scene)
+            undoHistory_.pop_back();
         object.destroy();
         lastStatus_ = "Drop failed: could not create the asset reference object";
         push_console(lastStatus_);
@@ -4316,14 +4431,14 @@ bool EditorLayer::drop_asset_to_viewport(std::string path, math::Vec2 point) {
     layout_.selectedObject = object.id();
     document_changed();
     lastStatus_ = "Created asset reference " + std::string(object.name()) + " (" +
-        std::string(AssetPreviewCatalog::kind_name(kind)) +
-        (assetId == 0 ? std::string{} : ", id=" + std::to_string(assetId)) + ")";
+                  std::string(AssetPreviewCatalog::kind_name(kind)) +
+                  (assetId == 0 ? std::string{} : ", id=" + std::to_string(assetId)) + ")";
     push_console(lastStatus_);
     return true;
 }
 
-bool EditorLayer::create_asset_reference_from_window_drop(World& world, std::string nativePath,
-                                                           WindowClientPx clientPoint) {
+bool EditorLayer::create_asset_reference_from_window_drop(World &world, std::string nativePath,
+                                                          WindowClientPx clientPoint) {
     activeWorld_ = &world;
     const auto native = std::filesystem::u8path(nativePath);
     const auto relative = fileSystem_.project_relative_existing(native);
@@ -4345,7 +4460,8 @@ bool EditorLayer::create_asset_reference_from_window_drop(World& world, std::str
 
 void EditorLayer::consume_file_scan() {
     if (!fileScanFuture_.valid() ||
-        fileScanFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        fileScanFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     auto result = fileScanFuture_.get();
     if (result.generation != fileScanGeneration_) {
         assetsDirty_ = true;
@@ -4358,12 +4474,14 @@ void EditorLayer::consume_file_scan() {
         assetsDirty_ = false;
         // Preserve the last complete visible index when it describes this
         // directory. A first bounded scan may still display its partial list.
-        if (fileScanBaselineReady_ && result.scope == fileScanBaselineScope_) return;
+        if (fileScanBaselineReady_ && result.scope == fileScanBaselineScope_)
+            return;
     }
     projectFiles_ = std::move(result.entries);
     assetIndex_ = std::move(result.index);
     if (!result.changes.empty() || !result.complete || !fileScanBaselineReady_ ||
-        result.scope != fileScanBaselineScope_) ++projectFilesRevision_;
+        result.scope != fileScanBaselineScope_)
+        ++projectFilesRevision_;
     if (result.complete && (!fileScanBaselineReady_ || result.scope != fileScanBaselineScope_)) {
         fileScanBaselineReady_ = true;
         fileScanBaselineScope_ = result.scope;
@@ -4372,22 +4490,24 @@ void EditorLayer::consume_file_scan() {
         collect_external_file_changes(result.changes);
     }
     assetEntries_.clear();
-    for (const auto& entry : projectFiles_) {
-        if (assetEntries_.size() >= 256) break;
+    for (const auto &entry : projectFiles_) {
+        if (assetEntries_.size() >= 256)
+            break;
         assetEntries_.push_back(entry.relativePath.generic_string() + (entry.directory ? "/" : ""));
     }
     assetsDirty_ = false;
     request_asset_preview();
 
     bool styleChanged = false;
-    for (const auto& change : result.changes) {
-        if (change.relativePath == std::filesystem::path(layout_.styleFile)) styleChanged = true;
+    for (const auto &change : result.changes) {
+        if (change.relativePath == std::filesystem::path(layout_.styleFile))
+            styleChanged = true;
     }
     if (styleChanged && load_style_file()) {
         sync_style_to_layout();
-        if (themeRegistry_.find(layout_.theme)) themeRegistry_.switch_theme(layout_.theme);
+        if (themeRegistry_.find(layout_.theme))
+            themeRegistry_.switch_theme(layout_.theme);
 #if defined(SHINKOU_WITH_IMGUI)
-        apply_theme();
 #endif
         push_console("UI style hot reloaded");
     }
@@ -4399,20 +4519,25 @@ void EditorLayer::refresh_ide_tools() {
 }
 
 void EditorLayer::refresh_project_integration() {
-    projectDiscovery_ = EditorProjectIntegration::discover(buildSystem_.project_root(), &buildProfile_);
+    projectDiscovery_ =
+        EditorProjectIntegration::discover(buildSystem_.project_root(), &buildProfile_);
     if (!projectDiscovery_.valid) {
         projectIntegrationStatus_ = "Project discovery failed: " + projectDiscovery_.error;
         clangdConfigStatus_ = "Clangd config unavailable";
         buildUiDirty_ = true;
         return;
     }
-    projectIntegrationStatus_ = "Discovered " + std::to_string(projectDiscovery_.files.size()) + " project files";
-    if (!projectDiscovery_.error.empty()) projectIntegrationStatus_ += " (bounded scan)";
+    projectIntegrationStatus_ =
+        "Discovered " + std::to_string(projectDiscovery_.files.size()) + " project files";
+    if (!projectDiscovery_.error.empty())
+        projectIntegrationStatus_ += " (bounded scan)";
     if (!projectDiscovery_.recommendedProjectFile.empty()) {
-        projectIntegrationStatus_ += "; suggested " + projectDiscovery_.recommendedProjectFile.generic_string();
+        projectIntegrationStatus_ +=
+            "; suggested " + projectDiscovery_.recommendedProjectFile.generic_string();
     }
     if (!projectDiscovery_.compileCommandsFile.empty()) {
-        clangdConfigStatus_ = "compile_commands ready: " + projectDiscovery_.compileCommandsFile.generic_string();
+        clangdConfigStatus_ =
+            "compile_commands ready: " + projectDiscovery_.compileCommandsFile.generic_string();
     } else {
         clangdConfigStatus_ = "No compile_commands.json discovered";
     }
@@ -4420,8 +4545,8 @@ void EditorLayer::refresh_project_integration() {
 }
 
 bool EditorLayer::associate_project_file(std::string_view target) {
-    const auto selected = target.empty() ? projectDiscovery_.recommendedProjectFile :
-        std::filesystem::path(std::string(target));
+    const auto selected = target.empty() ? projectDiscovery_.recommendedProjectFile
+                                         : std::filesystem::path(std::string(target));
     if (selected.empty()) {
         projectIntegrationStatus_ = "Project association unavailable: no project file discovered";
         lastStatus_ = projectIntegrationStatus_;
@@ -4429,11 +4554,12 @@ bool EditorLayer::associate_project_file(std::string_view target) {
         buildUiDirty_ = true;
         return false;
     }
-    const auto found = std::find_if(projectDiscovery_.files.begin(), projectDiscovery_.files.end(),
-                                    [&](const auto& file) {
-        return file.relativePath.lexically_normal() == selected.lexically_normal();
-    });
-    if (found == projectDiscovery_.files.end() || found->kind == EditorProjectFileKind::CompileCommands ||
+    const auto found = std::find_if(
+        projectDiscovery_.files.begin(), projectDiscovery_.files.end(), [&](const auto &file) {
+            return file.relativePath.lexically_normal() == selected.lexically_normal();
+        });
+    if (found == projectDiscovery_.files.end() ||
+        found->kind == EditorProjectFileKind::CompileCommands ||
         found->kind == EditorProjectFileKind::ClangdConfig) {
         projectIntegrationStatus_ = "Project association rejected: file is not a supported project";
         lastStatus_ = projectIntegrationStatus_;
@@ -4442,10 +4568,13 @@ bool EditorLayer::associate_project_file(std::string_view target) {
         return false;
     }
     buildProfile_.projectFile = found->relativePath;
-    const auto current = std::find_if(buildProfiles_.begin(), buildProfiles_.end(),
-                                      [&](const auto& profile) { return profile.id == selectedBuildProfileId_; });
-    if (current != buildProfiles_.end()) *current = buildProfile_;
-    projectIntegrationStatus_ = "Associated " + found->relativePath.generic_string() + " (unsaved profile)";
+    const auto current =
+        std::find_if(buildProfiles_.begin(), buildProfiles_.end(),
+                     [&](const auto &profile) { return profile.id == selectedBuildProfileId_; });
+    if (current != buildProfiles_.end())
+        *current = buildProfile_;
+    projectIntegrationStatus_ =
+        "Associated " + found->relativePath.generic_string() + " (unsaved profile)";
     lastStatus_ = "Associated project file: " + found->relativePath.generic_string();
     push_console(lastStatus_);
     buildUiDirty_ = true;
@@ -4453,7 +4582,8 @@ bool EditorLayer::associate_project_file(std::string_view target) {
 }
 
 bool EditorLayer::generate_clangd_config() {
-    const auto plan = EditorProjectIntegration::plan_clangd_config(buildSystem_.project_root(), &buildProfile_);
+    const auto plan =
+        EditorProjectIntegration::plan_clangd_config(buildSystem_.project_root(), &buildProfile_);
     if (!plan.valid) {
         clangdConfigStatus_ = "Generate failed: " + plan.error;
         lastStatus_ = clangdConfigStatus_;
@@ -4479,11 +4609,14 @@ bool EditorLayer::generate_clangd_config() {
 }
 
 bool EditorLayer::save_build_profile() {
-    if (buildProfiles_.empty()) buildProfiles_.push_back(buildProfile_);
-    auto current = std::find_if(buildProfiles_.begin(), buildProfiles_.end(),
-                                [&](const auto& profile) { return profile.id == selectedBuildProfileId_; });
+    if (buildProfiles_.empty())
+        buildProfiles_.push_back(buildProfile_);
+    auto current =
+        std::find_if(buildProfiles_.begin(), buildProfiles_.end(),
+                     [&](const auto &profile) { return profile.id == selectedBuildProfileId_; });
     if (current == buildProfiles_.end()) {
-        buildProfile_.id = selectedBuildProfileId_.empty() ? buildProfile_.id : selectedBuildProfileId_;
+        buildProfile_.id =
+            selectedBuildProfileId_.empty() ? buildProfile_.id : selectedBuildProfileId_;
         buildProfiles_.push_back(buildProfile_);
     } else {
         *current = buildProfile_;
@@ -4540,8 +4673,10 @@ bool EditorLayer::load_build_profile() {
     if (setParsed.valid) {
         buildProfiles_ = setParsed.set.profiles;
         selectedBuildProfileId_ = setParsed.set.selectedId;
-        const auto selected = std::find_if(buildProfiles_.begin(), buildProfiles_.end(),
-                                           [&](const auto& profile) { return profile.id == selectedBuildProfileId_; });
+        const auto selected =
+            std::find_if(buildProfiles_.begin(), buildProfiles_.end(), [&](const auto &profile) {
+                return profile.id == selectedBuildProfileId_;
+            });
         if (selected == buildProfiles_.end()) {
             buildProfileStatus_ = "Load failed: selected profile is missing";
             lastStatus_ = "Build profile load failed: selected profile is missing";
@@ -4550,7 +4685,8 @@ bool EditorLayer::load_build_profile() {
             return false;
         }
         buildProfile_ = *selected;
-        buildProfileStatus_ = "Loaded .shinkou/build-profile.json (" + std::to_string(buildProfiles_.size()) + " profiles)";
+        buildProfileStatus_ = "Loaded .shinkou/build-profile.json (" +
+                              std::to_string(buildProfiles_.size()) + " profiles)";
         push_console(buildProfileStatus_);
         buildUiDirty_ = true;
         return true;
@@ -4575,8 +4711,9 @@ bool EditorLayer::load_build_profile() {
 
 bool EditorLayer::select_build_profile(std::string_view id) {
     const auto selected = std::find_if(buildProfiles_.begin(), buildProfiles_.end(),
-                                       [id](const auto& profile) { return profile.id == id; });
-    if (selected == buildProfiles_.end()) return false;
+                                       [id](const auto &profile) { return profile.id == id; });
+    if (selected == buildProfiles_.end())
+        return false;
     if (build_running()) {
         buildProfileStatus_ = "Cannot switch profile while a build is running";
         lastStatus_ = buildProfileStatus_;
@@ -4595,42 +4732,62 @@ bool EditorLayer::select_build_profile(std::string_view id) {
 }
 
 bool EditorLayer::edit_build_profile_field(std::string_view id, std::string_view value) {
-    if (id.rfind("build-profile.", 0) != 0 || value.size() > 16u * 1024u || value.find('\0') != std::string_view::npos)
+    if (id.rfind("build-profile.", 0) != 0 || value.size() > 16u * 1024u ||
+        value.find('\0') != std::string_view::npos)
         return false;
     EditorBuildProfile candidate = buildProfile_;
     const auto text = std::string(value);
-    const auto relative_path = [&](std::string_view field, std::filesystem::path& output, bool allowEmpty) {
-        if (id != field) return false;
-        if (text.empty()) { if (allowEmpty) output.clear(); else return false; }
-        else {
+    const auto relative_path = [&](std::string_view field, std::filesystem::path &output,
+                                   bool allowEmpty) {
+        if (id != field)
+            return false;
+        if (text.empty()) {
+            if (allowEmpty)
+                output.clear();
+            else
+                return false;
+        } else {
             const std::filesystem::path path(text);
-            if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) return false;
+            if (path.is_absolute() || path.has_root_name() || path.has_root_directory())
+                return false;
             const auto normalized = path.lexically_normal();
             const auto generic = normalized.generic_string();
-            if (normalized.empty() || generic == ".." || generic.rfind("../", 0) == 0) return false;
+            if (normalized.empty() || generic == ".." || generic.rfind("../", 0) == 0)
+                return false;
             output = normalized;
         }
         return true;
     };
     bool recognized = true;
-    if (id == "build-profile.name") candidate.name = text;
-    else if (relative_path("build-profile.sourceDirectory", candidate.sourceDirectory, false)) { }
-    else if (relative_path("build-profile.buildDirectory", candidate.buildDirectory, false)) { }
-    else if (relative_path("build-profile.projectFile", candidate.projectFile, true)) { }
-    else if (id == "build-profile.generator") candidate.generator = text;
-    else if (id == "build-profile.configuration") candidate.configuration = text;
-    else if (id == "build-profile.target") candidate.target = text;
-    else recognized = false;
-    if (!recognized) return false;
+    if (id == "build-profile.name")
+        candidate.name = text;
+    else if (relative_path("build-profile.sourceDirectory", candidate.sourceDirectory, false)) {
+    } else if (relative_path("build-profile.buildDirectory", candidate.buildDirectory, false)) {
+    } else if (relative_path("build-profile.projectFile", candidate.projectFile, true)) {
+    } else if (id == "build-profile.generator")
+        candidate.generator = text;
+    else if (id == "build-profile.configuration")
+        candidate.configuration = text;
+    else if (id == "build-profile.target")
+        candidate.target = text;
+    else
+        recognized = false;
+    if (!recognized)
+        return false;
     std::string validation;
     std::string ignored;
-    if (!EditorBuildProfileStore::serialize(candidate, ignored, &validation)) return false;
+    if (!EditorBuildProfileStore::serialize(candidate, ignored, &validation))
+        return false;
     buildProfile_ = std::move(candidate);
-    if (buildProfiles_.empty()) buildProfiles_.push_back(buildProfile_);
+    if (buildProfiles_.empty())
+        buildProfiles_.push_back(buildProfile_);
     else {
-        const auto current = std::find_if(buildProfiles_.begin(), buildProfiles_.end(),
-                                          [&](const auto& profile) { return profile.id == selectedBuildProfileId_; });
-        if (current != buildProfiles_.end()) *current = buildProfile_;
+        const auto current =
+            std::find_if(buildProfiles_.begin(), buildProfiles_.end(), [&](const auto &profile) {
+                return profile.id == selectedBuildProfileId_;
+            });
+        if (current != buildProfiles_.end())
+            *current = buildProfile_;
     }
     buildProfileStatus_ = "Unsaved profile changes";
     lastStatus_ = "Build profile field updated";
@@ -4642,13 +4799,18 @@ bool EditorLayer::edit_build_profile_field(std::string_view id, std::string_view
 bool EditorLayer::open_project_in_ide(std::string_view target, std::string_view selectedFile,
                                       std::size_t line, std::size_t column) {
     EditorIdeKind kind = EditorIdeKind::Unknown;
-    if (target == "visual-studio") kind = EditorIdeKind::VisualStudio;
-    else if (target == "rider") kind = EditorIdeKind::Rider;
-    else if (target == "vscode") kind = EditorIdeKind::VisualStudioCode;
-    else if (target == "clangd") kind = EditorIdeKind::Clangd;
+    if (target == "visual-studio")
+        kind = EditorIdeKind::VisualStudio;
+    else if (target == "rider")
+        kind = EditorIdeKind::Rider;
+    else if (target == "vscode")
+        kind = EditorIdeKind::VisualStudioCode;
+    else if (target == "clangd")
+        kind = EditorIdeKind::Clangd;
     const auto plan = EditorToolIntegration::plan_ide_launch(
         buildSystem_.project_root(), buildProfile_, kind,
-        selectedFile.empty() ? std::string_view(selectedAsset_) : selectedFile, line, column);
+        selectedFile.empty() ? std::string_view(assetBrowser_.selection) : selectedFile, line,
+        column);
     if (!plan.valid) {
         ideStatus_ = "Unavailable: " + plan.error;
         lastStatus_ = "IDE launch unavailable: " + plan.error;
@@ -4658,8 +4820,10 @@ bool EditorLayer::open_project_in_ide(std::string_view target, std::string_view 
     }
     const auto launched = EditorToolIntegration::launch(plan);
     if (launched.state != EditorExternalLaunchState::Launched) {
-        ideStatus_ = launched.error.empty() ? "IDE launch failed" : "Launch failed: " + launched.error;
-        lastStatus_ = "IDE launch failed" + (launched.error.empty() ? std::string{} : ": " + launched.error);
+        ideStatus_ =
+            launched.error.empty() ? "IDE launch failed" : "Launch failed: " + launched.error;
+        lastStatus_ =
+            "IDE launch failed" + (launched.error.empty() ? std::string{} : ": " + launched.error);
         push_console(lastStatus_);
         buildUiDirty_ = true;
         return false;
@@ -4669,7 +4833,8 @@ bool EditorLayer::open_project_in_ide(std::string_view target, std::string_view 
     ideProcessExitCode_ = 0;
     ideProcessName_ = std::string(EditorToolIntegration::ide_name(kind));
     ideProcessPollTime_ = {};
-    ideStatus_ = "Launched " + ideProcessName_ + " (PID " + std::to_string(ideProcessId_) + "; tracking)";
+    ideStatus_ =
+        "Launched " + ideProcessName_ + " (PID " + std::to_string(ideProcessId_) + "; tracking)";
     lastStatus_ = ideStatus_;
     push_console(lastStatus_);
     buildUiDirty_ = true;
@@ -4680,32 +4845,41 @@ bool EditorLayer::select_build_diagnostic(std::string_view indexText) {
     std::size_t index = 0;
     try {
         index = static_cast<std::size_t>(std::stoull(std::string(indexText)));
-    } catch (...) { return false; }
-    if (index >= lastBuildResult_.diagnostics.size()) return false;
+    } catch (...) {
+        return false;
+    }
+    if (index >= lastBuildResult_.diagnostics.size())
+        return false;
     selectedDiagnosticIndex_ = index;
-    const auto& diagnostic = lastBuildResult_.diagnostics[index];
-    if (!diagnostic.file.empty()) set_selected_asset(diagnostic.file.generic_string());
+    const auto &diagnostic = lastBuildResult_.diagnostics[index];
+    if (!diagnostic.file.empty())
+        set_selected_asset(diagnostic.file.generic_string());
     lastStatus_ = "Selected diagnostic " + std::to_string(index + 1);
     buildUiDirty_ = true;
     return true;
 }
 
 bool EditorLayer::set_diagnostic_filter(std::string_view filter) {
-    if (filter != "all" && filter != "errors" && filter != "warnings" && filter != "notes") return false;
-    if (diagnosticFilter_ == filter) return true;
+    if (filter != "all" && filter != "errors" && filter != "warnings" && filter != "notes")
+        return false;
+    if (diagnosticFilter_ == filter)
+        return true;
     diagnosticFilter_ = std::string(filter);
     buildUiDirty_ = true;
     return true;
 }
 
 void EditorLayer::poll_ide_process() {
-    if (ideProcessId_ == 0 || ideProcessState_ != EditorExternalProcessState::Running) return;
+    if (ideProcessId_ == 0 || ideProcessState_ != EditorExternalProcessState::Running)
+        return;
     const auto now = std::chrono::steady_clock::now();
     if (ideProcessPollTime_ != std::chrono::steady_clock::time_point{} &&
-        now - ideProcessPollTime_ < std::chrono::milliseconds(250)) return;
+        now - ideProcessPollTime_ < std::chrono::milliseconds(250))
+        return;
     ideProcessPollTime_ = now;
     const auto status = EditorToolIntegration::query_process(ideProcessId_);
-    if (status.state == ideProcessState_ && status.exitCode == ideProcessExitCode_) return;
+    if (status.state == ideProcessState_ && status.exitCode == ideProcessExitCode_)
+        return;
     ideProcessState_ = status.state;
     ideProcessExitCode_ = status.exitCode;
     switch (status.state) {
@@ -4713,7 +4887,8 @@ void EditorLayer::poll_ide_process() {
         ideStatus_ = "Running " + ideProcessName_ + " (PID " + std::to_string(ideProcessId_) + ")";
         break;
     case EditorExternalProcessState::Exited:
-        ideStatus_ = "Exited " + ideProcessName_ + " (code " + std::to_string(status.exitCode) + ")";
+        ideStatus_ =
+            "Exited " + ideProcessName_ + " (code " + std::to_string(status.exitCode) + ")";
         break;
     case EditorExternalProcessState::NotFound:
         ideStatus_ = "IDE process ended before it could be queried";
@@ -4732,25 +4907,34 @@ void EditorLayer::poll_ide_process() {
 
 bool EditorLayer::open_diagnostic_in_ide(std::string_view target) {
     const auto second = target.rfind(':');
-    if (second == std::string_view::npos || second == 0) return false;
+    if (second == std::string_view::npos || second == 0)
+        return false;
     const auto first = target.rfind(':', second - 1);
-    if (first == std::string_view::npos || first == 0 || second + 1 >= target.size()) return false;
+    if (first == std::string_view::npos || first == 0 || second + 1 >= target.size())
+        return false;
     std::size_t line = 0;
     std::size_t column = 0;
     try {
-        line = static_cast<std::size_t>(std::stoull(std::string(target.substr(first + 1, second - first - 1))));
+        line = static_cast<std::size_t>(
+            std::stoull(std::string(target.substr(first + 1, second - first - 1))));
         column = static_cast<std::size_t>(std::stoull(std::string(target.substr(second + 1))));
-    } catch (...) { return false; }
+    } catch (...) {
+        return false;
+    }
     const auto file = target.substr(0, first);
     EditorIdeKind preferred = EditorIdeKind::VisualStudioCode;
-    if (std::find_if(ideTools_.begin(), ideTools_.end(), [](const auto& ide) {
+    if (std::find_if(ideTools_.begin(), ideTools_.end(), [](const auto &ide) {
             return ide.kind == EditorIdeKind::VisualStudio && ide.available;
-        }) != ideTools_.end()) preferred = EditorIdeKind::VisualStudio;
-    else if (std::find_if(ideTools_.begin(), ideTools_.end(), [](const auto& ide) {
-            return ide.kind == EditorIdeKind::Rider && ide.available;
-        }) != ideTools_.end()) preferred = EditorIdeKind::Rider;
-    return open_project_in_ide(EditorToolIntegration::ide_name(preferred) == "Visual Studio" ? "visual-studio" :
-                               EditorToolIntegration::ide_name(preferred) == "Rider" ? "rider" : "vscode",
+        }) != ideTools_.end())
+        preferred = EditorIdeKind::VisualStudio;
+    else if (std::find_if(ideTools_.begin(), ideTools_.end(), [](const auto &ide) {
+                 return ide.kind == EditorIdeKind::Rider && ide.available;
+             }) != ideTools_.end())
+        preferred = EditorIdeKind::Rider;
+    return open_project_in_ide(EditorToolIntegration::ide_name(preferred) == "Visual Studio"
+                                   ? "visual-studio"
+                               : EditorToolIntegration::ide_name(preferred) == "Rider" ? "rider"
+                                                                                       : "vscode",
                                file, line, column);
 }
 
@@ -4768,36 +4952,47 @@ void EditorLayer::sync_build_ui_state() {
     state.projectStatus = projectIntegrationStatus_;
     state.recommendedProjectFile = projectDiscovery_.recommendedProjectFile.generic_string();
     state.clangdStatus = clangdConfigStatus_;
-    for (const auto& profile : buildProfiles_) state.profileIds.push_back(profile.id);
+    for (const auto &profile : buildProfiles_)
+        state.profileIds.push_back(profile.id);
     state.profileFields = {
         {"build-profile.name", "Name", buildProfile_.name, true, false},
-        {"build-profile.sourceDirectory", "Source", buildProfile_.sourceDirectory.generic_string(), true, false},
-        {"build-profile.buildDirectory", "Build Dir", buildProfile_.buildDirectory.generic_string(), true, false},
-        {"build-profile.projectFile", "Project", buildProfile_.projectFile.generic_string(), true, false},
+        {"build-profile.sourceDirectory", "Source", buildProfile_.sourceDirectory.generic_string(),
+         true, false},
+        {"build-profile.buildDirectory", "Build Dir", buildProfile_.buildDirectory.generic_string(),
+         true, false},
+        {"build-profile.projectFile", "Project", buildProfile_.projectFile.generic_string(), true,
+         false},
         {"build-profile.generator", "Generator", buildProfile_.generator, true, false},
         {"build-profile.configuration", "Config", buildProfile_.configuration, true, false},
         {"build-profile.target", "Target", buildProfile_.target, true, false},
     };
-    for (const auto& tool : buildSystem_.toolchains()) {
+    for (const auto &tool : buildSystem_.toolchains()) {
         state.tools.push_back({tool.name, tool.executable.generic_string(), tool.available});
     }
-    for (const auto& ide : ideTools_) {
+    for (const auto &ide : ideTools_) {
         state.ides.push_back({ide.name, ide.executable.generic_string(), ide.available});
     }
-    for (const auto& projectFile : projectDiscovery_.files) {
-        state.projectFiles.push_back({std::string(EditorProjectIntegration::file_kind_name(projectFile.kind)),
-                                      projectFile.relativePath.generic_string(), projectFile.recommended});
+    for (const auto &projectFile : projectDiscovery_.files) {
+        state.projectFiles.push_back(
+            {std::string(EditorProjectIntegration::file_kind_name(projectFile.kind)),
+             projectFile.relativePath.generic_string(), projectFile.recommended});
     }
-    const auto append_diagnostic = [&state](const EditorBuildDiagnostic& diagnostic) {
+    const auto append_diagnostic = [&state](const EditorBuildDiagnostic &diagnostic) {
         ++state.diagnosticTotalCount;
-        const char* severity = diagnostic.severity == EditorDiagnosticSeverity::Error ? "error" :
-            diagnostic.severity == EditorDiagnosticSeverity::Warning ? "warning" : "note";
-        if (diagnostic.severity == EditorDiagnosticSeverity::Error) ++state.diagnosticErrorCount;
-        else if (diagnostic.severity == EditorDiagnosticSeverity::Warning) ++state.diagnosticWarningCount;
-        else ++state.diagnosticNoteCount;
+        const char *severity = diagnostic.severity == EditorDiagnosticSeverity::Error ? "error"
+                               : diagnostic.severity == EditorDiagnosticSeverity::Warning
+                                   ? "warning"
+                                   : "note";
+        if (diagnostic.severity == EditorDiagnosticSeverity::Error)
+            ++state.diagnosticErrorCount;
+        else if (diagnostic.severity == EditorDiagnosticSeverity::Warning)
+            ++state.diagnosticWarningCount;
+        else
+            ++state.diagnosticNoteCount;
         if (state.diagnostics.size() < 256) {
-            state.diagnostics.push_back({severity, diagnostic.file.generic_string(), diagnostic.line,
-                                         diagnostic.column, diagnostic.code, diagnostic.message});
+            state.diagnostics.push_back({severity, diagnostic.file.generic_string(),
+                                         diagnostic.line, diagnostic.column, diagnostic.code,
+                                         diagnostic.message});
         }
     };
     if (state.running && liveBuildOutput_) {
@@ -4806,31 +5001,40 @@ void EditorLayer::sync_build_ui_state() {
         state.diagnosticErrorCount = liveBuildOutput_->diagnosticErrorCount;
         state.diagnosticWarningCount = liveBuildOutput_->diagnosticWarningCount;
         state.diagnosticNoteCount = liveBuildOutput_->diagnosticNoteCount;
-        for (const auto& diagnostic : liveBuildOutput_->diagnostics) {
-            if (state.diagnostics.size() >= 256) break;
-            const char* severity = diagnostic.severity == EditorDiagnosticSeverity::Error ? "error" :
-                diagnostic.severity == EditorDiagnosticSeverity::Warning ? "warning" : "note";
-            state.diagnostics.push_back({severity, diagnostic.file.generic_string(), diagnostic.line,
-                                         diagnostic.column, diagnostic.code, diagnostic.message});
+        for (const auto &diagnostic : liveBuildOutput_->diagnostics) {
+            if (state.diagnostics.size() >= 256)
+                break;
+            const char *severity = diagnostic.severity == EditorDiagnosticSeverity::Error ? "error"
+                                   : diagnostic.severity == EditorDiagnosticSeverity::Warning
+                                       ? "warning"
+                                       : "note";
+            state.diagnostics.push_back({severity, diagnostic.file.generic_string(),
+                                         diagnostic.line, diagnostic.column, diagnostic.code,
+                                         diagnostic.message});
         }
     } else {
-        for (const auto& diagnostic : lastBuildResult_.diagnostics) append_diagnostic(diagnostic);
+        for (const auto &diagnostic : lastBuildResult_.diagnostics)
+            append_diagnostic(diagnostic);
     }
     state.selectedDiagnostic = selectedDiagnosticIndex_ < lastBuildResult_.diagnostics.size()
-        ? selectedDiagnosticIndex_ : static_cast<std::size_t>(-1);
+                                   ? selectedDiagnosticIndex_
+                                   : static_cast<std::size_t>(-1);
 
     const auto append_output = [&state](std::string_view value, std::string_view prefix) {
         std::size_t cursor = 0;
         while (cursor <= value.size() && state.outputLines.size() < 32) {
             const auto end = value.find('\n', cursor);
-            auto line = value.substr(cursor, end == std::string_view::npos ? value.size() - cursor : end - cursor);
-            if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            auto line = value.substr(cursor, end == std::string_view::npos ? value.size() - cursor
+                                                                           : end - cursor);
+            if (!line.empty() && line.back() == '\r')
+                line.remove_suffix(1);
             if (!line.empty()) {
                 std::string text(prefix);
                 text.append(line.substr(0, 240));
                 state.outputLines.push_back(std::move(text));
             }
-            if (end == std::string_view::npos) break;
+            if (end == std::string_view::npos)
+                break;
             cursor = end + 1;
         }
     };
@@ -4838,10 +5042,12 @@ void EditorLayer::sync_build_ui_state() {
         std::lock_guard lock(liveBuildOutput_->mutex);
         state.outputLines = liveBuildOutput_->lines;
         const auto append_pending = [&state](std::string_view value, std::string_view prefix) {
-            if (value.empty()) return;
+            if (value.empty())
+                return;
             std::string line(prefix);
             line.append(value.substr(0, 240));
-            if (value.size() > 240) line += "...";
+            if (value.size() > 240)
+                line += "...";
             state.outputLines.push_back(std::move(line));
         };
         append_pending(liveBuildOutput_->standardOutputPending, "out  ");
@@ -4859,13 +5065,15 @@ void EditorLayer::sync_build_ui_state() {
 }
 
 bool EditorLayer::live_build_output_changed() const noexcept {
-    if (!build_running() || !liveBuildOutput_) return false;
+    if (!build_running() || !liveBuildOutput_)
+        return false;
     std::lock_guard lock(liveBuildOutput_->mutex);
     return liveBuildOutput_->revision != liveBuildUiRevision_;
 }
 
 bool EditorLayer::import_compile_commands(std::string_view path) {
-    const auto target = path.empty() ? std::filesystem::path{"compile_commands.json"} : std::filesystem::path(path);
+    const auto target =
+        path.empty() ? std::filesystem::path{"compile_commands.json"} : std::filesystem::path(path);
     std::string json;
     std::string error;
     if (!fileSystem_.read_text(target, json, &error)) {
@@ -4908,7 +5116,8 @@ bool EditorLayer::export_compile_commands(std::string_view path) {
         buildUiDirty_ = true;
         return false;
     }
-    const auto target = path.empty() ? std::filesystem::path{"compile_commands.export.json"} : std::filesystem::path(path);
+    const auto target = path.empty() ? std::filesystem::path{"compile_commands.export.json"}
+                                     : std::filesystem::path(path);
     expect_editor_file_change(target.generic_string());
     if (!fileSystem_.write_text_atomic(target, json, &error)) {
         compileCommandsStatus_ = "Export failed: " + error;
@@ -4926,10 +5135,11 @@ bool EditorLayer::export_compile_commands(std::string_view path) {
 
 void EditorLayer::poll_build() {
     if (!buildFuture_.valid() ||
-        buildFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+        buildFuture_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        return;
     try {
         lastBuildResult_ = buildFuture_.get();
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
         lastBuildResult_ = {};
         lastBuildResult_.state = EditorBuildProcessState::Failed;
         lastBuildResult_.error = std::string("Build worker failed: ") + error.what();
@@ -4954,23 +5164,31 @@ void EditorLayer::poll_build() {
     case EditorBuildProcessState::TimedOut:
         buildStatus_ = "Timed out";
         lastStatus_ = "Build timed out";
-        push_console(lastStatus_ + (lastBuildResult_.error.empty() ? std::string{} : ": " + lastBuildResult_.error));
+        push_console(lastStatus_ + (lastBuildResult_.error.empty()
+                                        ? std::string{}
+                                        : ": " + lastBuildResult_.error));
         break;
     default:
-        buildStatus_ = lastBuildResult_.error.empty() ? "Failed" : "Failed: " + lastBuildResult_.error;
-        lastStatus_ = lastBuildResult_.error.empty() ? "Build failed" : "Build failed: " + lastBuildResult_.error;
+        buildStatus_ =
+            lastBuildResult_.error.empty() ? "Failed" : "Failed: " + lastBuildResult_.error;
+        lastStatus_ = lastBuildResult_.error.empty() ? "Build failed"
+                                                     : "Build failed: " + lastBuildResult_.error;
         push_console(lastStatus_);
         break;
     }
-    for (const auto& diagnostic : lastBuildResult_.diagnostics) {
-        const char* severity = diagnostic.severity == EditorDiagnosticSeverity::Error ? "error" :
-            diagnostic.severity == EditorDiagnosticSeverity::Warning ? "warning" : "note";
+    for (const auto &diagnostic : lastBuildResult_.diagnostics) {
+        const char *severity = diagnostic.severity == EditorDiagnosticSeverity::Error ? "error"
+                               : diagnostic.severity == EditorDiagnosticSeverity::Warning
+                                   ? "warning"
+                                   : "note";
         std::string entry = std::string(severity) + ": " + diagnostic.file.generic_string();
         if (diagnostic.line != 0) {
             entry += ":" + std::to_string(diagnostic.line);
-            if (diagnostic.column != 0) entry += ":" + std::to_string(diagnostic.column);
+            if (diagnostic.column != 0)
+                entry += ":" + std::to_string(diagnostic.column);
         }
-        if (!diagnostic.code.empty()) entry += " [" + diagnostic.code + "]";
+        if (!diagnostic.code.empty())
+            entry += " [" + diagnostic.code + "]";
         entry += " " + diagnostic.message;
         push_console(std::move(entry));
     }
@@ -5005,26 +5223,34 @@ bool EditorLayer::start_build() {
     liveBuildOutput_ = liveOutput;
     liveBuildUiRevision_ = 0;
     const auto append_live_output = [liveOutput, root](EditorBuildOutputStream stream,
-                                                  std::string_view chunk, bool flush) {
+                                                       std::string_view chunk, bool flush) {
         std::lock_guard lock(liveOutput->mutex);
-        auto& pending = stream == EditorBuildOutputStream::StandardOutput
-            ? liveOutput->standardOutputPending : liveOutput->standardErrorPending;
+        auto &pending = stream == EditorBuildOutputStream::StandardOutput
+                            ? liveOutput->standardOutputPending
+                            : liveOutput->standardErrorPending;
         pending.append(chunk.data(), chunk.size());
-        if (!chunk.empty()) ++liveOutput->revision;
+        if (!chunk.empty())
+            ++liveOutput->revision;
         const auto prefix = stream == EditorBuildOutputStream::StandardOutput ? "out  " : "err  ";
         const auto publish = [&](std::string_view value) {
-            if (value.empty()) return;
+            if (value.empty())
+                return;
             const auto parsedDiagnostics = EditorBuildSystem::parse_diagnostics(value, root);
-            for (const auto& diagnostic : parsedDiagnostics) {
+            for (const auto &diagnostic : parsedDiagnostics) {
                 ++liveOutput->diagnosticTotalCount;
-                if (diagnostic.severity == EditorDiagnosticSeverity::Error) ++liveOutput->diagnosticErrorCount;
-                else if (diagnostic.severity == EditorDiagnosticSeverity::Warning) ++liveOutput->diagnosticWarningCount;
-                else ++liveOutput->diagnosticNoteCount;
-                if (liveOutput->diagnostics.size() < 256) liveOutput->diagnostics.push_back(diagnostic);
+                if (diagnostic.severity == EditorDiagnosticSeverity::Error)
+                    ++liveOutput->diagnosticErrorCount;
+                else if (diagnostic.severity == EditorDiagnosticSeverity::Warning)
+                    ++liveOutput->diagnosticWarningCount;
+                else
+                    ++liveOutput->diagnosticNoteCount;
+                if (liveOutput->diagnostics.size() < 256)
+                    liveOutput->diagnostics.push_back(diagnostic);
             }
             std::string line(prefix);
             line.append(value.substr(0, 240));
-            if (value.size() > 240) line += "...";
+            if (value.size() > 240)
+                line += "...";
             liveOutput->lines.push_back(std::move(line));
             if (liveOutput->lines.size() > 128)
                 liveOutput->lines.erase(liveOutput->lines.begin(), liveOutput->lines.begin() + 64);
@@ -5032,9 +5258,11 @@ bool EditorLayer::start_build() {
         };
         while (true) {
             const auto end = pending.find('\n');
-            if (end == std::string::npos) break;
+            if (end == std::string::npos)
+                break;
             std::string_view line(pending.data(), end);
-            if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            if (!line.empty() && line.back() == '\r')
+                line.remove_suffix(1);
             publish(line);
             pending.erase(0, end + 1);
         }
@@ -5043,44 +5271,49 @@ bool EditorLayer::start_build() {
             pending.clear();
         } else if (flush && !pending.empty()) {
             std::string_view line(pending);
-            if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            if (!line.empty() && line.back() == '\r')
+                line.remove_suffix(1);
             publish(line);
             pending.clear();
         }
     };
-    buildFuture_ = std::async(std::launch::async,
-        [commands = plan.commands, cancel, root, liveOutput, append_live_output]() mutable {
-            EditorBuildProcessResult combined;
-            combined.state = EditorBuildProcessState::Succeeded;
-            EditorBuildProcessOptions options;
-            options.diagnosticRoot = root;
-            options.outputCallback = [append_live_output](EditorBuildOutputStream stream, std::string_view chunk) {
-                append_live_output(stream, chunk, false);
-            };
-            for (const auto& command : commands) {
-                const auto result = EditorBuildProcess::run(command, options, *cancel);
-                if (!result.standardOutput.empty()) {
-                    if (!combined.standardOutput.empty()) combined.standardOutput.push_back('\n');
-                    combined.standardOutput += result.standardOutput;
-                }
-                if (!result.standardError.empty()) {
-                    if (!combined.standardError.empty()) combined.standardError.push_back('\n');
-                    combined.standardError += result.standardError;
-                }
-                combined.diagnostics.insert(combined.diagnostics.end(), result.diagnostics.begin(), result.diagnostics.end());
-                combined.exitCode = result.exitCode;
-                if (result.state != EditorBuildProcessState::Succeeded) {
-                    combined.state = result.state;
-                    combined.error = result.error;
-                    append_live_output(EditorBuildOutputStream::StandardOutput, {}, true);
-                    append_live_output(EditorBuildOutputStream::StandardError, {}, true);
-                    return combined;
-                }
+    buildFuture_ = std::async(std::launch::async, [commands = plan.commands, cancel, root,
+                                                   liveOutput, append_live_output]() mutable {
+        EditorBuildProcessResult combined;
+        combined.state = EditorBuildProcessState::Succeeded;
+        EditorBuildProcessOptions options;
+        options.diagnosticRoot = root;
+        options.outputCallback = [append_live_output](EditorBuildOutputStream stream,
+                                                      std::string_view chunk) {
+            append_live_output(stream, chunk, false);
+        };
+        for (const auto &command : commands) {
+            const auto result = EditorBuildProcess::run(command, options, *cancel);
+            if (!result.standardOutput.empty()) {
+                if (!combined.standardOutput.empty())
+                    combined.standardOutput.push_back('\n');
+                combined.standardOutput += result.standardOutput;
             }
-            append_live_output(EditorBuildOutputStream::StandardOutput, {}, true);
-            append_live_output(EditorBuildOutputStream::StandardError, {}, true);
-            return combined;
-        });
+            if (!result.standardError.empty()) {
+                if (!combined.standardError.empty())
+                    combined.standardError.push_back('\n');
+                combined.standardError += result.standardError;
+            }
+            combined.diagnostics.insert(combined.diagnostics.end(), result.diagnostics.begin(),
+                                        result.diagnostics.end());
+            combined.exitCode = result.exitCode;
+            if (result.state != EditorBuildProcessState::Succeeded) {
+                combined.state = result.state;
+                combined.error = result.error;
+                append_live_output(EditorBuildOutputStream::StandardOutput, {}, true);
+                append_live_output(EditorBuildOutputStream::StandardError, {}, true);
+                return combined;
+            }
+        }
+        append_live_output(EditorBuildOutputStream::StandardOutput, {}, true);
+        append_live_output(EditorBuildOutputStream::StandardError, {}, true);
+        return combined;
+    });
     lastBuildResult_ = {};
     buildStatus_ = "Running: " + profileName;
     lastStatus_ = "Build started: " + profileName;
@@ -5103,9 +5336,11 @@ void EditorLayer::cancel_build() {
     buildUiDirty_ = true;
 }
 
-void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, FrameIndex frame) {
-    if (!initialized_) return;
-    if (uiModel_.selected_object() != layout_.selectedObject) uiModel_.select_object(layout_.selectedObject);
+void EditorLayer::draw(render::Renderer &renderer, World &world, Seconds dt, FrameIndex frame) {
+    if (!initialized_)
+        return;
+    if (uiModel_.selected_object() != layout_.selectedObject)
+        uiModel_.select_object(layout_.selectedObject);
     uiModel_.set_audio_asset_choices(audioInspectorChoices_);
     uiModel_.set_audio_asset_status(assetManifestStatus_);
     ComponentId audioTransportComponent = 0;
@@ -5115,24 +5350,28 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     double audioTransportDuration = 0.0;
     bool audioTransportDurationKnown = false;
     std::shared_ptr<const EditorAudioPreviewSnapshot> audioTransportPreview;
-    if (auto* selected = world.find_object(layout_.selectedObject)) {
-        selected->each_component([&](Component& component) {
-            if (audioTransportComponent != 0) return;
-            if (auto* audioSource = dynamic_cast<components::AudioSourceComponent*>(&component)) {
+    if (auto *selected = world.find_object(layout_.selectedObject)) {
+        selected->each_component([&](Component &component) {
+            if (audioTransportComponent != 0)
+                return;
+            if (auto *audioSource = dynamic_cast<components::AudioSourceComponent *>(&component)) {
                 audioTransportComponent = component.id();
-                audioTransportState = audioSceneSystem_ && audioSystem_
-                    ? audioSceneSystem_->transport_state(selected->id(), *audioSystem_)
-                    : "Unavailable";
-                audioTransportCursorSupported = audioSceneSystem_ && audioSystem_ &&
+                audioTransportState =
+                    audioSceneSystem_ && audioSystem_
+                        ? audioSceneSystem_->transport_state(selected->id(), *audioSystem_)
+                        : "Unavailable";
+                audioTransportCursorSupported =
+                    audioSceneSystem_ && audioSystem_ &&
                     audioSceneSystem_->supports_cursor(selected->id(), *audioSystem_);
                 if (audioTransportCursorSupported)
-                    audioTransportCursor = audioSceneSystem_->cursor_seconds(selected->id(), *audioSystem_);
-                audioTransportDurationKnown = audioSceneSystem_ &&
-                    audioSceneSystem_->has_duration(selected->id());
+                    audioTransportCursor =
+                        audioSceneSystem_->cursor_seconds(selected->id(), *audioSystem_);
+                audioTransportDurationKnown =
+                    audioSceneSystem_ && audioSceneSystem_->has_duration(selected->id());
                 if (audioTransportDurationKnown)
                     audioTransportDuration = audioSceneSystem_->duration_seconds(selected->id());
                 if (!audioSource->clipPath.empty() && assetIndex_) {
-                    if (const auto* indexed = assetIndex_->find(audioSource->clipPath))
+                    if (const auto *indexed = assetIndex_->find(audioSource->clipPath))
                         request_audio_preview_for_path(audioSource->clipPath, *indexed);
                 }
                 if (audioPreviewSnapshot_ && audioPreviewSnapshot_->valid() &&
@@ -5146,8 +5385,13 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
                                         audioTransportCursorSupported, audioTransportDuration,
                                         audioTransportDurationKnown);
     uiModel_.set_audio_transport_preview(std::move(audioTransportPreview));
-    { ui::UiTimer timer(ui::UiStage::Model); uiModel_.sync(world); }
-    mediaPanel_.update(dt * (mediaPanel_.description().kind == ui::MediaKind::Video ? assetSettings_.videoRate : 1.0f));
+    {
+        ui::UiTimer timer(ui::UiStage::Model);
+        uiModel_.sync(world);
+    }
+    mediaPanel_.update(dt * (mediaPanel_.description().kind == ui::MediaKind::Video
+                                 ? assetSettings_.videoRate
+                                 : 1.0f));
     // Asset enumeration is asynchronous and on-demand. Never recursively
     // walk the project root from the render/input thread.
     poll_asset_manifest_scan();
@@ -5162,9 +5406,8 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     // that retained time into a decoded frame request, so decoding remains
     // asynchronous and never blocks paint or the input bridge.
     if (mediaPanel_.description().kind == ui::MediaKind::Video &&
-        mediaPanel_.playback().state == ui::MediaPlaybackState::Playing &&
-        videoPreviewSnapshot_ && videoPreviewSnapshot_->valid() &&
-        !videoFrameFuture_.valid()) {
+        mediaPanel_.playback().state == ui::MediaPlaybackState::Playing && videoPreviewSnapshot_ &&
+        videoPreviewSnapshot_->valid() && !videoFrameFuture_.valid()) {
         request_video_frame(mediaPanel_.playback().currentTime);
     }
     poll_model_preview();
@@ -5172,7 +5415,8 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
     sync_model_scene_assets(world);
     poll_model_texture_preview();
     if (modelPreviewSnapshot_ && modelPreviewSnapshot_->valid()) {
-        if (assetSettings_.modelAutoRotate) modelPreviewScene_.orbit({dt * 30.0f,0});
+        if (assetSettings_.modelAutoRotate)
+            modelPreviewScene_.orbit({dt * 30.0f, 0});
         modelPreviewScene_.advance_animation(dt);
         assetPreviewState_.modelPreviewScene = modelPreviewScene_.state();
     }
@@ -5194,25 +5438,28 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
         const auto sceneState = modelPreviewScene_.state();
         if (sceneState && sceneState->valid()) {
             const auto textureRole = assetPreviewState_.modelTextureRole == "Normal"
-                ? EditorModelPreviewTextureRole::Normal
-                : assetPreviewState_.modelTextureRole == "Metallic/Roughness"
-                    ? EditorModelPreviewTextureRole::MetallicRoughness
-                    : EditorModelPreviewTextureRole::BaseColor;
+                                         ? EditorModelPreviewTextureRole::Normal
+                                     : assetPreviewState_.modelTextureRole == "Metallic/Roughness"
+                                         ? EditorModelPreviewTextureRole::MetallicRoughness
+                                         : EditorModelPreviewTextureRole::BaseColor;
             const auto renderState = modelPreviewRenderer_.render(
                 renderer, *modelPreviewSnapshot_, *sceneState, modelMaterialSelection_,
-                assetPreviewState_.modelTextureSnapshot, textureRole, !imguiEnabled_,assetSettings_.modelWireframe);
+                assetPreviewState_.modelTextureSnapshot, textureRole, false,
+                assetSettings_.modelWireframe);
             assetPreviewState_.modelGpuPreviewReady = renderState.rendererReady;
             assetPreviewState_.modelGpuMaterialApplied = renderState.materialApplied;
             assetPreviewState_.modelGpuMaterialFactorsApplied = renderState.materialFactorsApplied;
             assetPreviewState_.modelGpuTextureRoleApplied = renderState.textureRoleApplied;
-            assetPreviewState_.modelGpuBaseColorTextureSampled = renderState.baseColorTextureSampled;
+            assetPreviewState_.modelGpuBaseColorTextureSampled =
+                renderState.baseColorTextureSampled;
             assetPreviewState_.modelGpuNormalTextureSampled = renderState.normalTextureSampled;
             assetPreviewState_.modelGpuMetallicRoughnessTextureSampled =
                 renderState.metallicRoughnessTextureSampled;
             assetPreviewState_.modelGpuTextureSampled = renderState.textureSampled;
             assetPreviewState_.modelGpuOffscreenTargetReady = renderState.offscreenTargetReady;
             assetPreviewState_.modelGpuDepthTargetReady = renderState.depthTargetReady;
-            assetPreviewState_.modelGpuOffscreenCompositeApplied = renderState.offscreenCompositeApplied;
+            assetPreviewState_.modelGpuOffscreenCompositeApplied =
+                renderState.offscreenCompositeApplied;
             assetPreviewState_.modelGpuPreviewStatus = renderState.status;
         } else {
             modelPreviewRenderer_.clear(renderer);
@@ -5227,7 +5474,8 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
             assetPreviewState_.modelGpuOffscreenTargetReady = false;
             assetPreviewState_.modelGpuDepthTargetReady = false;
             assetPreviewState_.modelGpuOffscreenCompositeApplied = false;
-            assetPreviewState_.modelGpuPreviewStatus = "GPU model preview waiting: model camera state is not ready";
+            assetPreviewState_.modelGpuPreviewStatus =
+                "GPU model preview waiting: model camera state is not ready";
         }
     } else {
         modelPreviewRenderer_.clear(renderer);
@@ -5242,135 +5490,137 @@ void EditorLayer::draw(render::Renderer& renderer, World& world, Seconds dt, Fra
         assetPreviewState_.modelGpuOffscreenTargetReady = false;
         assetPreviewState_.modelGpuDepthTargetReady = false;
         assetPreviewState_.modelGpuOffscreenCompositeApplied = false;
-        assetPreviewState_.modelGpuPreviewStatus = selectedAsset_.empty()
-            ? std::string{} : "GPU model preview waiting: model geometry is not ready";
+        assetPreviewState_.modelGpuPreviewStatus =
+            assetBrowser_.selection.empty()
+                ? std::string{}
+                : "GPU model preview waiting: model geometry is not ready";
     }
 
-    std::vector<EditorModelSceneInstance> modelSceneInstances;
-    std::vector<assets::AssetId> activeModelAssets;
-    std::vector<std::uint64_t> activeModelObjects;
-    world.each_game_object([&](const GameObject& object) {
-        const auto* reference = object.get_component<AssetReferenceComponent>();
-        if (!reference || reference->asset_id() == 0 || !object.active_in_hierarchy()) return;
-        const auto record = modelSceneAssets_.find(reference->asset_id());
-        if (record == modelSceneAssets_.end()) return;
-        activeModelAssets.push_back(reference->asset_id());
-        activeModelObjects.push_back(object.id());
-        if (!record->second.snapshot || !record->second.snapshot->valid()) return;
-        const auto* transform = object.get_component<components::TransformComponent>();
-        if (!transform) return;
-        modelSceneInstances.push_back({reference->asset_id(), object.id(), record->second.snapshot,
-                                       transform->world_matrix()});
+    modelSceneInstances_.clear();
+    append_editor_primitives(world, modelSceneInstances_);
+    world.each_game_object([&](const GameObject &object) {
+        const auto *reference = object.get_component<AssetReferenceComponent>();
+        if (!reference || !reference->asset_id() || !object.active_in_hierarchy())
+            return;
+        const auto found = modelSceneAssets_.find(reference->asset_id());
+        const auto *transform = object.get_component<components::TransformComponent>();
+        if (found == modelSceneAssets_.end() || !found->second.snapshot ||
+            !found->second.snapshot->valid() || !transform)
+            return;
+        modelSceneInstances_.push_back({reference->asset_id(), object.id(), found->second.snapshot,
+                                        transform->world_matrix()});
     });
-    render::RenderScene editorScene;
-    const auto viewport = renderer.editor_viewport().viewport;
-    const float aspect = std::max(1.0e-4f, viewport.width / std::max(1.0f, viewport.height));
-    editorScene.extract(world, renderer, aspect);
-    if (!imguiEnabled_) modelSceneRenderState_ = modelSceneRenderer_.render(
-        renderer, modelSceneInstances, editorScene.view().viewProjection,
-        editorScene.view().transform.position);
-    modelSceneRenderer_.prune(renderer, activeModelAssets, activeModelObjects);
+    assetBrowser_.refresh(projectFiles_, projectFilesRevision_);
     uiModel_.set_asset_preview(assetPreviewState_);
     layout_.selectedObject = uiModel_.selected_object();
     frameTimes_.push_back(std::max(dt, 0.0f) * 1000.0f);
-    if (frameTimes_.size() > 120) frameTimes_.erase(frameTimes_.begin());
-    if (imguiEnabled_ && imguiView_) {
-        imguiView_->draw(*this,renderer,world,dt,frame);
-        return;
-    }
-    editorUi_.set_display_size(displayWidth_, displayHeight_, effective_editor_ui_scale(displayDpiScale_, layout_.uiScale));
-    editorUi_.set_asset_revision(projectFilesRevision_);
-    editorUi_.build(uiModel_, projectFiles_, renderer, mediaPanel_, layout_, consoleEntries_,
-                    lastStatus_, dockWorkspace_, dt);
-    renderer.set_editor_ui_render_list(&editorUi_.render_list());
-    const auto renderCapabilities = renderer.capabilities();
-    if (!renderCapabilities.supportsNativeUi && !uiPresentationWarningEmitted_) {
-        push_console("Retained editor UI presentation is unavailable for the selected render backend");
-        uiPresentationWarningEmitted_ = true;
-    }
-    (void)frame;
-    return;
-}
-
+    if (frameTimes_.size() > 120)
+        frameTimes_.erase(frameTimes_.begin());
+    if (imguiView_) {
 #if defined(SHINKOU_WITH_IMGUI)
-void EditorLayer::draw_registered_panels(render::Renderer& renderer, World& world, FrameIndex frame, Seconds dt) {
-    EditorPanelContext context{renderer, world, uiModel_, layout_, frame, dt};
-    for (auto& panel : panels_) {
-        if (!panel.draw || !panel_visible(panel.id)) continue;
-        bool visible = true;
-        if (!ImGui::Begin(panel.title.c_str(), &visible)) {
-            ImGui::End();
-            continue;
-        }
-        panel.draw(context);
-        ImGui::End();
-        if (!visible) panelVisibility_[panel.id] = false;
+        ImGui::SetCurrentContext(static_cast<ImGuiContext *>(uiContext_));
+#endif
+        imguiView_->draw(*this, renderer, world, dt, frame);
     }
 }
 
-void EditorLayer::apply_theme() {
-    // EditorImGuiView applies library themes before NewFrame.
-}
+void EditorLayer::shutdown(render::Renderer *renderer) {
+    if (const char *path = std::getenv("SHINKOU_UI_METRICS_PATH"))
+        ui::ui_performance().write_csv(path);
+    if (!initialized_)
+        return;
+#if defined(SHINKOU_WITH_IMGUI)
+    if (uiContext_)
+        ImGui::SetCurrentContext(static_cast<ImGuiContext *>(uiContext_));
 #endif
-
-void EditorLayer::shutdown(render::Renderer* renderer) {
-    if (const char* path = std::getenv("SHINKOU_UI_METRICS_PATH")) ui::ui_performance().write_csv(path);
-    if (!initialized_) return;
     finish_inspector_edit();
-    if (fileScanFuture_.valid()) fileScanFuture_.wait();
+    if (fileScanFuture_.valid())
+        fileScanFuture_.wait();
     if (assetManifestFuture_.valid()) {
         assetManifestFuture_.wait();
-        try { assetManifestFuture_.get(); } catch (...) { }
+        try {
+            assetManifestFuture_.get();
+        } catch (...) {
+        }
     }
     if (assetSystemPreviewFuture_.valid()) {
         assetSystemPreviewFuture_.wait();
-        try { assetSystemPreviewFuture_.get(); } catch (...) { }
+        try {
+            assetSystemPreviewFuture_.get();
+        } catch (...) {
+        }
     }
     if (assetPreviewFuture_.valid()) {
         assetPreviewFuture_.wait();
-        try { assetPreviewFuture_.get(); } catch (...) { }
+        try {
+            assetPreviewFuture_.get();
+        } catch (...) {
+        }
     }
     if (imagePreviewFuture_.valid()) {
         imagePreviewFuture_.wait();
-        try { imagePreviewFuture_.get(); } catch (...) { }
+        try {
+            imagePreviewFuture_.get();
+        } catch (...) {
+        }
     }
     if (audioPreviewFuture_.valid()) {
-        if (audioPreviewCancel_) audioPreviewCancel_->store(true, std::memory_order_relaxed);
+        if (audioPreviewCancel_)
+            audioPreviewCancel_->store(true, std::memory_order_relaxed);
         audioPreviewFuture_.wait();
-        try { audioPreviewFuture_.get(); } catch (...) { }
+        try {
+            audioPreviewFuture_.get();
+        } catch (...) {
+        }
     }
     if (videoPreviewFuture_.valid()) {
-        if (videoPreviewCancel_) videoPreviewCancel_->store(true, std::memory_order_relaxed);
+        if (videoPreviewCancel_)
+            videoPreviewCancel_->store(true, std::memory_order_relaxed);
         videoPreviewFuture_.wait();
-        try { videoPreviewFuture_.get(); } catch (...) { }
+        try {
+            videoPreviewFuture_.get();
+        } catch (...) {
+        }
     }
     if (videoFrameFuture_.valid()) {
-        if (videoFrameCancel_) videoFrameCancel_->store(true, std::memory_order_relaxed);
+        if (videoFrameCancel_)
+            videoFrameCancel_->store(true, std::memory_order_relaxed);
         videoFrameFuture_.wait();
-        try { videoFrameFuture_.get(); } catch (...) { }
+        try {
+            videoFrameFuture_.get();
+        } catch (...) {
+        }
     }
     if (modelPreviewFuture_.valid()) {
-        if (modelPreviewCancel_) modelPreviewCancel_->store(true, std::memory_order_relaxed);
+        if (modelPreviewCancel_)
+            modelPreviewCancel_->store(true, std::memory_order_relaxed);
         modelPreviewFuture_.wait();
-        try { modelPreviewFuture_.get(); } catch (...) { }
+        try {
+            modelPreviewFuture_.get();
+        } catch (...) {
+        }
     }
     if (modelTexturePreviewFuture_.valid()) {
         modelTexturePreviewFuture_.wait();
-        try { modelTexturePreviewFuture_.get(); } catch (...) { }
+        try {
+            modelTexturePreviewFuture_.get();
+        } catch (...) {
+        }
     }
     reset_model_scene_assets();
     cancel_build();
     if (buildFuture_.valid()) {
         buildFuture_.wait();
-        try { lastBuildResult_ = buildFuture_.get(); } catch (...) { }
+        try {
+            lastBuildResult_ = buildFuture_.get();
+        } catch (...) {
+        }
     }
     liveBuildOutput_.reset();
     buildCancel_.reset();
     clear_audio_asset_bindings();
-    if (renderer) modelSceneRenderer_.clear(*renderer);
     save_layout();
-    uninstall_native_menu();
-    editorUi_.shutdown();
+    save_preferences();
     if (imguiView_) {
         imguiView_->shutdown(renderer);
         imguiView_.reset();
@@ -5382,11 +5632,12 @@ void EditorLayer::shutdown(render::Renderer* renderer) {
 #endif
         imguiPlatformInitialized_ = false;
     }
-    if (uiContextOwned_ && ImGui::GetCurrentContext()) {
-        ImGui::DestroyContext();
-        uiContextOwned_ = false;
+    if (uiContext_) {
+        ImGui::DestroyContext(static_cast<ImGuiContext *>(uiContext_));
+        uiContext_ = nullptr;
+        ImGui::SetCurrentContext(static_cast<ImGuiContext *>(previousUiContext_));
+        previousUiContext_ = nullptr;
     }
-    imguiEnabled_ = false;
 #endif
     activeWorld_ = nullptr;
     assetSystem_ = nullptr;
@@ -5396,40 +5647,58 @@ void EditorLayer::shutdown(render::Renderer* renderer) {
 
 std::size_t EditorLayer::model_scene_loaded_asset_count() const noexcept {
     std::size_t count = 0;
-    for (const auto& [assetId, record] : modelSceneAssets_) {
+    for (const auto &[assetId, record] : modelSceneAssets_) {
         (void)assetId;
-        if (record.active && record.snapshot && record.snapshot->valid()) ++count;
+        if (record.active && record.snapshot && record.snapshot->valid())
+            ++count;
     }
     return count;
 }
 
 std::size_t EditorLayer::ui_command_count() const noexcept {
-    if (imguiView_) return imguiView_->draw_commands();
-    return editorUi_.render_list().commands().size();
+    return imguiView_ ? imguiView_->draw_commands() : 0;
 }
-
-std::size_t EditorLayer::ui_text_command_count() const noexcept {
-    if (imguiView_) return imguiView_->draw_commands();
-    return static_cast<std::size_t>(std::count_if(editorUi_.render_list().commands().begin(),
-        editorUi_.render_list().commands().end(), [](const ui::UiDrawCommand& command) {
-            return command.type == ui::DrawCommandType::Text;
-        }));
+void EditorLayer::set_ui_qa_enabled(bool enabled) {
+    uiQaEnabled_ = enabled;
+    if (imguiView_)
+        imguiView_->set_qa_enabled(enabled);
 }
-
+EditorUiPerformance EditorLayer::ui_performance() const noexcept {
+    return imguiView_ ? imguiView_->performance() : EditorUiPerformance{};
+}
+std::size_t EditorLayer::ui_labeled_control_count() const noexcept {
+    return imguiView_ ? imguiView_->labeled_controls() : 0;
+}
 std::size_t EditorLayer::ui_visible_asset_file_count() const noexcept {
-    return imguiView_ ? imguiView_->visible_assets() : editorUi_.visible_asset_count();
+    return imguiView_ ? imguiView_->visible_assets() : 0;
+}
+std::size_t EditorLayer::model_scene_cached_asset_count() const noexcept {
+    return imguiView_ ? imguiView_->world_model_cache_count() : 0;
 }
 DockRect EditorLayer::ui_viewport_rect() const noexcept {
-    if (!imguiView_) return editorUi_.viewport_rect();
-    const float scale=effective_editor_ui_scale(displayDpiScale_,layout_.uiScale);
-    const auto r=imguiView_->viewport();
-    return {r.x/scale,r.y/scale,r.width/scale,r.height/scale};
+    if (!imguiView_)
+        return {};
+    const float scale = ui_dpi_scale();
+    const auto rect = imguiView_->viewport();
+    return {rect.x / scale, rect.y / scale, rect.width / scale, rect.height / scale};
 }
 float EditorLayer::ui_dpi_scale() const noexcept {
-    return imguiView_ ? effective_editor_ui_scale(displayDpiScale_,layout_.uiScale) : editorUi_.dpi_scale();
+    return effective_editor_ui_scale(displayDpiScale_, layout_.uiScale);
 }
-const std::unordered_map<std::string,ui::Rect>& EditorLayer::ui_interaction_regions() const noexcept {
-    return imguiView_ ? imguiView_->regions() : editorUi_.interaction_regions();
+const std::unordered_map<std::string, ui::Rect> &
+EditorLayer::ui_interaction_regions() const noexcept {
+    static const std::unordered_map<std::string, ui::Rect> empty;
+    return imguiView_ ? imguiView_->regions() : empty;
+}
+bool EditorLayer::select_object(ObjectId id, World &world) {
+    if (id && !world.find_object(id))
+        return false;
+    activeWorld_ = &world;
+    finish_inspector_edit();
+    layout_.selectedObject = id;
+    uiModel_.select_object(id);
+    set_selected_asset({});
+    return true;
 }
 
 } // namespace shinkou::editor

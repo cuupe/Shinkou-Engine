@@ -1,6 +1,6 @@
 #pragma once
-#include "shinkou/editor/FileSystem.h"
 #include "shinkou/audio/AudioSystem.h"
+#include "shinkou/editor/FileSystem.h"
 
 namespace shinkou::editor {
 // Source files stay untouched. These are editor audition/display preferences,
@@ -22,15 +22,18 @@ struct EditorAssetSettings {
     bool modelAutoRotate{false}, modelWireframe{false};
 
     bool valid() const noexcept;
-    audio::AudioPlayParams audio_params(audio::AudioTrackId track=0) const noexcept;
+    audio::AudioPlayParams audio_params(audio::AudioTrackId track = 0) const noexcept;
     std::vector<audio::AudioEffectDesc> audio_effects() const;
 };
 class EditorAssetSettingsStore {
-public:
+  public:
     static std::filesystem::path path_for(std::string_view asset);
     // Missing settings are defaults. Malformed settings leave the caller intact.
-    static bool load(const FileSystemService&, std::string_view asset, EditorAssetSettings&, std::string& error);
-    static bool save(const FileSystemService&, std::string_view asset, const EditorAssetSettings&, std::string& error);
-    static bool remap(const FileSystemService&, std::string_view from, std::string_view to, std::string& error);
+    static bool load(const FileSystemService &, std::string_view asset, EditorAssetSettings &,
+                     std::string &error);
+    static bool save(const FileSystemService &, std::string_view asset, const EditorAssetSettings &,
+                     std::string &error);
+    static bool remap(const FileSystemService &, std::string_view from, std::string_view to,
+                      std::string &error);
 };
-}
+} // namespace shinkou::editor

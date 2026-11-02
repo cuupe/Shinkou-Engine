@@ -65,15 +65,13 @@ struct AssetPreviewDescriptor {
 // performs no IO, so descriptors can be created on a worker and consumed by
 // the retained UI without touching the paint path.
 class AssetPreviewCatalog final {
-public:
-    AssetPreviewDescriptor describe(const FileEntry& entry) const;
+  public:
+    AssetPreviewDescriptor describe(const FileEntry &entry) const;
 
-    static AssetPreviewKind classify(const FileEntry& entry);
-    static AssetPreviewKind classify(const std::filesystem::path& path,
-                                     bool directory = false);
+    static AssetPreviewKind classify(const FileEntry &entry);
+    static AssetPreviewKind classify(const std::filesystem::path &path, bool directory = false);
     static std::string_view kind_name(AssetPreviewKind kind) noexcept;
-    static std::string_view mime_type(AssetPreviewKind kind,
-                                      std::string_view extension) noexcept;
+    static std::string_view mime_type(AssetPreviewKind kind, std::string_view extension) noexcept;
     static std::string_view preview_title(AssetPreviewKind kind) noexcept;
 };
 

@@ -3,8 +3,8 @@
 #include "shinkou/Math.h"
 #include "shinkou/World.h"
 #include "shinkou/render/RenderTypes.h"
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -87,6 +87,10 @@ struct RenderView {
     math::Mat4 viewMatrix{math::Mat4::Identity()};
     math::Mat4 projectionMatrix{math::Mat4::Identity()};
     math::Mat4 viewProjection{math::Mat4::Identity()};
+    bool cameraAvailable{false};
+    bool has_camera() const noexcept {
+        return cameraAvailable || static_cast<bool>(camera);
+    }
 };
 
 struct RenderSceneStats {
@@ -110,15 +114,15 @@ struct LightRenderItem {
 
 // Shared CPU/shader ABI used by forward shading and feature-graph culling.
 struct GpuLightData {
-    float position[4]{},direction[4]{},colorIntensity[4]{},parameters[4]{};
+    float position[4]{}, direction[4]{}, colorIntensity[4]{}, parameters[4]{};
 };
-static_assert(sizeof(GpuLightData)==64);
-std::vector<GpuLightData> make_gpu_light_data(const std::vector<LightRenderItem>& lights);
+static_assert(sizeof(GpuLightData) == 64);
+std::vector<GpuLightData> make_gpu_light_data(const std::vector<LightRenderItem> &lights);
 
 struct SceneFrameData {
     math::Mat4 viewProjection{math::Mat4::Identity()};
     float cameraPositionAndFlags[4]{0.0f, 0.0f, 0.0f, 0.0f};
-    float lightingParameters[4]{0.0f,0.0f,0.0f,0.0f};
+    float lightingParameters[4]{0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 struct ObjectFrameData {
@@ -126,10 +130,10 @@ struct ObjectFrameData {
 };
 
 struct ShadowFrameData {
-    std::array<math::Mat4,8> viewProjection{};
-    std::array<math::Vec4,8> atlasRect{};
-    std::array<math::Vec4,8> distances{};
-    math::Vec4 cameraPosition{},cameraForward{},settings{};
+    std::array<math::Mat4, 8> viewProjection{};
+    std::array<math::Vec4, 8> atlasRect{};
+    std::array<math::Vec4, 8> distances{};
+    math::Vec4 cameraPosition{}, cameraForward{}, settings{};
 };
 
 struct MeshRenderItem {
@@ -160,21 +164,40 @@ struct SpriteRenderItem {
     ResourceDesc materialDescription{};
 };
 
+RenderView make_render_view(const CameraComponent &, const math::Transform &, float aspectRatio,
+                            Entity camera = {});
+RenderView extract_render_view(const World &world, float aspectRatio);
+
 class RenderScene {
     std::vector<MeshRenderItem> meshes_;
     std::vector<MeshDraw> shadowMeshes_;
     std::vector<SpriteRenderItem> sprites_;
     std::vector<LightRenderItem> lights_;
     RenderView view_{};
-public:
-    void extract(const World& world, const Renderer& renderer, float aspectRatio = 16.0f / 9.0f);
-    const std::vector<MeshRenderItem>& meshes() const noexcept { return meshes_; }
-    const std::vector<MeshDraw>& shadow_meshes() const noexcept { return shadowMeshes_; }
-    const std::vector<SpriteRenderItem>& sprites() const noexcept { return sprites_; }
-    const std::vector<LightRenderItem>& lights() const noexcept { return lights_; }
-    const RenderView& view() const noexcept { return view_; }
-    const RenderSceneStats& stats() const noexcept { return stats_; }
-private:
+
+  public:
+    void extract(const World &world, const Renderer &renderer, float aspectRatio = 16.0f / 9.0f,
+                 const RenderView *overrideView = nullptr);
+    const std::vector<MeshRenderItem> &meshes() const noexcept {
+        return meshes_;
+    }
+    const std::vector<MeshDraw> &shadow_meshes() const noexcept {
+        return shadowMeshes_;
+    }
+    const std::vector<SpriteRenderItem> &sprites() const noexcept {
+        return sprites_;
+    }
+    const std::vector<LightRenderItem> &lights() const noexcept {
+        return lights_;
+    }
+    const RenderView &view() const noexcept {
+        return view_;
+    }
+    const RenderSceneStats &stats() const noexcept {
+        return stats_;
+    }
+
+  private:
     RenderSceneStats stats_{};
 };
 
@@ -195,23 +218,31 @@ class ForwardRenderer {
     ResourceHandle lightBuffer_{};
     BufferDesc lightBufferDescription_{};
     std::vector<ShadowCascade> shadowCascades_;
-    ResourceHandle shadowFrame_{},shadowAtlas_{};
+    ResourceHandle shadowFrame_{}, shadowAtlas_{};
     std::uint64_t shadowGeneration_{0};
-public:
-    void build(Renderer& renderer, const RenderScene& scene,
-               ResourceHandle colorTarget, const TextureDesc& colorDescription,
-               ResourceHandle depthTarget = {}, const TextureDesc& depthDescription = {},
-               const GpuDrivenSettings& gpuDriven = {},RenderGraph* graphOverride=nullptr,
-               const RenderView* viewOverride=nullptr,bool preserveDepth=false);
-    void build_shadows(Renderer& renderer, const RenderScene& scene, const ShadowSettings& settings,
+
+  public:
+    void build(Renderer &renderer, const RenderScene &scene, ResourceHandle colorTarget,
+               const TextureDesc &colorDescription, ResourceHandle depthTarget = {},
+               const TextureDesc &depthDescription = {}, const GpuDrivenSettings &gpuDriven = {},
+               RenderGraph *graphOverride = nullptr, const RenderView *viewOverride = nullptr,
+               bool preserveDepth = false);
+    void build_shadows(Renderer &renderer, const RenderScene &scene, const ShadowSettings &settings,
                        ResourceHandle shadowPipeline, ResourceHandle shadowTarget,
-                       const TextureDesc& shadowDescription,RenderGraph* graphOverride=nullptr);
-    void build_depth(Renderer& renderer,RenderGraph& graph,const RenderScene& scene,const RenderView& view,
-                     ResourceHandle pipeline,ResourceHandle depth,const TextureDesc& description);
-    const std::vector<ShadowCascade>& shadow_cascades() const noexcept { return shadowCascades_; }
-    ResourceHandle prepare_present(Renderer& renderer);
-    ResourceHandle scene_buffer() const noexcept { return sceneBuffer_; }
-    ResourceHandle light_buffer() const noexcept { return lightBuffer_; }
-    void release(Renderer& renderer);
+                       const TextureDesc &shadowDescription, RenderGraph *graphOverride = nullptr);
+    void build_depth(Renderer &renderer, RenderGraph &graph, const RenderScene &scene,
+                     const RenderView &view, ResourceHandle pipeline, ResourceHandle depth,
+                     const TextureDesc &description);
+    const std::vector<ShadowCascade> &shadow_cascades() const noexcept {
+        return shadowCascades_;
+    }
+    ResourceHandle prepare_present(Renderer &renderer);
+    ResourceHandle scene_buffer() const noexcept {
+        return sceneBuffer_;
+    }
+    ResourceHandle light_buffer() const noexcept {
+        return lightBuffer_;
+    }
+    void release(Renderer &renderer);
 };
-}
+} // namespace shinkou::render

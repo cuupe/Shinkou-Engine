@@ -20,8 +20,8 @@ struct FileHistoryDocument {
     std::uint32_t version{1};
     std::vector<FileHistoryEntry> entries;
 
-    bool to_json(std::string& json, std::string& error) const;
-    static bool from_json(std::string_view json, FileHistoryDocument& document, std::string& error);
+    bool to_json(std::string &json, std::string &error) const;
+    static bool from_json(std::string_view json, FileHistoryDocument &document, std::string &error);
 };
 
 } // namespace shinkou::editor

@@ -28,13 +28,15 @@ int main() {
     const auto start = Clock::now();
     for (int iteration = 0; iteration < repetitions; ++iteration) {
         geometry.clear();
-        for (const auto& segment : segments) {
-            if (!shinkou::render::append_line_segment(geometry, segment.start, segment.end)) return 1;
+        for (const auto &segment : segments) {
+            if (!shinkou::render::append_line_segment(geometry, segment.start, segment.end))
+                return 1;
         }
     }
     const auto seconds = std::chrono::duration<double>(Clock::now() - start).count();
     std::uint64_t checksum = 0;
-    for (const auto index : geometry.indices) checksum += index;
+    for (const auto index : geometry.indices)
+        checksum += index;
     const double generatedSegments = static_cast<double>(count) * repetitions;
     std::cout << "render geometry benchmark\n"
               << "  segments: " << count << "\n"

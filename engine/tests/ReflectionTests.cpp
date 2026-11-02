@@ -12,6 +12,7 @@
 #include <vector>
 
 enum class ReflectionState { Idle = 0, Active = 1, Done = 2 };
+enum class ReflectionWideState : std::uint64_t { Zero = 0 };
 struct ReflectionPayload {
     std::int32_t count{0};
     std::string label;
@@ -39,6 +40,7 @@ namespace shinkou::reflection {
 SHINKOU_REFLECT_TYPE(ReflectionBase, "tests.ReflectionBase");
 SHINKOU_REFLECT_TYPE(ReflectionActor, "tests.ReflectionActor");
 SHINKOU_REFLECT_TYPE(::ReflectionState, "tests.ReflectionState");
+SHINKOU_REFLECT_TYPE(::ReflectionWideState, "tests.ReflectionWideState");
 SHINKOU_REFLECT_TYPE(::ReflectionPayload, "tests.ReflectionPayload");
 SHINKOU_REFLECT_TYPE(std::vector<float>, "std.vector.float");
 SHINKOU_REFLECT_TYPE(::ReflectionLeft, "tests.ReflectionLeft");
@@ -111,13 +113,15 @@ int main() {
     auto state = TypeBuilder<ReflectionState>("tests.ReflectionState", TypeKind::Enum)
         .enum_value("Idle", 0).enum_value("Active", 1).enum_value("Done", 2).take();
     auto samples = make_vector_descriptor<float>("std.vector.float");
+    auto wideState = TypeBuilder<ReflectionWideState>("tests.ReflectionWideState",TypeKind::Enum).enum_value("Zero",0).take();
     auto payload = TypeBuilder<ReflectionPayload>("tests.ReflectionPayload", TypeKind::Struct, TypeFlags::Serializable)
         .field("count", &ReflectionPayload::count)
         .field("label", &ReflectionPayload::label)
         .field("position", &ReflectionPayload::position)
         .field("state", &ReflectionPayload::state)
         .field("samples", &ReflectionPayload::samples).take();
-    if (!serializationRegistry.register_type(std::move(state), &error) ||
+    if (!serializationRegistry.register_type(std::move(wideState), &error) ||
+        !serializationRegistry.register_type(std::move(state), &error) ||
         !serializationRegistry.register_type(std::move(samples), &error) ||
         !serializationRegistry.register_type(std::move(payload), &error) ||
         !serializationRegistry.freeze(&error)) return 12;
@@ -140,6 +144,23 @@ int main() {
     if (!deserialize_json(serializationRegistry, type_id<std::uint64_t>(), json, &restoredUnsigned) ||
         restoredUnsigned != maxUnsigned || deserialize_json(serializationRegistry, type_id<std::uint64_t>(), "01", &restoredUnsigned) ||
         deserialize_json(serializationRegistry, type_id<std::uint64_t>(), "+1", &restoredUnsigned)) return 14;
+    shinkou::data::Value tree;
+    if (!serialize_value(serializationRegistry, type_id<ReflectionPayload>(), &source, tree) ||
+        !tree.find("samples") || tree.find("samples")->array_items().size() != 3) return 18;
+    ReflectionPayload treeRestored;
+    if (!deserialize_value(serializationRegistry, type_id<ReflectionPayload>(), tree, &treeRestored) ||
+        treeRestored.label != source.label || treeRestored.state != source.state) return 19;
+    float bounded = 0;
+    if (deserialize_json(serializationRegistry, type_id<float>(), "1e100", &bounded)) return 20;
+    const double nonfinite = std::numeric_limits<double>::infinity();
+    const auto previousJson = json;
+    if (serialize_json(serializationRegistry, type_id<double>(), &nonfinite, json) || json != previousJson) return 21;
+    std::uint64_t exactId = 0;
+    if (!deserialize_json(serializationRegistry, type_id<std::uint64_t>(), "18446744073709551615", &exactId) || exactId != maxUnsigned) return 22;
+    const auto wide = static_cast<ReflectionWideState>(maxUnsigned);
+    ReflectionWideState restoredWide{};
+    if (!serialize_json(serializationRegistry,type_id<ReflectionWideState>(),&wide,json) ||
+        !deserialize_json(serializationRegistry,type_id<ReflectionWideState>(),json,&restoredWide) || restoredWide != wide) return 23;
     auto ownedInstance = serializationRegistry.create_instance(type_id<ReflectionPayload>());
     TypeRegistry movedSerializationRegistry = std::move(serializationRegistry);
     if (!ownedInstance || movedSerializationRegistry.find(type_id<ReflectionPayload>()) == nullptr) return 15;

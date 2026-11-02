@@ -12,12 +12,15 @@ std::unique_ptr<IRenderBackend> create_vulkan_backend();
 
 std::unique_ptr<IRenderBackend> create_backend(BackendApi api) {
 #if defined(SHINKOU_PLATFORM_WINDOWS)
-    if (api == BackendApi::DirectX11) return create_directx11_backend();
-    if (api == BackendApi::DirectX12) return create_directx12_backend();
+    if (api == BackendApi::DirectX11)
+        return create_directx11_backend();
+    if (api == BackendApi::DirectX12)
+        return create_directx12_backend();
 #endif
 #if defined(SHINKOU_WITH_VULKAN)
-    if (api == BackendApi::Vulkan) return create_vulkan_backend();
+    if (api == BackendApi::Vulkan)
+        return create_vulkan_backend();
 #endif
     return create_null_backend(api);
 }
-}
+} // namespace shinkou::render

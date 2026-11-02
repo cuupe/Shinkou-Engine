@@ -13,7 +13,9 @@
 | Boost | 不建议 | 无独占能力，且与"vendored 单文件依赖"模型冲突 | 需要 asio 级网络时优先 standalone asio，而不是整个 Boost |
 
 一句话：当前缺的不是压缩算法，而是**会用压缩的数据形态**；Abseil/Boost 解决的是通用设施问题，
-而本项目的通用设施问题（重复的 JSON 解析器）用 Boost 解决反而是最重的方案。
+重复 JSON 解析器的问题现已通过独立 Core 数据层和私有编译的 nlohmann/json codec
+统一，见 [公共数据契约](CoreArchitecture.md)；无需为此引入 Boost。以下规模等统计
+保留原评估时的快照。
 
 ## 现状事实（可复查）
 
@@ -21,7 +23,7 @@
   （`D:/paths/GNU/mingw64/bin/c++.exe`）；`windows-vs` 预设尚未生成过构建目录（`out/build/vs` 不存在）。
 - 规模：`engine/`、`assets/`、`render/`、`Tools/` 共 332 个 C/C++ 源文件、约 86,000 行；仓库 44 次提交。
 - 依赖模型：单文件/源码子集 vendored（ufbx、miniz、pugixml、imgui、implot、ImGuizmo、hello_imgui、
-  codicons、entt、miniaudio），SDL3 走 FetchContent，spdlog 可选探测，PhysX 为 Git 子模块。
+  codicons、entt、miniaudio），SDL3 走 FetchContent，spdlog 默认启用并提供仓库内头文件回退，PhysX 为 Git 子模块。
   固定版本与用途记录在 `third_party/ASSET_READER_LIBRARIES.md`，许可证随源码入库。
 - 压缩现状：全仓唯一的压缩调用点是编辑器文本预览读取 DOCX/ZIP
   （`engine/src/editor/EditorTextPreview.cpp:71-100`，miniz 的 `mz_zip_reader_*`），测试用它造 fixture。

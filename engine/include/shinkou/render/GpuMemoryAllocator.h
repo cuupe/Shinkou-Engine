@@ -24,15 +24,19 @@ struct GpuAllocation {
     std::size_t alignment{1};
     GpuMemoryType memoryType{0};
     GpuMemoryLifetime lifetime{GpuMemoryLifetime::Persistent};
-    explicit operator bool() const noexcept { return id != 0; }
+    explicit operator bool() const noexcept {
+        return id != 0;
+    }
 };
 
-inline bool operator==(const GpuAllocation& lhs, const GpuAllocation& rhs) noexcept {
+inline bool operator==(const GpuAllocation &lhs, const GpuAllocation &rhs) noexcept {
     return lhs.id == rhs.id && lhs.blockId == rhs.blockId && lhs.offset == rhs.offset &&
-        lhs.size == rhs.size && lhs.alignment == rhs.alignment && lhs.memoryType == rhs.memoryType &&
-        lhs.lifetime == rhs.lifetime;
+           lhs.size == rhs.size && lhs.alignment == rhs.alignment &&
+           lhs.memoryType == rhs.memoryType && lhs.lifetime == rhs.lifetime;
 }
-inline bool operator!=(const GpuAllocation& lhs, const GpuAllocation& rhs) noexcept { return !(lhs == rhs); }
+inline bool operator!=(const GpuAllocation &lhs, const GpuAllocation &rhs) noexcept {
+    return !(lhs == rhs);
+}
 
 struct GpuMemoryAllocatorConfig {
     std::size_t blockSize{64u * 1024u * 1024u};
@@ -78,17 +82,21 @@ struct GpuAliasAssignment {
 };
 
 struct GpuAliasPlanOptions {
-    std::function<bool(const GpuAliasRequest&, const GpuAliasRequest&)> canAlias;
+    std::function<bool(const GpuAliasRequest &, const GpuAliasRequest &)> canAlias;
 };
 
 class GpuAliasPlan {
     std::vector<GpuAliasAssignment> assignments_;
-public:
+
+  public:
     GpuAliasPlan() = default;
     explicit GpuAliasPlan(std::vector<GpuAliasAssignment> assignments)
-        : assignments_(std::move(assignments)) {}
-    const std::vector<GpuAliasAssignment>& assignments() const noexcept { return assignments_; }
-    const GpuAliasAssignment* assignment(std::uint64_t logicalResource) const noexcept;
+        : assignments_(std::move(assignments)) {
+    }
+    const std::vector<GpuAliasAssignment> &assignments() const noexcept {
+        return assignments_;
+    }
+    const GpuAliasAssignment *assignment(std::uint64_t logicalResource) const noexcept;
     std::uint64_t physical_resource(std::uint64_t logicalResource) const noexcept;
 };
 
@@ -108,7 +116,8 @@ struct TransientResourceRequest {
 };
 
 struct TransientAliasPlanOptions {
-    std::function<bool(const TransientResourceRequest&, const TransientResourceRequest&)> canAlias;
+    std::function<bool(const TransientResourceRequest &, const TransientResourceRequest &)>
+        canAlias;
 };
 
 struct TransientAliasAssignment {
@@ -139,14 +148,14 @@ struct TransientAliasPlan {
 };
 
 class GpuMemoryAllocator {
-public:
+  public:
     struct Impl;
     explicit GpuMemoryAllocator(GpuMemoryAllocatorConfig config = {});
     ~GpuMemoryAllocator();
-    GpuMemoryAllocator(const GpuMemoryAllocator&) = delete;
-    GpuMemoryAllocator& operator=(const GpuMemoryAllocator&) = delete;
-    GpuMemoryAllocator(GpuMemoryAllocator&&) noexcept;
-    GpuMemoryAllocator& operator=(GpuMemoryAllocator&&) noexcept;
+    GpuMemoryAllocator(const GpuMemoryAllocator &) = delete;
+    GpuMemoryAllocator &operator=(const GpuMemoryAllocator &) = delete;
+    GpuMemoryAllocator(GpuMemoryAllocator &&) noexcept;
+    GpuMemoryAllocator &operator=(GpuMemoryAllocator &&) noexcept;
 
     GpuAllocation allocate(std::size_t size, std::size_t alignment = 1,
                            GpuMemoryType memoryType = 0,
@@ -163,15 +172,14 @@ public:
     GpuMemoryStats stats() const noexcept;
     GpuMemoryStats stats(GpuMemoryType memoryType) const noexcept;
     std::size_t trim() noexcept;
-    GpuAliasPlan plan_aliases(const std::vector<GpuAliasRequest>& requests,
-                              const GpuAliasPlanOptions& options = {}) const;
-    TransientAliasPlan plan_transient_aliases(
-        const std::vector<TransientResourceRequest>& requests,
-        const TransientAliasPlanOptions& options = {}) const;
-    bool materialize_transient_alias_plan(TransientAliasPlan& plan) noexcept;
-    void release_transient_alias_plan(TransientAliasPlan& plan) noexcept;
+    GpuAliasPlan plan_aliases(const std::vector<GpuAliasRequest> &requests,
+                              const GpuAliasPlanOptions &options = {}) const;
+    TransientAliasPlan plan_transient_aliases(const std::vector<TransientResourceRequest> &requests,
+                                              const TransientAliasPlanOptions &options = {}) const;
+    bool materialize_transient_alias_plan(TransientAliasPlan &plan) noexcept;
+    void release_transient_alias_plan(TransientAliasPlan &plan) noexcept;
 
-private:
+  private:
     std::unique_ptr<Impl> impl_;
 };
 

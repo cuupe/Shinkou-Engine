@@ -30,7 +30,7 @@ enum class RenderFeatureGraphStage {
     Sky
 };
 
-const char* to_string(RenderFeatureGraphStage stage) noexcept;
+const char *to_string(RenderFeatureGraphStage stage) noexcept;
 
 enum class RenderImageDomain { Inherit, LinearHDR, DisplaySRGB, Data };
 
@@ -82,7 +82,8 @@ struct RenderFeatureGraphExecutor {
     // Additional geometry, material and parameter accesses owned by this
     // implementation. Import persistent resources before building the graph.
     std::vector<ResourceAccess> accesses;
-    std::function<RenderFeatureGraphCommands(RenderGraph&,const RenderFeatureGraphStageDesc&)> prepare;
+    std::function<RenderFeatureGraphCommands(RenderGraph &, const RenderFeatureGraphStageDesc &)>
+        prepare;
     // Empty names are defaults by kind; a named executor overrides one node.
     std::string name;
 };
@@ -116,7 +117,7 @@ struct RenderFeatureGraphDesc {
     TextureDesc shadowDescription{};
     ResourceHandle motionVectorTarget{};
     TextureDesc motionVectorDescription{};
-    float deltaSeconds{1.0f/60.0f};
+    float deltaSeconds{1.0f / 60.0f};
     bool exposureHistoryValid{false};
     std::vector<RenderPipelineExternalResource> resources;
     SkySettings sky;
@@ -179,13 +180,15 @@ struct RenderFeatureGraphPlan {
 };
 
 class RenderFeatureGraphBuilder {
-public:
+  public:
     // Descriptive planning does not register executable passes or claim that
     // the selected algorithms have an implementation.
-    static RenderFeatureGraphPlan plan(RenderGraph& graph, const RenderFeatureGraphDesc& description);
+    static RenderFeatureGraphPlan plan(RenderGraph &graph,
+                                       const RenderFeatureGraphDesc &description);
     // Transactional: a missing implementation or invalid dependency leaves
     // the supplied graph unchanged.
-    static RenderFeatureGraphPlan build(RenderGraph& graph, const RenderFeatureGraphDesc& description);
+    static RenderFeatureGraphPlan build(RenderGraph &graph,
+                                        const RenderFeatureGraphDesc &description);
     static std::vector<RenderPipelineStage> default_stages();
 };
 

@@ -18,14 +18,21 @@ class AssetReferenceComponent final : public Component {
     std::string path_;
     assets::AssetId assetId_{0};
 
-public:
+  public:
     explicit AssetReferenceComponent(std::string path = {}, assets::AssetId assetId = 0) {
-        if (set_path(std::move(path)) && !path_.empty()) assetId_ = assetId;
+        if (set_path(std::move(path)) && !path_.empty())
+            assetId_ = assetId;
     }
 
-    std::string_view type_name() const noexcept override { return "AssetReference"; }
-    const std::string& path() const noexcept { return path_; }
-    assets::AssetId asset_id() const noexcept { return assetId_; }
+    std::string_view type_name() const noexcept override {
+        return "AssetReference";
+    }
+    const std::string &path() const noexcept {
+        return path_;
+    }
+    assets::AssetId asset_id() const noexcept {
+        return assetId_;
+    }
 
     bool set_path(std::string path) {
         if (path.empty()) {
@@ -38,7 +45,8 @@ public:
             normalized.generic_string().rfind("../", 0) == 0) {
             return false;
         }
-        if (path_ != normalized.generic_string()) assetId_ = 0;
+        if (path_ != normalized.generic_string())
+            assetId_ = 0;
         path_ = normalized.generic_string();
         return true;
     }
@@ -48,20 +56,23 @@ public:
         return true;
     }
 
-protected:
-    void define_properties(PropertyBuilder& builder) override {
-        builder.add_custom("path", PropertyType::String,
-            [this] { return PropertyValue{path_}; },
-            [this](const PropertyValue& value) {
-                const auto* text = std::get_if<std::string>(&value);
+  protected:
+    void define_properties(PropertyBuilder &builder) override {
+        builder.add_custom(
+            "path", PropertyType::String, [this] { return PropertyValue{path_}; },
+            [this](const PropertyValue &value) {
+                const auto *text = std::get_if<std::string>(&value);
                 return text != nullptr && set_path(*text);
-            }, PropertyFlags::Serialized);
-        builder.add_custom("assetId", PropertyType::UnsignedInteger,
+            },
+            PropertyFlags::Serialized);
+        builder.add_custom(
+            "assetId", PropertyType::UnsignedInteger,
             [this] { return PropertyValue{static_cast<std::uint64_t>(assetId_)}; },
-            [this](const PropertyValue& value) {
-                const auto* id = std::get_if<std::uint64_t>(&value);
+            [this](const PropertyValue &value) {
+                const auto *id = std::get_if<std::uint64_t>(&value);
                 return id != nullptr && set_asset_id(static_cast<assets::AssetId>(*id));
-            }, PropertyFlags::Serialized, 0.0, 0.0, 0.0, "Asset ID");
+            },
+            PropertyFlags::Serialized, 0.0, 0.0, 0.0, "Asset ID");
     }
 };
 

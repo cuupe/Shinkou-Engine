@@ -35,6 +35,11 @@ struct Velocity {
     float value{0.0f};
 };
 
+// Trivially copyable runtime data: this is what belongs in chunk memory.
+struct Health {
+    int value{0};
+};
+
 struct CountingEcsSystem final : shinkou::EcsSystem {
     int creates{0};
     int enables{0};
@@ -90,8 +95,8 @@ int main() {
     auto& ecsObject = world.create_object("ecs");
     const auto entity = ecsObject.enable_ecs();
     if (!entity || !world.ecs().valid(entity) || world.find_object(entity) != &ecsObject) return 7;
-    ecsObject.add_ecs_component<shinkou::components::TagComponent>();
-    if (!ecsObject.get_ecs_component<shinkou::components::TagComponent>()) return 8;
+    ecsObject.add_ecs_component<Health>(Health{10});
+    if (!ecsObject.get_ecs_component<Health>() || ecsObject.get_ecs_component<Health>()->value != 10) return 8;
     ecsObject.disable_ecs();
     if (ecsObject.has_ecs_entity() || world.ecs().valid(entity)) return 9;
 
@@ -107,11 +112,15 @@ int main() {
     auto* ecsTransform = ecsManaged.get_component<shinkou::components::TransformComponent>();
     if (!ecsTransform || ecsTransform->storage() != shinkou::ObjectStorage::Ecs ||
         ecsManaged.get_ecs_component<shinkou::components::TransformComponent>() != ecsTransform) return 27;
+    // Authoring Components stay owned by the GameObject even on ECS storage;
+    // only trivially copyable PODs live in chunk memory.
     LifecycleCounters ecsCounters;
     auto* ecsUpdate = ecsManaged.add_component<UpdateComponent>(&ecsCounters);
     if (!ecsUpdate || ecsUpdate->storage() != shinkou::ObjectStorage::Ecs ||
-        !world.ecs().has<UpdateComponent>(ecsManaged.ecs_entity()) ||
+        world.ecs().has<UpdateComponent>(ecsManaged.ecs_entity()) ||
         ecsManaged.get_ecs_component<UpdateComponent>() != ecsUpdate) return 28;
+    ecsManaged.add_ecs_component<Health>(Health{7});
+    if (!world.ecs().has<Health>(ecsManaged.ecs_entity()) || ecsManaged.get_ecs_component<Health>() == nullptr) return 43;
     auto& ecsSystem = world.add_ecs_system<CountingEcsSystem>();
     if (ecsSystem.creates != 1 || ecsSystem.enables != 1 || world.ecs_system_count() != 1) return 29;
     world.update(0.01f);
@@ -121,8 +130,7 @@ int main() {
     if (ecsSystem.updates != 1 || ecsSystem.disables != 1) return 31;
     ecsSystem.set_enabled(true);
     if (ecsSystem.enables != 2) return 32;
-    if (!ecsManaged.remove_component<UpdateComponent>() || world.ecs().has<UpdateComponent>(ecsManaged.ecs_entity()) ||
-        ecsCounters.destroys != 1) return 33;
+    if (!ecsManaged.remove_component<UpdateComponent>() || ecsCounters.destroys != 1) return 33;
     LifecycleCounters regularPipelineCounters;
     auto& regularPipelineObject = world.create_object("regular-pipeline");
     if (!regularPipelineObject.add_component<UpdateComponent>(&regularPipelineCounters)) return 39;
@@ -164,9 +172,11 @@ int main() {
 
     const auto nativeEntity = world.ecs().create();
     world.ecs().emplace<int>(nativeEntity, 42);
-    auto& nativeRegistry = world.ecs().native_registry();
-    const auto nativeView = nativeRegistry.view<int>();
-    if (nativeView.size() != 1 || nativeRegistry.get<int>(nativeView.front()) != 42) return 25;
+    std::size_t intHits = 0;
+    world.ecs().view<int>().each([&](shinkou::Entity, int& value) {
+        if (value == 42) ++intHits;
+    });
+    if (intHits != 1) return 25;
 
     const auto viewEntity = world.ecs().create();
     world.ecs().emplace<Position>(viewEntity, Position{1.0f});

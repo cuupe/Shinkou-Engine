@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace shinkou::ui {
-enum class UiStage : std::size_t { Input, Model, Index, Layout, Paint, Raster, Upload, Composite, Present, FullBytes, DirtyBytes, CacheHit, Count };
+enum class UiStage : std::size_t { Input, Model, Index, Layout, Paint, Raster, Upload, Composite, Present, FullBytes, DirtyBytes, CacheHit, FrameInterval, Scene, Submit, Count };
 enum class UiWorkload : std::size_t { Idle, Hover, Input, Filter, Scroll, Resize, Count };
 struct UiPercentiles { std::size_t samples{0}; double p50{0}, p95{0}, maximum{0}; };
 class UiPerformance {

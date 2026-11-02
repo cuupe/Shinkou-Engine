@@ -37,7 +37,7 @@ struct ShaderDependencyManifest {
     std::string diagnostics;
 };
 
-ShaderDependencyManifest scan_shader_dependencies(const ShaderPipelineCompileRequest& request);
+ShaderDependencyManifest scan_shader_dependencies(const ShaderPipelineCompileRequest &request);
 
 struct ShaderPipelineVariantKey {
     std::uint64_t value{0};
@@ -45,15 +45,15 @@ struct ShaderPipelineVariantKey {
     std::uint64_t dependencyHash{0};
     BackendApi backend{BackendApi::Null};
 
-    friend bool operator==(const ShaderPipelineVariantKey& lhs,
-                           const ShaderPipelineVariantKey& rhs) noexcept {
+    friend bool operator==(const ShaderPipelineVariantKey &lhs,
+                           const ShaderPipelineVariantKey &rhs) noexcept {
         return lhs.value == rhs.value && lhs.backend == rhs.backend;
     }
 };
 
-ShaderPipelineVariantKey make_shader_pipeline_variant_key(
-    const ShaderPipelineCompileRequest& request, BackendApi backend,
-    const ShaderDependencyManifest& dependencies);
+ShaderPipelineVariantKey
+make_shader_pipeline_variant_key(const ShaderPipelineCompileRequest &request, BackendApi backend,
+                                 const ShaderDependencyManifest &dependencies);
 
 struct ShaderArtifactCacheMetadata {
     BackendApi backend{BackendApi::Null};
@@ -104,13 +104,13 @@ class ShaderPipelineLibrary {
         std::string name;
         BackendApi backend{BackendApi::Null};
 
-        friend bool operator==(const RecordKey& lhs, const RecordKey& rhs) noexcept {
+        friend bool operator==(const RecordKey &lhs, const RecordKey &rhs) noexcept {
             return lhs.name == rhs.name && lhs.backend == rhs.backend;
         }
     };
 
     struct RecordKeyHash {
-        std::size_t operator()(const RecordKey& key) const noexcept;
+        std::size_t operator()(const RecordKey &key) const noexcept;
     };
 
     struct Record {
@@ -127,21 +127,23 @@ class ShaderPipelineLibrary {
     mutable std::mutex mutex_;
     std::unordered_map<RecordKey, Record, RecordKeyHash> records_;
 
-    ShaderPipelineBuildResult compile_locked(const RecordKey& key,
-        const ShaderPipelineCompileRequest& request,
-        const ShaderDependencyManifest& dependencies);
-    ShaderPipelineBuildResult unchanged_result_locked(const Record& record) const;
+    ShaderPipelineBuildResult compile_locked(const RecordKey &key,
+                                             const ShaderPipelineCompileRequest &request,
+                                             const ShaderDependencyManifest &dependencies);
+    ShaderPipelineBuildResult unchanged_result_locked(const Record &record) const;
 
-public:
-    explicit ShaderPipelineLibrary(std::unique_ptr<IShaderCompiler> compiler = create_shader_compiler());
+  public:
+    explicit ShaderPipelineLibrary(
+        std::unique_ptr<IShaderCompiler> compiler = create_shader_compiler());
     ~ShaderPipelineLibrary() = default;
-    ShaderPipelineLibrary(const ShaderPipelineLibrary&) = delete;
-    ShaderPipelineLibrary& operator=(const ShaderPipelineLibrary&) = delete;
+    ShaderPipelineLibrary(const ShaderPipelineLibrary &) = delete;
+    ShaderPipelineLibrary &operator=(const ShaderPipelineLibrary &) = delete;
 
-    ShaderPipelineBuildResult compile(const ShaderPipelineCompileRequest& request, BackendApi backend);
+    ShaderPipelineBuildResult compile(const ShaderPipelineCompileRequest &request,
+                                      BackendApi backend);
     ShaderPipelineBuildResult reload_if_changed(std::string_view name, BackendApi backend);
     std::vector<ShaderPipelineChange> detect_changes() const;
-    bool snapshot(std::string_view name, BackendApi backend, ShaderPipelineSnapshot& output) const;
+    bool snapshot(std::string_view name, BackendApi backend, ShaderPipelineSnapshot &output) const;
     std::vector<ShaderArtifactCacheMetadata> cache_metadata(std::string_view name) const;
     void clear();
     std::size_t size() const noexcept;

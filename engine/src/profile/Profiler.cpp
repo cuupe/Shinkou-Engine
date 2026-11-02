@@ -1,3 +1,4 @@
+#include "shinkou/data/Json.h"
 #include "shinkou/profile/Profiler.h"
 
 #include <algorithm>
@@ -24,18 +25,19 @@ constexpr std::size_t kDefaultMaxRetained = 2u * 1024u * 1024u;
 // Single-producer / single-consumer ring. The owning thread pushes, the draining
 // thread pops; nobody else touches either index.
 class Ring final {
-public:
+  public:
     explicit Ring(std::size_t capacity) {
         std::size_t size = 1;
-        while (size < capacity) size <<= 1;
+        while (size < capacity)
+            size <<= 1;
         slots_.resize(size);
         mask_ = size - 1;
     }
 
-    Ring(const Ring&) = delete;
-    Ring& operator=(const Ring&) = delete;
+    Ring(const Ring &) = delete;
+    Ring &operator=(const Ring &) = delete;
 
-    bool push(const Record& record) noexcept {
+    bool push(const Record &record) noexcept {
         const std::uint64_t head = head_.load(std::memory_order_relaxed);
         const std::uint64_t tail = tail_.load(std::memory_order_acquire);
         if (head - tail >= slots_.size()) {
@@ -47,7 +49,7 @@ public:
         return true;
     }
 
-    std::size_t drain(std::vector<Record>& out) {
+    std::size_t drain(std::vector<Record> &out) {
         const std::uint64_t head = head_.load(std::memory_order_acquire);
         std::uint64_t tail = tail_.load(std::memory_order_relaxed);
         std::size_t moved = 0;
@@ -60,9 +62,11 @@ public:
         return moved;
     }
 
-    std::uint64_t dropped() const noexcept { return dropped_.load(std::memory_order_relaxed); }
+    std::uint64_t dropped() const noexcept {
+        return dropped_.load(std::memory_order_relaxed);
+    }
 
-private:
+  private:
     std::vector<Record> slots_{};
     std::size_t mask_{0};
     std::atomic<std::uint64_t> head_{0};
@@ -70,31 +74,12 @@ private:
     std::atomic<std::uint64_t> dropped_{0};
 };
 
-void append_json_string(std::string& out, std::string_view text) {
-    out.push_back('"');
-    for (const char c : text) {
-        switch (c) {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        default:
-            if (static_cast<unsigned char>(c) < 0x20) {
-                char escape[7];
-                std::snprintf(escape, sizeof(escape), "\\u%04x", static_cast<unsigned>(c));
-                out += escape;
-            } else {
-                out.push_back(c);
-            }
-            break;
-        }
-    }
-    out.push_back('"');
+void append_json_string(std::string &out, std::string_view text) {
+    out += data::quote_json(text);
 }
 
 // Chrome trace timestamps are microseconds and may be fractional.
-void append_microseconds(std::string& out, std::uint64_t nanoseconds) {
+void append_microseconds(std::string &out, std::uint64_t nanoseconds) {
     char buffer[40];
     std::snprintf(buffer, sizeof(buffer), "%llu.%03llu",
                   static_cast<unsigned long long>(nanoseconds / 1000),
@@ -102,7 +87,7 @@ void append_microseconds(std::string& out, std::uint64_t nanoseconds) {
     out += buffer;
 }
 
-void append_double(std::string& out, double value) {
+void append_double(std::string &out, double value) {
     char buffer[40];
     std::snprintf(buffer, sizeof(buffer), "%.6g", value);
     out += buffer;
@@ -119,7 +104,8 @@ std::atomic<bool> g_enabled{true};
 // it recorded is drained on the next frame.
 struct ThreadContext final {
     ThreadContext(std::size_t capacity, std::uint16_t threadIndex)
-        : ring(capacity), index(threadIndex) {}
+        : ring(capacity), index(threadIndex) {
+    }
 
     Ring ring;
     std::vector<Record> archive;
@@ -127,14 +113,15 @@ struct ThreadContext final {
     std::uint16_t index{0};
 };
 
-thread_local ThreadContext* tls_context = nullptr;
+thread_local ThreadContext *tls_context = nullptr;
 
 } // namespace detail
 
 struct Profiler::Impl final {
-    explicit Impl(std::size_t perThread) : recordsPerThread(perThread) {}
+    explicit Impl(std::size_t perThread) : recordsPerThread(perThread) {
+    }
 
-    detail::ThreadContext* current() noexcept;
+    detail::ThreadContext *current() noexcept;
 
     std::size_t recordsPerThread;
     std::size_t maxRetained{kDefaultMaxRetained};
@@ -159,15 +146,17 @@ struct Profiler::Impl final {
     void drain_locked();
 };
 
-detail::ThreadContext* Profiler::Impl::current() noexcept {
-    if (detail::tls_context != nullptr) return detail::tls_context;
+detail::ThreadContext *Profiler::Impl::current() noexcept {
+    if (detail::tls_context != nullptr)
+        return detail::tls_context;
     try {
         std::lock_guard<std::mutex> guard(threadsMutex);
-        if (detail::tls_context != nullptr) return detail::tls_context;
+        if (detail::tls_context != nullptr)
+            return detail::tls_context;
         const std::size_t index = contexts.size();
         auto context = std::make_unique<detail::ThreadContext>(
             recordsPerThread, static_cast<std::uint16_t>((std::min)(index, std::size_t{65535})));
-        detail::ThreadContext* raw = context.get();
+        detail::ThreadContext *raw = context.get();
         contexts.push_back(std::move(context));
         detail::tls_context = raw;
         return raw;
@@ -177,7 +166,7 @@ detail::ThreadContext* Profiler::Impl::current() noexcept {
 }
 
 void Profiler::Impl::drain_locked() {
-    for (auto& context : contexts) {
+    for (auto &context : contexts) {
         if (retained >= maxRetained) {
             // Keep the ring moving so it does not stay full and inflate the drop
             // counter; excess samples are discarded rather than archived.
@@ -197,7 +186,7 @@ void Profiler::Impl::drain_locked() {
     }
 }
 
-Profiler& Profiler::instance() {
+Profiler &Profiler::instance() {
     static Profiler profiler;
     return profiler;
 }
@@ -214,12 +203,15 @@ Profiler::~Profiler() {
 }
 
 ZoneId Profiler::register_zone(std::string_view name, std::string_view category) {
-    if (name.empty()) return kInvalidZone;
+    if (name.empty())
+        return kInvalidZone;
     std::lock_guard<std::mutex> guard(impl_->zonesMutex);
     const std::string key(name);
     const auto found = impl_->zoneByName.find(key);
-    if (found != impl_->zoneByName.end()) return found->second;
-    if (impl_->zoneNames.size() >= 0xFFFFFFFEu) return kInvalidZone;
+    if (found != impl_->zoneByName.end())
+        return found->second;
+    if (impl_->zoneNames.size() >= 0xFFFFFFFEu)
+        return kInvalidZone;
     const ZoneId id = static_cast<ZoneId>(impl_->zoneNames.size() + 1);
     impl_->zoneNames.push_back(key);
     impl_->zoneCategories.emplace_back(category);
@@ -229,13 +221,15 @@ ZoneId Profiler::register_zone(std::string_view name, std::string_view category)
 
 std::string Profiler::zone_name(ZoneId id) const {
     std::lock_guard<std::mutex> guard(impl_->zonesMutex);
-    if (id == kInvalidZone || id > impl_->zoneNames.size()) return {};
+    if (id == kInvalidZone || id > impl_->zoneNames.size())
+        return {};
     return impl_->zoneNames[id - 1];
 }
 
 std::string Profiler::zone_category(ZoneId id) const {
     std::lock_guard<std::mutex> guard(impl_->zonesMutex);
-    if (id == kInvalidZone || id > impl_->zoneCategories.size()) return {};
+    if (id == kInvalidZone || id > impl_->zoneCategories.size())
+        return {};
     return impl_->zoneCategories[id - 1];
 }
 
@@ -248,13 +242,16 @@ bool Profiler::enabled() const noexcept {
 }
 
 void Profiler::name_thread(std::string_view name) {
-    detail::ThreadContext* context = impl_->current();
-    if (context == nullptr) return;
+    detail::ThreadContext *context = impl_->current();
+    if (context == nullptr)
+        return;
     std::lock_guard<std::mutex> guard(impl_->threadsMutex);
     context->name.assign(name);
 }
 
-void Profiler::begin_frame() { impl_->frameStartNs = detail::clock_ns(); }
+void Profiler::begin_frame() {
+    impl_->frameStartNs = detail::clock_ns();
+}
 
 void Profiler::end_frame() {
     const std::uint64_t end = detail::clock_ns();
@@ -262,8 +259,9 @@ void Profiler::end_frame() {
     drain();
 
     std::lock_guard<std::mutex> guard(impl_->drainMutex);
-    detail::ThreadContext* context = impl_->current();
-    if (context == nullptr) return;
+    detail::ThreadContext *context = impl_->current();
+    if (context == nullptr)
+        return;
     if (impl_->retained >= impl_->maxRetained) {
         impl_->truncated = true;
         return;
@@ -280,7 +278,9 @@ void Profiler::end_frame() {
     ++impl_->frames;
 }
 
-std::uint64_t Profiler::frame_index() const noexcept { return impl_->frames; }
+std::uint64_t Profiler::frame_index() const noexcept {
+    return impl_->frames;
+}
 
 void Profiler::drain() {
     std::lock_guard<std::mutex> guard(impl_->drainMutex);
@@ -302,7 +302,7 @@ Stats Profiler::stats() {
         result.threads = impl_->contexts.size();
     }
     std::lock_guard<std::mutex> guard(impl_->drainMutex);
-    for (const auto& context : impl_->contexts) {
+    for (const auto &context : impl_->contexts) {
         result.recorded += context->archive.size();
         result.dropped += context->ring.dropped();
     }
@@ -331,7 +331,7 @@ std::string Profiler::chrome_trace_json() {
     append_json_string(out, "Shinkou");
     out += "}}";
 
-    for (const auto& context : impl_->contexts) {
+    for (const auto &context : impl_->contexts) {
         out += ",{\"ph\":\"M\",\"name\":\"thread_name\",\"pid\":1,\"tid\":";
         out += std::to_string(context->index);
         out += ",\"args\":{\"name\":";
@@ -344,13 +344,14 @@ std::string Profiler::chrome_trace_json() {
     }
 
     const auto zone_of = [&names](ZoneId id) -> std::string_view {
-        if (id == kInvalidZone || id > names.size()) return "<invalid zone>";
+        if (id == kInvalidZone || id > names.size())
+            return "<invalid zone>";
         return names[id - 1];
     };
 
-    for (const auto& context : impl_->contexts) {
+    for (const auto &context : impl_->contexts) {
         const std::string thread = std::to_string(context->index);
-        for (const Record& record : context->archive) {
+        for (const Record &record : context->archive) {
             const std::string_view name = zone_of(record.zone);
             out += ',';
             switch (record.type) {
@@ -408,10 +409,11 @@ std::string Profiler::chrome_trace_json() {
     return out;
 }
 
-bool Profiler::write_chrome_trace(const std::filesystem::path& path) {
+bool Profiler::write_chrome_trace(const std::filesystem::path &path) {
     const std::string json = chrome_trace_json();
-    std::FILE* file = std::fopen(path.string().c_str(), "wb");
-    if (file == nullptr) return false;
+    std::FILE *file = std::fopen(path.string().c_str(), "wb");
+    if (file == nullptr)
+        return false;
     const std::size_t written = std::fwrite(json.data(), 1, json.size(), file);
     const bool flushed = std::fclose(file) == 0;
     return flushed && written == json.size();
@@ -420,7 +422,7 @@ bool Profiler::write_chrome_trace(const std::filesystem::path& path) {
 void Profiler::reset() {
     std::lock_guard<std::mutex> drainGuard(impl_->drainMutex);
     std::lock_guard<std::mutex> threadsGuard(impl_->threadsMutex);
-    for (auto& context : impl_->contexts) {
+    for (auto &context : impl_->contexts) {
         context->archive.clear();
         std::vector<Record> discard;
         context->ring.drain(discard);
@@ -436,9 +438,11 @@ void Profiler::reset() {
 // --------------------------------------------------------------------------
 
 void Profiler::record_span(ZoneId zone, std::uint64_t startNs, std::uint64_t durationNs) noexcept {
-    if (!detail::g_enabled.load(std::memory_order_relaxed)) return;
-    detail::ThreadContext* context = impl_->current();
-    if (context == nullptr) return;
+    if (!detail::g_enabled.load(std::memory_order_relaxed))
+        return;
+    detail::ThreadContext *context = impl_->current();
+    if (context == nullptr)
+        return;
     Record record;
     record.type = RecordType::Span;
     record.zone = zone;
@@ -449,9 +453,11 @@ void Profiler::record_span(ZoneId zone, std::uint64_t startNs, std::uint64_t dur
 }
 
 void Profiler::record_counter(ZoneId zone, double value) noexcept {
-    if (!detail::g_enabled.load(std::memory_order_relaxed)) return;
-    detail::ThreadContext* context = impl_->current();
-    if (context == nullptr) return;
+    if (!detail::g_enabled.load(std::memory_order_relaxed))
+        return;
+    detail::ThreadContext *context = impl_->current();
+    if (context == nullptr)
+        return;
     Record record;
     record.type = RecordType::Counter;
     record.zone = zone;
@@ -462,9 +468,11 @@ void Profiler::record_counter(ZoneId zone, double value) noexcept {
 }
 
 void Profiler::record_instant(ZoneId zone) noexcept {
-    if (!detail::g_enabled.load(std::memory_order_relaxed)) return;
-    detail::ThreadContext* context = impl_->current();
-    if (context == nullptr) return;
+    if (!detail::g_enabled.load(std::memory_order_relaxed))
+        return;
+    detail::ThreadContext *context = impl_->current();
+    if (context == nullptr)
+        return;
     Record record;
     record.type = RecordType::Instant;
     record.zone = zone;

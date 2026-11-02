@@ -127,7 +127,9 @@ struct ShaderDesc {
 struct ResourceHandle {
     std::uint32_t id{0};
     ResourceKind kind{ResourceKind::Buffer};
-    explicit operator bool() const noexcept { return id != 0; }
+    explicit operator bool() const noexcept {
+        return id != 0;
+    }
 };
 
 struct ResourceAccess {
@@ -135,7 +137,14 @@ struct ResourceAccess {
     ResourceUsage usage{ResourceUsage::Unknown};
 };
 
-enum class DescriptorType { Texture, UniformBuffer, StorageBuffer, Sampler, StorageTexture, StructuredBuffer };
+enum class DescriptorType {
+    Texture,
+    UniformBuffer,
+    StorageBuffer,
+    Sampler,
+    StorageTexture,
+    StructuredBuffer
+};
 
 struct BindlessTableDesc {
     std::uint32_t capacity{1024};
@@ -147,7 +156,9 @@ struct BindlessTableHandle {
     std::uint32_t id{0};
     std::uint32_t baseIndex{0};
     std::uint32_t capacity{0};
-    explicit operator bool() const noexcept { return id != 0 && capacity != 0; }
+    explicit operator bool() const noexcept {
+        return id != 0 && capacity != 0;
+    }
 };
 
 struct DescriptorBinding {
@@ -199,7 +210,26 @@ struct PipelineDesc {
     math::Vec4 blendConstants{};
 };
 
-using ResourceDesc = std::variant<TextureDesc, BufferDesc, ShaderDesc, PipelineDesc, MaterialDesc, SamplerDesc>;
+using ResourceDesc =
+    std::variant<TextureDesc, BufferDesc, ShaderDesc, PipelineDesc, MaterialDesc, SamplerDesc>;
+
+// External buffers already exist in the backend. Frame-graph declarations need
+// their layout/usage, while the creation bytes remain owned by Renderer for
+// device recovery and CPU picking. Never copy mesh payloads per frame/object.
+inline ResourceDesc resource_metadata(const ResourceDesc &source) {
+    if (const auto *b = std::get_if<BufferDesc>(&source))
+        return BufferDesc{b->size,
+                          b->stride,
+                          b->vertexBuffer,
+                          b->indexBuffer,
+                          {},
+                          b->indirectBuffer,
+                          b->structuredBuffer,
+                          b->storageBuffer,
+                          b->retainCpuCopy,
+                          b->uniformBuffer};
+    return source;
+}
 
 struct SpriteDraw {
     ResourceHandle texture{};
@@ -249,4 +279,4 @@ struct CameraData {
     math::Mat4 view{math::Mat4::Identity()};
     math::Mat4 projection{math::Mat4::Identity()};
 };
-}
+} // namespace shinkou::render
